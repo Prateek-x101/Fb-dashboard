@@ -8,7 +8,7 @@ const campaignRoutes = require('./routes/campaigns');
 const settingRoutes = require('./routes/settings');
 
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 5000;
 
 // Setup multer for file uploads
 const uploadDir = path.join(__dirname, 'uploads');
@@ -58,6 +58,6 @@ app.use((err, req, res, next) => {
     res.status(500).json({ error: 'Internal server error', details: err.message });
 });
 
-app.listen(port, () => {
+app.listen(port, '0.0.0.0', () => {
     console.log(`Server running at http://localhost:${port}`);
 });
