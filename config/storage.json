@@ -1,0 +1,10 @@
+{
+  "accounts": [],
+  "settings": {
+    "facebookAppId": "",
+    "facebookAppSecret": "",
+    "geminiApiKey": "",
+    "geminiModel": "gemini-2.5-flash"
+  },
+  "recentCampaigns": []
+}

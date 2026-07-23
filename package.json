@@ -1,0 +1,17 @@
+{
+  "name": "fb-ads-dashboard",
+  "version": "1.0.0",
+  "description": "Facebook Ads Automation Dashboard - Create and manage ads across multiple accounts",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "multer": "^1.4.5-lts.1",
+    "node-fetch": "^2.7.0",
+    "form-data": "^4.0.0",
+    "uuid": "^10.0.0"
+  }
+}

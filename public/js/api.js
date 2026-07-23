@@ -1,0 +1,79 @@
+// public/js/api.js
+(function() {
+    const API = {
+        async request(endpoint, options = {}) {
+            try {
+                const response = await fetch(endpoint, {
+                    ...options,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(options.headers || {})
+                    }
+                });
+                
+                let data;
+                const contentType = response.headers.get('content-type');
+                if (contentType && contentType.includes('application/json')) {
+                    data = await response.json();
+                } else {
+                    data = await response.text();
+                }
+
+                if (!response.ok) {
+                    throw new Error(data.message || data.error || data || `HTTP error! status: ${response.status}`);
+                }
+                return data;
+            } catch (error) {
+                console.error(`API Error on ${endpoint}:`, error);
+                throw error;
+            }
+        },
+
+        // Accounts
+        getAccounts: () => API.request('/api/accounts'),
+        addAccount: (data) => API.request('/api/accounts', { method: 'POST', body: JSON.stringify(data) }),
+        updateAccount: (id, data) => API.request(`/api/accounts/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+        deleteAccount: (id) => API.request(`/api/accounts/${id}`, { method: 'DELETE' }),
+        testAccount: (id) => API.request(`/api/accounts/${id}/test`, { method: 'POST' }),
+
+        // Settings
+        getSettings: () => API.request('/api/settings'),
+        saveSettings: (data) => API.request('/api/settings', { method: 'POST', body: JSON.stringify(data) }),
+        testGemini: () => API.request('/api/settings/test-gemini', { method: 'POST' }),
+
+        // Campaign
+        getPixels: (accountId) => API.request(`/api/campaigns/pixels/${accountId}`),
+        searchInterests: (query) => API.request(`/api/campaigns/interests?q=${encodeURIComponent(query)}`),
+        createCampaign: (data) => API.request('/api/campaigns/create', { method: 'POST', body: JSON.stringify(data) }),
+        generateVariations: (data) => API.request('/api/campaigns/generate-variations', { method: 'POST', body: JSON.stringify(data) }),
+        getRecentCampaigns: () => API.request('/api/campaigns/recent'),
+
+        // Media
+        uploadMedia: async (formData) => {
+            try {
+                const response = await fetch('/api/media/upload', {
+                    method: 'POST',
+                    body: formData
+                    // Note: Don't set Content-Type for FormData, browser will set it with boundary
+                });
+                
+                let data;
+                if (response.headers.get('content-type')?.includes('application/json')) {
+                    data = await response.json();
+                } else {
+                    data = await response.text();
+                }
+
+                if (!response.ok) {
+                    throw new Error(data.message || data.error || `HTTP error! status: ${response.status}`);
+                }
+                return data;
+            } catch (error) {
+                console.error('API Error on /api/media/upload:', error);
+                throw error;
+            }
+        }
+    };
+
+    window.API = API;
+})();
