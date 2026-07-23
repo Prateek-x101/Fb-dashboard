@@ -180,15 +180,15 @@
                 <div class="wizard-step" id="step-2">
                     <div class="flex justify-between align-center mb-3">
                         <h3>🎯 Ad Set Configuration</h3>
-                        <div class="flex gap-2 align-center">
-                            <label>Number of Ad Sets:</label>
-                            <input type="number" class="form-control" style="width: 70px" value="3" min="1" max="20" id="num-adsets">
+                        <div class="flex gap-2">
+                            <button class="btn btn-gemini btn-sm" id="btn-ai-all-audiences">🤖 AI Generate All</button>
                             <button class="btn btn-secondary btn-sm" id="btn-add-adset"><span>➕</span> Add Audience</button>
                         </div>
                     </div>
 
+                    <!-- Campaign Settings -->
                     <div class="glass-card mb-3">
-                        <h4 class="mb-2">🔧 Global Settings</h4>
+                        <h4 class="mb-2">🔧 Campaign Settings</h4>
                         <div class="grid-2">
                             <div class="form-group">
                                 <label>Pixel</label>
@@ -225,8 +225,91 @@
                         </div>
                     </div>
 
+                    <!-- Global Audience Settings -->
+                    <div class="glass-card mb-3" style="border-color:rgba(0,245,212,0.25);">
+                        <h4 class="mb-1" style="color:var(--accent-cyan);">🌍 Global Audience Settings</h4>
+                        <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:1.25rem;">Applied to ALL ad sets — only interests differ per ad set</p>
+
+                        <div class="grid-2 mb-2">
+                            <div class="form-group">
+                                <label>📍 Include Locations</label>
+                                <div class="form-control tags-input" id="location-include-tags" style="min-height:44px;flex-wrap:wrap;">
+                                    <span class="tag location-tag" data-value="IN">India <span class="tag-remove" onclick="this.parentElement.remove()">✖</span></span>
+                                    <input type="text" placeholder="Country code (e.g. US)…" class="loc-include-input" style="background:transparent;border:none;color:white;outline:none;flex:1;min-width:80px;">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>🚫 Exclude Locations</label>
+                                <div class="form-control tags-input" id="location-exclude-tags" style="min-height:44px;flex-wrap:wrap;">
+                                    <input type="text" placeholder="Country code (e.g. PK)…" class="loc-exclude-input" style="background:transparent;border:none;color:white;outline:none;flex:1;min-width:80px;">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="grid-2 mb-2">
+                            <div class="form-group">
+                                <label>Age Range</label>
+                                <div class="flex gap-2 align-center">
+                                    <input type="number" id="global-age-min" value="18" min="13" max="65" class="form-control" style="flex:1;">
+                                    <span style="color:var(--text-secondary);">—</span>
+                                    <input type="number" id="global-age-max" value="65" min="13" max="65" class="form-control" style="flex:1;">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>Gender</label>
+                                <div class="flex gap-3" style="margin-top:0.6rem;">
+                                    <label style="cursor:pointer;display:flex;gap:0.4rem;align-items:center;"><input type="radio" name="global-gender" value="all" checked> All</label>
+                                    <label style="cursor:pointer;display:flex;gap:0.4rem;align-items:center;"><input type="radio" name="global-gender" value="male"> Male</label>
+                                    <label style="cursor:pointer;display:flex;gap:0.4rem;align-items:center;"><input type="radio" name="global-gender" value="female"> Female</label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="grid-2 mb-2">
+                            <div class="form-group">
+                                <label>✅ Include Custom Audiences</label>
+                                <div class="form-control tags-input" id="custom-include-tags" style="min-height:44px;flex-wrap:wrap;">
+                                    <input type="text" placeholder="Audience ID, press Enter…" class="custom-include-input" style="background:transparent;border:none;color:white;outline:none;flex:1;min-width:120px;">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>❌ Exclude Custom Audiences</label>
+                                <div class="form-control tags-input" id="custom-exclude-tags" style="min-height:44px;flex-wrap:wrap;">
+                                    <input type="text" placeholder="Audience ID, press Enter…" class="custom-exclude-input" style="background:transparent;border:none;color:white;outline:none;flex:1;min-width:120px;">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="grid-2">
+                            <div class="form-group">
+                                <label>✅ Include Lookalike Audiences</label>
+                                <div class="form-control tags-input" id="lookalike-include-tags" style="min-height:44px;flex-wrap:wrap;">
+                                    <input type="text" placeholder="Audience ID, press Enter…" class="lookalike-include-input" style="background:transparent;border:none;color:white;outline:none;flex:1;min-width:120px;">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>❌ Exclude Lookalike Audiences</label>
+                                <div class="form-control tags-input" id="lookalike-exclude-tags" style="min-height:44px;flex-wrap:wrap;">
+                                    <input type="text" placeholder="Audience ID, press Enter…" class="lookalike-exclude-input" style="background:transparent;border:none;color:white;outline:none;flex:1;min-width:120px;">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Per-Audience Interest Cards -->
+                    <div class="flex justify-between align-center mb-2">
+                        <div>
+                            <h4 style="color:var(--text-secondary);">🎯 Audiences — <span style="color:var(--accent-cyan);">interests vary per ad set</span></h4>
+                            <p style="font-size:0.75rem;color:var(--text-secondary);margin-top:0.2rem;">First 3 interests become the Facebook ad set name automatically</p>
+                        </div>
+                        <div class="flex gap-2 align-center">
+                            <label style="color:var(--text-secondary);font-size:0.85rem;">Sets:</label>
+                            <input type="number" class="form-control" style="width:65px;" value="3" min="1" max="20" id="num-adsets">
+                        </div>
+                    </div>
+
                     <div id="audience-container">
-                        <!-- Dynamic audience cards will be rendered here by campaign.js -->
+                        <!-- Dynamic audience cards rendered by campaign.js -->
                     </div>
                 </div>
 

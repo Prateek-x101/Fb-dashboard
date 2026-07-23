@@ -12,6 +12,7 @@
         init: function() {
             this.bindEvents();
             this.setDefaultDateTime();
+            this.setupGlobalAudienceTags();
             document.addEventListener('appReady', () => {
                 this.populateAccountSelect();
                 this.updateAudienceCards();
@@ -56,6 +57,12 @@
                         this.updateAudienceCards();
                     }
                 });
+            }
+
+            // AI generate all audiences button
+            const btnAiAll = document.getElementById('btn-ai-all-audiences');
+            if (btnAiAll) {
+                btnAiAll.addEventListener('click', () => this.aiGenerateAllAudiences());
             }
 
             // Media upload
@@ -179,36 +186,57 @@
                 return true;
             } else if (step === 2) {
                 const url = document.getElementById('website-url')?.value?.trim();
-                
                 if (!url) {
                     window.AppController.showToast('Please enter a Website URL', 'warning');
                     return false;
                 }
-                
-                // Collect audiences from cards
+
+                // --- Read Global Audience Settings ---
+                const globalLocInclude = [];
+                document.querySelectorAll('#location-include-tags .location-tag').forEach(tag => {
+                    globalLocInclude.push(tag.getAttribute('data-value') || tag.textContent.replace('✖','').trim());
+                });
+                const globalLocExclude = [];
+                document.querySelectorAll('#location-exclude-tags .location-tag').forEach(tag => {
+                    globalLocExclude.push(tag.getAttribute('data-value') || tag.textContent.replace('✖','').trim());
+                });
+                const globalAgeMin = parseInt(document.getElementById('global-age-min')?.value) || 18;
+                const globalAgeMax = parseInt(document.getElementById('global-age-max')?.value) || 65;
+                const globalGender = document.querySelector('input[name="global-gender"]:checked')?.value || 'all';
+
+                const customInclude = [];
+                document.querySelectorAll('#custom-include-tags .audience-tag').forEach(t => customInclude.push(t.getAttribute('data-value')));
+                const customExclude = [];
+                document.querySelectorAll('#custom-exclude-tags .audience-tag').forEach(t => customExclude.push(t.getAttribute('data-value')));
+                const lookalikeInclude = [];
+                document.querySelectorAll('#lookalike-include-tags .audience-tag').forEach(t => lookalikeInclude.push(t.getAttribute('data-value')));
+                const lookalikeExclude = [];
+                document.querySelectorAll('#lookalike-exclude-tags .audience-tag').forEach(t => lookalikeExclude.push(t.getAttribute('data-value')));
+
+                // --- Collect per-card interests ---
                 const audienceCards = document.querySelectorAll('.audience-card');
                 const audiences = [];
-                
                 audienceCards.forEach((card, idx) => {
-                    const locations = [];
-                    card.querySelectorAll('.location-tag').forEach(tag => {
-                        locations.push(tag.getAttribute('data-value') || tag.textContent.replace('✖', '').trim());
-                    });
-
                     const interests = [];
                     card.querySelectorAll('.interest-tag').forEach(tag => {
                         interests.push({
                             id: tag.getAttribute('data-id') || '',
-                            name: tag.getAttribute('data-value') || tag.textContent.replace('✖', '').trim()
+                            name: tag.getAttribute('data-value') || tag.textContent.replace('✖','').trim()
                         });
                     });
-
+                    // Auto-name from first 3 interests
+                    const adsetName = interests.slice(0, 3).map(i => i.name).join(', ') || `Audience ${idx + 1}`;
                     audiences.push({
-                        name: `Audience ${idx + 1}`,
-                        locations: locations.length > 0 ? locations : ['IN'],
-                        ageMin: parseInt(card.querySelector('.age-min')?.value) || 18,
-                        ageMax: parseInt(card.querySelector('.age-max')?.value) || 65,
-                        gender: card.querySelector('input[name^="gender_"]:checked')?.value || 'all',
+                        name: adsetName,
+                        locations: globalLocInclude.length > 0 ? globalLocInclude : ['IN'],
+                        locationsExclude: globalLocExclude,
+                        ageMin: globalAgeMin,
+                        ageMax: globalAgeMax,
+                        gender: globalGender,
+                        customAudiencesInclude: customInclude,
+                        customAudiencesExclude: customExclude,
+                        lookalikeInclude,
+                        lookalikeExclude,
                         interests
                     });
                 });

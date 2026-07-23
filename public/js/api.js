@@ -39,6 +39,7 @@
         bulkAddAccounts: (data) => API.request('/api/accounts/bulk-add', { method: 'POST', body: JSON.stringify(data) }),
         fetchInstagram: (id) => API.request(`/api/accounts/${id}/fetch-instagram`, { method: 'POST' }),
         getPages: (id) => API.request(`/api/accounts/${id}/pages`),
+        aiAudiences: (data) => API.request('/api/campaigns/ai-audiences', { method: 'POST', body: JSON.stringify(data) }),
 
         // Settings
         getSettings: () => API.request('/api/settings'),
