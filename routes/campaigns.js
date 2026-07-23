@@ -200,11 +200,20 @@ router.post('/generate-variations', async (req, res) => {
 });
 
 router.post('/create', async (req, res) => {
+    // A draft ID and checkpoint make this endpoint resumable. If a later
+    // Facebook call fails, retrying reuses every object that already exists
+    // instead of starting a second campaign.
+    const draftId = req.body.draftId || uuidv4();
+    const checkpoint = normalizeRetryState(req.body.retryState, draftId);
+    const progress = { failedStep: 'validation', failedIndex: null, requestParams: null };
+
     try {
         // Data comes from campaign.js as: { campaign, adsets: step2, creative: step3 }
         const { campaign, adsets: step2, creative: step3 } = req.body;
+        if (!campaign || !step2 || !step3) {
+            return res.status(400).json({ error: 'Campaign details are incomplete.' });
+        }
 
-        // Look up account + token from storage
         const storage = getStorage();
         const accountRecord = (storage.accounts || []).find(a => a.id === campaign.accountId);
         if (!accountRecord) return res.status(400).json({ error: 'Account not found. Please select a valid account.' });
@@ -235,9 +244,24 @@ router.post('/create', async (req, res) => {
             return res.status(400).json({ error: 'Every ad must have an uploaded media file.' });
         }
 
-        // ── 1. Upload and validate every media asset before creating anything ──
+        // Upload only media missing from the checkpoint. A failed upload can
+        // therefore be retried without uploading successful media again.
         const uploadedMedia = [];
-        for (const ad of creativeAds) {
+        for (let adIndex = 0; adIndex < creativeAds.length; adIndex++) {
+            const ad = creativeAds[adIndex];
+            const savedMedia = checkpoint.uploadedMedia.find(item =>
+                item.index === adIndex &&
+                item.media === ad.media &&
+                (item.imageHash || item.videoId)
+            );
+            if (savedMedia) {
+                uploadedMedia.push({ ...ad, imageHash: savedMedia.imageHash || null, videoId: savedMedia.videoId || null });
+                continue;
+            }
+
+            progress.failedStep = 'media upload';
+            progress.failedIndex = adIndex;
+            progress.requestParams = { name: ad.name, media: ad.media };
             let imageHash = null;
             let videoId = null;
             const ext = path.extname(ad.media).toLowerCase();
@@ -251,17 +275,17 @@ router.post('/create', async (req, res) => {
                 imageHash = firstKey ? imageRes.images[firstKey].hash : null;
                 if (!imageHash) throw new Error(`Facebook did not return an image hash for ${ad.name}.`);
             }
+            checkpoint.uploadedMedia = checkpoint.uploadedMedia.filter(item => item.index !== adIndex);
+            checkpoint.uploadedMedia.push({ index: adIndex, name: ad.name, media: ad.media, imageHash, videoId });
+            saveRetryCheckpoint(draftId, req.body.campaign, checkpoint, progress);
             uploadedMedia.push({ ...ad, imageHash, videoId });
         }
 
-        // ── 2. Create Campaign only after all media is valid ──────────────
         const isCBO = campaign.budgetType === 'CBO';
         const campaignParams = {
             name: campaign.name,
             objective: campaign.objective || 'OUTCOME_SALES',
             status: 'PAUSED',
-            // This is ad-set budget sharing, not CBO. It must be explicitly
-            // disabled when a campaign-level budget is used.
             is_adset_budget_sharing_enabled: false,
             special_ad_categories: campaign.specialAdCategory && campaign.specialAdCategory !== 'NONE'
                 ? [campaign.specialAdCategory] : []
@@ -269,46 +293,34 @@ router.post('/create', async (req, res) => {
         if (isCBO) {
             campaignParams.daily_budget = Math.round(campaign.budgetAmount * 100); // cents
         }
-        let campaignResponse;
-        try {
-            campaignResponse = await facebookService.createCampaign(accountId, token, campaignParams);
-        } catch (error) {
-            const providerDetails = error.provider === 'facebook'
-                ? {
-                    code: error.code,
-                    errorSubcode: error.errorSubcode,
-                    type: error.type,
-                    fbtraceId: error.fbtraceId
-                }
-                : undefined;
-            console.error('Facebook campaign request rejected', {
-                params: campaignParams,
-                providerDetails,
-                message: error.message
-            });
-            const detail = providerDetails?.code
-                ? `${error.message} (Facebook code ${providerDetails.code}${providerDetails.errorSubcode ? `/${providerDetails.errorSubcode}` : ''})`
-                : error.message;
-            return res.status(400).json({
-                error: 'Facebook rejected the campaign parameters.',
-                details: detail,
-                facebook: providerDetails
-            });
-        }
-        const campaignId = campaignResponse.id;
 
-        const results = { campaignId, adsets: [], ads: [] };
+        let campaignId = checkpoint.campaignId;
+        if (!campaignId) {
+            progress.failedStep = 'campaign';
+            progress.failedIndex = null;
+            progress.requestParams = campaignParams;
+            const campaignResponse = await facebookService.createCampaign(accountId, token, campaignParams);
+            campaignId = campaignResponse.id;
+            if (!campaignId) throw new Error('Facebook did not return a campaign ID.');
+            checkpoint.campaignId = campaignId;
+            saveRetryCheckpoint(draftId, campaign, checkpoint, progress);
+        }
+
+        const results = {
+            campaignId,
+            adsets: checkpoint.adsets.map(item => item.id),
+            ads: checkpoint.ads.map(item => item.id)
+        };
         const pageId = selectedPageId;
 
-        // ── 3. Create AdSets + Ads per audience ─────────────────────────
-        for (const audience of (step2.audiences || [])) {
-            // Build geo_locations from structured location objects
+        for (let audienceIndex = 0; audienceIndex < (step2.audiences || []).length; audienceIndex++) {
+            const audience = step2.audiences[audienceIndex];
+            const existingAdset = checkpoint.adsets.find(item => item.audienceIndex === audienceIndex);
+            let adsetId = existingAdset?.id;
+
             const geoLocations = buildGeoLocations(audience.locationsInclude || []);
             const excludedGeo = buildGeoLocations(audience.locationsExclude || []);
-
-            // Gender: 0=all, 1=male, 2=female
             const genders = audience.gender === 'male' ? [1] : audience.gender === 'female' ? [2] : [];
-
             const targeting = {
                 age_min: audience.ageMin || 18,
                 age_max: audience.ageMax || 65,
@@ -316,20 +328,12 @@ router.post('/create', async (req, res) => {
             };
             if (genders.length) targeting.genders = genders;
             if (Object.keys(excludedGeo).length > 0) targeting.excluded_geo_locations = excludedGeo;
-
-            // Interests
             if (audience.interests && audience.interests.length > 0) {
                 targeting.flexible_spec = [{ interests: audience.interests.map(i => ({ id: i.id, name: i.name })).filter(i => i.id) }];
                 if (!targeting.flexible_spec[0].interests.length) delete targeting.flexible_spec;
             }
-
-            // Custom audiences
-            if (audience.customAudiencesInclude?.length) {
-                targeting.custom_audiences = audience.customAudiencesInclude.map(id => ({ id }));
-            }
-            if (audience.customAudiencesExclude?.length) {
-                targeting.excluded_custom_audiences = audience.customAudiencesExclude.map(id => ({ id }));
-            }
+            if (audience.customAudiencesInclude?.length) targeting.custom_audiences = audience.customAudiencesInclude.map(id => ({ id }));
+            if (audience.customAudiencesExclude?.length) targeting.excluded_custom_audiences = audience.customAudiencesExclude.map(id => ({ id }));
             if (audience.lookalikeInclude?.length) {
                 targeting.custom_audiences = [...(targeting.custom_audiences || []), ...audience.lookalikeInclude.map(id => ({ id }))];
             }
@@ -343,6 +347,10 @@ router.post('/create', async (req, res) => {
                 optimization_goal: step2.optimizationGoal || 'OFFSITE_CONVERSIONS',
                 billing_event: 'IMPRESSIONS',
                 status: 'PAUSED',
+                // Always make the ad-set bidding strategy explicit. Without
+                // this, Meta can inherit an account/campaign strategy that
+                // requires bid_amount and return error 1815857.
+                bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
                 targeting,
                 promoted_object: step2.pixel ? {
                     pixel_id: step2.pixel,
@@ -352,17 +360,27 @@ router.post('/create', async (req, res) => {
             };
             if (!isCBO) {
                 adsetParams.daily_budget = Math.round(campaign.budgetAmount * 100);
-                adsetParams.bid_strategy = 'LOWEST_COST_WITHOUT_CAP';
             }
             if (campaign.scheduleEnd) adsetParams.end_time = new Date(campaign.scheduleEnd).toISOString();
 
-            const adsetResponse = await facebookService.createAdSet(accountId, token, adsetParams);
-            results.adsets.push(adsetResponse.id);
+            if (!adsetId) {
+                progress.failedStep = 'ad set';
+                progress.failedIndex = audienceIndex;
+                progress.requestParams = adsetParams;
+                const adsetResponse = await facebookService.createAdSet(accountId, token, adsetParams);
+                adsetId = adsetResponse.id;
+                if (!adsetId) throw new Error(`Facebook did not return an ad set ID for ${audience.name}.`);
+                checkpoint.adsets.push({ audienceIndex, id: adsetId });
+                saveRetryCheckpoint(draftId, campaign, checkpoint, progress);
+            }
+            if (!results.adsets.includes(adsetId)) results.adsets.push(adsetId);
 
-            // ── 4. Creative + Ad per media card ─────────────────────────
-            for (const ad of uploadedMedia) {
+            for (let adIndex = 0; adIndex < uploadedMedia.length; adIndex++) {
+                const ad = uploadedMedia[adIndex];
+                const creativeKey = `${audienceIndex}:${adIndex}`;
+                let creativeId = checkpoint.creatives.find(item => item.key === creativeKey)?.id;
+                let adId = checkpoint.ads.find(item => item.key === creativeKey)?.id;
                 const textVariation = ad.primaryText || '';
-
                 const creativeParams = {
                     name: `${campaign.name} — ${audience.name} — ${ad.name}`,
                     object_story_spec: {
@@ -376,7 +394,6 @@ router.post('/create', async (req, res) => {
                         }
                     }
                 };
-
                 if (ad.imageHash) creativeParams.object_story_spec.link_data.image_hash = ad.imageHash;
                 if (ad.videoId) {
                     creativeParams.object_story_spec.video_data = {
@@ -388,26 +405,44 @@ router.post('/create', async (req, res) => {
                     };
                     delete creativeParams.object_story_spec.link_data;
                 }
-                if (linkedInstagramId) {
-                    creativeParams.object_story_spec.instagram_actor_id = linkedInstagramId;
+                if (linkedInstagramId) creativeParams.object_story_spec.instagram_actor_id = linkedInstagramId;
+
+                if (!creativeId) {
+                    progress.failedStep = 'creative';
+                    progress.failedIndex = { audienceIndex, adIndex };
+                    progress.requestParams = creativeParams;
+                    const creativeResponse = await facebookService.createAdCreative(accountId, token, creativeParams);
+                    creativeId = creativeResponse.id;
+                    if (!creativeId) throw new Error(`Facebook did not return a creative ID for ${ad.name}.`);
+                    checkpoint.creatives.push({ key: creativeKey, id: creativeId });
+                    saveRetryCheckpoint(draftId, campaign, checkpoint, progress);
                 }
 
-                const creativeResponse = await facebookService.createAdCreative(accountId, token, creativeParams);
-
-                const adResponse = await facebookService.createAd(accountId, token, {
-                    name: ad.name,
-                    adset_id: adsetResponse.id,
-                    creative: { creative_id: creativeResponse.id },
-                    status: 'PAUSED'
-                });
-                results.ads.push(adResponse.id);
+                if (!adId) {
+                    const adParams = {
+                        name: ad.name,
+                        adset_id: adsetId,
+                        creative: { creative_id: creativeId },
+                        status: 'PAUSED'
+                    };
+                    progress.failedStep = 'ad';
+                    progress.failedIndex = { audienceIndex, adIndex };
+                    progress.requestParams = adParams;
+                    const adResponse = await facebookService.createAd(accountId, token, adParams);
+                    adId = adResponse.id;
+                    if (!adId) throw new Error(`Facebook did not return an ad ID for ${ad.name}.`);
+                    checkpoint.ads.push({ key: creativeKey, id: adId });
+                    saveRetryCheckpoint(draftId, campaign, checkpoint, progress);
+                }
+                if (!results.ads.includes(adId)) results.ads.push(adId);
             }
         }
 
-        // Save to recent campaigns
         if (!storage.recentCampaigns) storage.recentCampaigns = [];
+        storage.recentCampaigns = storage.recentCampaigns.filter(item => item.draftId !== draftId);
         storage.recentCampaigns.unshift({
             id: uuidv4(),
+            draftId,
             campaignId,
             name: campaign.name,
             createdAt: new Date().toISOString(),
@@ -420,7 +455,38 @@ router.post('/create', async (req, res) => {
 
         res.json({ success: true, results });
     } catch (error) {
+        const storage = getStorage();
+        const providerDetails = error.provider === 'facebook' ? {
+            code: error.code,
+            errorSubcode: error.errorSubcode,
+            type: error.type,
+            fbtraceId: error.fbtraceId,
+            errorData: error.details?.error?.error_data
+        } : undefined;
+        const detail = providerDetails?.code
+            ? `${error.message} (Facebook code ${providerDetails.code}${providerDetails.errorSubcode ? `/${providerDetails.errorSubcode}` : ''})`
+            : error.message;
+        const failedRecord = {
+            id: `retry-${draftId}`,
+            draftId,
+            campaignId: checkpoint.campaignId || null,
+            name: req.body.campaign?.name || 'Unnamed campaign',
+            createdAt: new Date().toISOString(),
+            status: 'failed',
+            retryable: Boolean(checkpoint.campaignId || checkpoint.uploadedMedia.length),
+            failedStep: progress.failedStep,
+            details: detail,
+            checkpoint
+        };
+        storage.recentCampaigns = (storage.recentCampaigns || []).filter(item => item.draftId !== draftId);
+        storage.recentCampaigns.unshift(failedRecord);
+        if (storage.recentCampaigns.length > 50) storage.recentCampaigns = storage.recentCampaigns.slice(0, 50);
+        saveStorage(storage);
+
         console.error('Campaign creation error:', {
+            step: progress.failedStep,
+            index: progress.failedIndex,
+            params: progress.requestParams,
             message: error.message,
             provider: error.provider,
             code: error.code,
@@ -429,14 +495,14 @@ router.post('/create', async (req, res) => {
             fbtraceId: error.fbtraceId
         });
         res.status(error.provider === 'facebook' ? 400 : 500).json({
-            error: 'Failed to create campaign',
-            details: error.message,
-            facebook: error.provider === 'facebook' ? {
-                code: error.code,
-                errorSubcode: error.errorSubcode,
-                type: error.type,
-                fbtraceId: error.fbtraceId
-            } : undefined
+            error: error.provider === 'facebook' ? 'Facebook rejected a campaign request.' : 'Failed to create campaign',
+            details: detail,
+            facebook: providerDetails,
+            failedStep: progress.failedStep,
+            failedIndex: progress.failedIndex,
+            requestParams: progress.requestParams,
+            retryable: failedRecord.retryable,
+            retryState: checkpoint
         });
     }
 });
@@ -458,6 +524,38 @@ function normalizeCreativeAds(step3 = {}) {
         media: index === 0 ? step3.media || null : null,
         primaryText: typeof primaryText === 'string' ? primaryText : primaryText.primaryText || ''
     }));
+}
+
+function normalizeRetryState(state, draftId) {
+    const source = state && typeof state === 'object' ? state : {};
+    const list = value => Array.isArray(value) ? value.filter(item => item && typeof item === 'object') : [];
+    return {
+        draftId,
+        campaignId: source.campaignId ? String(source.campaignId) : null,
+        uploadedMedia: list(source.uploadedMedia),
+        adsets: list(source.adsets),
+        creatives: list(source.creatives),
+        ads: list(source.ads)
+    };
+}
+
+function saveRetryCheckpoint(draftId, campaign, checkpoint, progress) {
+    if (!campaign) return;
+    const storage = getStorage();
+    storage.recentCampaigns = (storage.recentCampaigns || []).filter(item => item.draftId !== draftId);
+    storage.recentCampaigns.unshift({
+        id: `retry-${draftId}`,
+        draftId,
+        campaignId: checkpoint.campaignId || null,
+        name: campaign.name || 'Unnamed campaign',
+        createdAt: new Date().toISOString(),
+        status: 'in_progress',
+        retryable: true,
+        failedStep: progress.failedStep,
+        checkpoint
+    });
+    if (storage.recentCampaigns.length > 50) storage.recentCampaigns = storage.recentCampaigns.slice(0, 50);
+    saveStorage(storage);
 }
 
 async function fetchWebsiteDetails(websiteUrl) {

@@ -12,6 +12,8 @@
         },
         _copyAutoFilledForUrl: '',
         _autoFilledCopy: { headline: '', description: '', primaryText: '' },
+        _creationDraftId: '',
+        _retryState: null,
 
         init: function() {
             this.bindEvents();
@@ -889,18 +891,32 @@
             const btn = document.getElementById('btn-create-campaign');
             const statusDiv = document.getElementById('creation-status');
             const statusText = document.getElementById('creation-status-text');
+            const errorDetails = document.getElementById('creation-error-details');
 
             if (btn) { btn.disabled = true; btn.textContent = '⏳ Creating...'; }
             if (statusDiv) statusDiv.style.display = 'block';
+            if (errorDetails) {
+                errorDetails.style.display = 'none';
+                errorDetails.innerHTML = '';
+            }
 
             try {
+                if (!this._creationDraftId) {
+                    this._creationDraftId = window.crypto?.randomUUID
+                        ? window.crypto.randomUUID()
+                        : `draft-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+                }
                 const payload = {
                     campaign: this.campaignData.step1,
                     adsets: this.campaignData.step2,
-                    creative: this.campaignData.step3
+                    creative: this.campaignData.step3,
+                    draftId: this._creationDraftId,
+                    retryState: this._retryState || undefined
                 };
                 if (statusText) statusText.textContent = 'Creating campaign on Facebook...';
                 const result = await window.API.createCampaign(payload);
+                this._retryState = null;
+                this._creationDraftId = '';
                 if (statusText) statusText.textContent = '✅ Campaign created successfully!';
                 window.AppController.showToast('Campaign created successfully! 🎉', 'success');
 
@@ -923,9 +939,49 @@
             } catch (error) {
                 if (statusText) statusText.textContent = '❌ Failed: ' + error.message;
                 window.AppController.showToast('Failed to create campaign: ' + error.message, 'error');
+                const data = error.data || {};
+                this._retryState = data.retryState || this._retryState;
+                if (errorDetails) {
+                    const facebook = data.facebook || {};
+                    const code = facebook.code
+                        ? `Facebook code ${facebook.code}${facebook.errorSubcode ? ` / subcode ${facebook.errorSubcode}` : ''}`
+                        : 'No Facebook error code returned';
+                    const failedStep = data.failedStep || 'validation';
+                    const params = data.requestParams
+                        ? JSON.stringify(data.requestParams, null, 2)
+                        : 'No request payload was available.';
+                    errorDetails.innerHTML = `
+                        <div style="border:1px solid rgba(239,35,60,0.45); background:rgba(239,35,60,0.08); border-radius:10px; padding:1rem;">
+                            <h4 style="color:var(--danger); margin-bottom:0.5rem;">Facebook rejected a parameter</h4>
+                            <p style="margin-bottom:0.35rem;"><strong>Failed step:</strong> ${this.escapeHtml(failedStep)}</p>
+                            <p style="margin-bottom:0.35rem;"><strong>Error:</strong> ${this.escapeHtml(code)}</p>
+                            ${facebook.type ? `<p style="margin-bottom:0.35rem;"><strong>Type:</strong> ${this.escapeHtml(facebook.type)}</p>` : ''}
+                            ${facebook.fbtraceId ? `<p style="margin-bottom:0.6rem;"><strong>Trace ID:</strong> ${this.escapeHtml(facebook.fbtraceId)}</p>` : ''}
+                            <p style="margin-bottom:0.35rem;"><strong>Details:</strong> ${this.escapeHtml(error.message)}</p>
+                            <details>
+                                <summary style="cursor:pointer; color:var(--accent-cyan);">Show request parameter</summary>
+                                <pre style="white-space:pre-wrap; overflow:auto; max-height:220px; margin-top:0.5rem; font-size:0.72rem; color:var(--text-secondary);">${this.escapeHtml(params)}</pre>
+                            </details>
+                            ${data.retryable !== false ? '<button type="button" class="btn btn-primary mt-3" id="btn-retry-campaign">↻ Retry from failed step</button>' : ''}
+                        </div>
+                    `;
+                    errorDetails.style.display = 'block';
+                    const retryBtn = document.getElementById('btn-retry-campaign');
+                    if (retryBtn) retryBtn.addEventListener('click', () => this.createCampaign());
+                }
             } finally {
                 if (btn) { btn.disabled = false; btn.textContent = '🚀 Create Campaign'; }
             }
+        },
+
+        escapeHtml: function(value) {
+            return String(value ?? '').replace(/[&<>"']/g, char => ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#039;'
+            }[char]));
         }
     };
 

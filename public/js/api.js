@@ -20,7 +20,13 @@
                 }
 
                 if (!response.ok) {
-                    throw new Error(data.details || data.message || data.error || `HTTP error! status: ${response.status}`);
+                    const message = data && typeof data === 'object'
+                        ? (data.details || data.message || data.error)
+                        : data;
+                    const error = new Error(message || `HTTP error! status: ${response.status}`);
+                    error.status = response.status;
+                    error.data = data;
+                    throw error;
                 }
                 return data;
             } catch (error) {
