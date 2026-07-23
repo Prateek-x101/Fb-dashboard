@@ -20,6 +20,41 @@ function saveStorage(data) {
     fs.writeFileSync(storagePath, JSON.stringify(data, null, 2), 'utf8');
 }
 
+router.get('/locations', async (req, res) => {
+    try {
+        const { q } = req.query;
+        let token = req.query.token;
+        if (!token) {
+            const storage = getStorage();
+            const first = (storage.accounts || [])[0];
+            if (first) token = first.accessToken;
+        }
+        if (!q) return res.status(400).json({ error: 'Missing query' });
+        if (!token) return res.status(400).json({ error: 'No account token available' });
+        const result = await facebookService.searchLocations(q, token);
+        res.json(result.data || []);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to search locations', details: error.message });
+    }
+});
+
+router.get('/custom-audiences/:accountId', async (req, res) => {
+    try {
+        const { accountId } = req.params;
+        let token = req.query.token;
+        if (!token) {
+            const storage = getStorage();
+            const account = (storage.accounts || []).find(a => a.accountId === accountId);
+            if (account) token = account.accessToken;
+        }
+        if (!token) return res.status(400).json({ error: 'Missing token' });
+        const result = await facebookService.getCustomAudiences(accountId, token);
+        res.json(result.data || []);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to get custom audiences', details: error.message });
+    }
+});
+
 router.get('/pixels/:accountId', async (req, res) => {
     try {
         const { accountId } = req.params;
@@ -139,101 +174,197 @@ router.post('/generate-variations', async (req, res) => {
 
 router.post('/create', async (req, res) => {
     try {
-        const { accountId, token, campaignData, adsets, creative, pageId } = req.body;
-        
-        // 1. Create Campaign
-        const campaignResponse = await facebookService.createCampaign(accountId, token, {
-            name: campaignData.name,
-            objective: campaignData.objective,
-            status: campaignData.status,
-            special_ad_categories: campaignData.special_ad_categories,
-            daily_budget: campaignData.daily_budget,
-            bid_strategy: campaignData.bid_strategy
-        });
+        // Data comes from campaign.js as: { campaign, adsets: step2, creative: step3 }
+        const { campaign, adsets: step2, creative: step3 } = req.body;
+
+        // Look up account + token from storage
+        const storage = getStorage();
+        const accountRecord = (storage.accounts || []).find(a => a.id === campaign.accountId);
+        if (!accountRecord) return res.status(400).json({ error: 'Account not found. Please select a valid account.' });
+
+        const accountId = accountRecord.accountId;
+        const token = accountRecord.accessToken;
+
+        // ── 1. Create Campaign ──────────────────────────────────────────
+        const isCBO = campaign.budgetType === 'CBO';
+        const campaignParams = {
+            name: campaign.name,
+            objective: campaign.objective || 'OUTCOME_SALES',
+            status: 'PAUSED',
+            special_ad_categories: campaign.specialAdCategory && campaign.specialAdCategory !== 'NONE'
+                ? [campaign.specialAdCategory] : []
+        };
+        if (isCBO) {
+            campaignParams.daily_budget = Math.round(campaign.budgetAmount * 100); // cents
+            campaignParams.bid_strategy = 'LOWEST_COST_WITHOUT_CAP';
+        }
+        const campaignResponse = await facebookService.createCampaign(accountId, token, campaignParams);
         const campaignId = campaignResponse.id;
-        
-        // 2. Upload Media if needed (simplified)
-        let imageHash = creative.image_hash;
-        let videoId = creative.video_id;
-        
-        if (creative.filePath) {
-            const ext = path.extname(creative.filePath).toLowerCase();
-            if (['.mp4', '.mov'].includes(ext)) {
-                const videoRes = await facebookService.uploadVideo(accountId, token, creative.filePath);
-                videoId = videoRes.id;
-            } else {
-                const imageRes = await facebookService.uploadImage(accountId, token, creative.filePath);
-                imageHash = imageRes.images[Object.keys(imageRes.images)[0]].hash;
+
+        // ── 2. Upload media ─────────────────────────────────────────────
+        let imageHash = null;
+        let videoId = null;
+        if (step3.media) {
+            const ext = path.extname(step3.media).toLowerCase();
+            try {
+                if (['.mp4', '.mov', '.avi'].includes(ext)) {
+                    const videoRes = await facebookService.uploadVideo(accountId, token, step3.media);
+                    videoId = videoRes.id;
+                } else {
+                    const imageRes = await facebookService.uploadImage(accountId, token, step3.media);
+                    const firstKey = Object.keys(imageRes.images || {})[0];
+                    if (firstKey) imageHash = imageRes.images[firstKey].hash;
+                }
+            } catch (mediaErr) {
+                console.warn('Media upload failed, continuing without media:', mediaErr.message);
             }
         }
-        
+
         const results = { campaignId, adsets: [], ads: [] };
-        
-        // 3. Create AdSets and Ads
-        for (const adset of adsets) {
-            const adsetResponse = await facebookService.createAdSet(accountId, token, {
+        const pageId = step3.pageId || accountRecord.pageId || '';
+
+        // ── 3. Create AdSets + Ads per audience ─────────────────────────
+        for (const audience of (step2.audiences || [])) {
+            // Build geo_locations from structured location objects
+            const geoLocations = buildGeoLocations(audience.locationsInclude || []);
+            const excludedGeo = buildGeoLocations(audience.locationsExclude || []);
+
+            // Gender: 0=all, 1=male, 2=female
+            const genders = audience.gender === 'male' ? [1] : audience.gender === 'female' ? [2] : [];
+
+            const targeting = {
+                age_min: audience.ageMin || 18,
+                age_max: audience.ageMax || 65,
+                geo_locations: Object.keys(geoLocations).length > 0 ? geoLocations : { countries: ['IN'] }
+            };
+            if (genders.length) targeting.genders = genders;
+            if (Object.keys(excludedGeo).length > 0) targeting.excluded_geo_locations = excludedGeo;
+
+            // Interests
+            if (audience.interests && audience.interests.length > 0) {
+                targeting.flexible_spec = [{ interests: audience.interests.map(i => ({ id: i.id, name: i.name })).filter(i => i.id) }];
+                if (!targeting.flexible_spec[0].interests.length) delete targeting.flexible_spec;
+            }
+
+            // Custom audiences
+            if (audience.customAudiencesInclude?.length) {
+                targeting.custom_audiences = audience.customAudiencesInclude.map(id => ({ id }));
+            }
+            if (audience.customAudiencesExclude?.length) {
+                targeting.excluded_custom_audiences = audience.customAudiencesExclude.map(id => ({ id }));
+            }
+            if (audience.lookalikeInclude?.length) {
+                targeting.custom_audiences = [...(targeting.custom_audiences || []), ...audience.lookalikeInclude.map(id => ({ id }))];
+            }
+            if (audience.lookalikeExclude?.length) {
+                targeting.excluded_custom_audiences = [...(targeting.excluded_custom_audiences || []), ...audience.lookalikeExclude.map(id => ({ id }))];
+            }
+
+            const adsetParams = {
                 campaign_id: campaignId,
-                name: adset.name,
-                optimization_goal: adset.optimization_goal,
-                billing_event: adset.billing_event,
-                daily_budget: adset.daily_budget,
-                start_time: adset.start_time,
-                end_time: adset.end_time,
-                status: adset.status,
-                targeting: adset.targeting,
-                promoted_object: adset.promoted_object
-            });
+                name: audience.name,
+                optimization_goal: step2.optimizationGoal || 'OFFSITE_CONVERSIONS',
+                billing_event: 'IMPRESSIONS',
+                status: 'PAUSED',
+                targeting,
+                promoted_object: step2.pixel ? {
+                    pixel_id: step2.pixel,
+                    custom_event_type: step2.conversionEvent || 'PURCHASE'
+                } : undefined,
+                start_time: campaign.scheduleStart ? new Date(campaign.scheduleStart).toISOString() : undefined
+            };
+            if (!isCBO) {
+                adsetParams.daily_budget = Math.round(campaign.budgetAmount * 100);
+            }
+            if (campaign.scheduleEnd) adsetParams.end_time = new Date(campaign.scheduleEnd).toISOString();
+
+            const adsetResponse = await facebookService.createAdSet(accountId, token, adsetParams);
             results.adsets.push(adsetResponse.id);
-            
-            // 4. Create creatives and ads for each variation
-            for (let i = 0; i < (creative.variations || []).length; i++) {
-                const textVariation = creative.variations[i];
-                
+
+            // ── 4. Creative + Ad per variation ─────────────────────────
+            for (let i = 0; i < (step3.variations || []).length; i++) {
+                const textVariation = step3.variations[i];
+
                 const creativeParams = {
-                    name: `${creative.name} - Var ${i+1}`,
-                    page_id: pageId,
-                    link: creative.link,
-                    message: textVariation,
-                    headline: creative.headline,
-                    description: creative.description,
-                    call_to_action_type: creative.call_to_action_type
+                    name: `${campaign.name} — ${audience.name} — V${i + 1}`,
+                    object_story_spec: {
+                        page_id: pageId,
+                        link_data: {
+                            message: textVariation,
+                            link: step2.url,
+                            name: step3.headline || '',
+                            description: step3.description || '',
+                            call_to_action: { type: step3.cta || 'SHOP_NOW', value: { link: step2.url } }
+                        }
+                    }
                 };
-                
-                if (imageHash) creativeParams.image_hash = imageHash;
-                if (videoId) creativeParams.video_id = videoId;
-                
+
+                if (imageHash) creativeParams.object_story_spec.link_data.image_hash = imageHash;
+                if (videoId) {
+                    creativeParams.object_story_spec.video_data = {
+                        video_id: videoId,
+                        message: textVariation,
+                        call_to_action: { type: step3.cta || 'SHOP_NOW', value: { link: step2.url } }
+                    };
+                    delete creativeParams.object_story_spec.link_data;
+                }
+
                 const creativeResponse = await facebookService.createAdCreative(accountId, token, creativeParams);
-                
+
                 const adResponse = await facebookService.createAd(accountId, token, {
-                    name: `${creative.name} - Ad ${i+1}`,
+                    name: `${audience.name} — V${i + 1}`,
                     adset_id: adsetResponse.id,
-                    creative_id: creativeResponse.id,
+                    creative: { creative_id: creativeResponse.id },
                     status: 'PAUSED'
                 });
-                
                 results.ads.push(adResponse.id);
             }
         }
-        
-        // Save to storage
-        const storage = getStorage();
+
+        // Save to recent campaigns
         if (!storage.recentCampaigns) storage.recentCampaigns = [];
-        storage.recentCampaigns.push({
+        storage.recentCampaigns.unshift({
             id: uuidv4(),
             campaignId,
-            name: campaignData.name,
+            name: campaign.name,
             createdAt: new Date().toISOString(),
             status: 'success',
-            details: results
+            adSets: results.adsets.length,
+            ads: results.ads.length
         });
+        if (storage.recentCampaigns.length > 50) storage.recentCampaigns = storage.recentCampaigns.slice(0, 50);
         saveStorage(storage);
-        
+
         res.json({ success: true, results });
     } catch (error) {
         console.error('Campaign creation error:', error);
         res.status(500).json({ error: 'Failed to create campaign', details: error.message });
     }
 });
+
+// Build FB geo_locations object from structured location array
+function buildGeoLocations(locations) {
+    const geo = {};
+    locations.forEach(loc => {
+        const key = loc.key || '';
+        const type = loc.type || 'country';
+        if (!key) return;
+        if (type === 'country') {
+            geo.countries = geo.countries || [];
+            if (!geo.countries.includes(key)) geo.countries.push(key);
+        } else if (type === 'region') {
+            geo.regions = geo.regions || [];
+            geo.regions.push({ key });
+        } else if (type === 'city') {
+            geo.cities = geo.cities || [];
+            geo.cities.push({ key });
+        } else if (type === 'zip') {
+            geo.zips = geo.zips || [];
+            geo.zips.push({ key });
+        }
+    });
+    return geo;
+}
 
 router.get('/recent', (req, res) => {
     try {

@@ -3,6 +3,8 @@
     const CampaignWizard = {
         currentStep: 1,
         totalSteps: 4,
+        _customAudiences: [],   // cached after account change
+        _step2DefaultsLoaded: false,
         campaignData: {
             step1: {},
             step2: { audiences: [] },
@@ -27,39 +29,166 @@
             if (startInput && !startInput.value) {
                 const now = new Date();
                 const pad = n => String(n).padStart(2, '0');
-                const formatted = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
-                startInput.value = formatted;
+                startInput.value = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
             }
         },
 
-        // Wire up all tag inputs in the Global Audience Settings box
+        // ── Wire global audience settings ────────────────────────────────
         setupGlobalAudienceTags: function() {
-            function wireTagInput(inputSelector, containerSelector, tagClass) {
-                const input = document.querySelector(inputSelector);
-                const container = document.querySelector(containerSelector);
-                if (!input || !container) return;
-                input.addEventListener('keydown', (e) => {
-                    if (e.key === 'Enter') {
-                        e.preventDefault();
-                        const val = e.target.value.trim().toUpperCase ? e.target.value.trim() : e.target.value.trim();
-                        if (!val) return;
-                        const tag = document.createElement('span');
-                        tag.className = `tag ${tagClass}`;
-                        tag.setAttribute('data-value', val);
-                        tag.innerHTML = `${val} <span class="tag-remove" onclick="this.parentElement.remove()">✖</span>`;
-                        container.insertBefore(tag, input);
-                        input.value = '';
-                    }
+            const self = this;
+
+            // Location search helper (connected to FB API)
+            function wireLocationSearch(inputId, tagsContainerId, dropdownId) {
+                const input = document.getElementById(inputId);
+                const dropdown = document.getElementById(dropdownId);
+                const container = document.getElementById(tagsContainerId);
+                if (!input || !dropdown || !container) return;
+
+                let timer;
+                input.addEventListener('input', () => {
+                    clearTimeout(timer);
+                    const q = input.value.trim();
+                    if (q.length < 2) { dropdown.style.display = 'none'; return; }
+                    timer = setTimeout(async () => {
+                        try {
+                            const results = await window.API.searchLocations(q);
+                            self._renderLocationDropdown(dropdown, container, input, results || []);
+                        } catch { dropdown.style.display = 'none'; }
+                    }, 400);
+                });
+                input.addEventListener('blur', () => { setTimeout(() => dropdown.style.display = 'none', 200); });
+                document.addEventListener('click', (e) => {
+                    if (!container.contains(e.target)) dropdown.style.display = 'none';
                 });
             }
-            wireTagInput('.loc-include-input', '#location-include-tags', 'location-tag');
-            wireTagInput('.loc-exclude-input', '#location-exclude-tags', 'location-tag');
-            wireTagInput('.custom-include-input', '#custom-include-tags', 'audience-tag');
-            wireTagInput('.custom-exclude-input', '#custom-exclude-tags', 'audience-tag');
-            wireTagInput('.lookalike-include-input', '#lookalike-include-tags', 'audience-tag');
-            wireTagInput('.lookalike-exclude-input', '#lookalike-exclude-tags', 'audience-tag');
+
+            wireLocationSearch('loc-include-search', 'location-include-tags', 'loc-include-dropdown');
+            wireLocationSearch('loc-exclude-search', 'location-exclude-tags', 'loc-exclude-dropdown');
+
+            // Custom / Lookalike audience search helper (from cached API data)
+            function wireAudienceSearch(inputId, tagsContainerId, dropdownId, audienceType) {
+                const input = document.getElementById(inputId);
+                const dropdown = document.getElementById(dropdownId);
+                const container = document.getElementById(tagsContainerId);
+                if (!input || !dropdown || !container) return;
+
+                input.addEventListener('focus', () => self._renderAudienceDropdown(dropdown, container, input, audienceType, ''));
+                input.addEventListener('input', () => self._renderAudienceDropdown(dropdown, container, input, audienceType, input.value.trim()));
+                input.addEventListener('blur', () => { setTimeout(() => dropdown.style.display = 'none', 200); });
+                document.addEventListener('click', (e) => {
+                    if (!container.contains(e.target)) dropdown.style.display = 'none';
+                });
+            }
+
+            wireAudienceSearch('custom-include-search', 'custom-include-tags', 'custom-include-dropdown', 'custom');
+            wireAudienceSearch('custom-exclude-search', 'custom-exclude-tags', 'custom-exclude-dropdown', 'custom');
+            wireAudienceSearch('lookalike-include-search', 'lookalike-include-tags', 'lookalike-include-dropdown', 'lookalike');
+            wireAudienceSearch('lookalike-exclude-search', 'lookalike-exclude-tags', 'lookalike-exclude-dropdown', 'lookalike');
         },
 
+        _renderLocationDropdown: function(dropdown, container, input, results) {
+            dropdown.innerHTML = '';
+            if (!results.length) { dropdown.style.display = 'none'; return; }
+            const typeIcon = { country: '🌍', region: '📍', city: '🏙️', zip: '📮' };
+            results.slice(0, 15).forEach(r => {
+                const item = document.createElement('div');
+                item.style.cssText = 'padding:0.6rem 1rem; cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.05); display:flex; gap:0.6rem; align-items:flex-start;';
+                item.innerHTML = `<span style="margin-top:2px;">${typeIcon[r.type] || '📍'}</span>
+                    <div><div style="font-weight:600;">${r.name}</div>
+                    <div style="font-size:0.72rem; color:var(--text-secondary);">${r.type}${r.country_code && r.type !== 'country' ? ' · ' + r.country_code : ''}</div></div>`;
+                item.addEventListener('mouseenter', () => item.style.background = 'rgba(67,97,238,0.2)');
+                item.addEventListener('mouseleave', () => item.style.background = 'transparent');
+                item.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    this._addLocationTag(container, input, r);
+                    dropdown.style.display = 'none';
+                });
+                dropdown.appendChild(item);
+            });
+            dropdown.style.display = 'block';
+        },
+
+        _addLocationTag: function(container, inputEl, r) {
+            const tag = document.createElement('span');
+            tag.className = 'tag location-tag';
+            tag.setAttribute('data-key', r.key || r.country_code || '');
+            tag.setAttribute('data-type', r.type || 'region');
+            tag.setAttribute('data-name', r.name);
+            tag.setAttribute('data-value', r.name);
+            const ico = { country: '🌍', region: '📍', city: '🏙️' }[r.type] || '📍';
+            tag.innerHTML = `${r.name} ${ico} <span class="tag-remove" onclick="this.parentElement.remove()">✖</span>`;
+            container.insertBefore(tag, inputEl);
+            if (inputEl) inputEl.value = '';
+        },
+
+        _renderAudienceDropdown: function(dropdown, container, input, audienceType, query) {
+            const all = this._customAudiences || [];
+            let list = all.filter(a => {
+                const isLA = a.subtype === 'LOOKALIKE';
+                if (audienceType === 'lookalike' && !isLA) return false;
+                if (audienceType === 'custom' && isLA) return false;
+                if (query && !a.name.toLowerCase().includes(query.toLowerCase())) return false;
+                return true;
+            });
+
+            dropdown.innerHTML = '';
+            if (!list.length) {
+                dropdown.innerHTML = `<div style="padding:0.85rem 1rem; color:var(--text-secondary); font-size:0.82rem;">${all.length === 0 ? '⚠️ Select an account — audiences load automatically' : 'No matching audiences'}</div>`;
+                dropdown.style.display = 'block';
+                return;
+            }
+            list.slice(0, 20).forEach(a => {
+                const item = document.createElement('div');
+                item.style.cssText = 'padding:0.6rem 1rem; cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.05);';
+                const cnt = a.approximate_count_lower_bound ? ` (~${Number(a.approximate_count_lower_bound).toLocaleString()})` : '';
+                item.innerHTML = `<div style="font-weight:600;">${a.name}</div><div style="font-size:0.72rem;color:var(--text-secondary);">${a.subtype}${cnt}</div>`;
+                item.addEventListener('mouseenter', () => item.style.background = 'rgba(67,97,238,0.2)');
+                item.addEventListener('mouseleave', () => item.style.background = 'transparent');
+                item.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    const tag = document.createElement('span');
+                    tag.className = 'tag audience-tag';
+                    tag.setAttribute('data-value', a.id);
+                    tag.setAttribute('data-name', a.name);
+                    tag.innerHTML = `${a.name} <span class="tag-remove" onclick="this.parentElement.remove()">✖</span>`;
+                    container.insertBefore(tag, input);
+                    input.value = '';
+                    dropdown.style.display = 'none';
+                });
+                dropdown.appendChild(item);
+            });
+            dropdown.style.display = 'block';
+        },
+
+        // Pre-populate exclude tags from settings defaults (once per session)
+        loadDefaultExcludedLocations: function() {
+            if (this._step2DefaultsLoaded) return;
+            this._step2DefaultsLoaded = true;
+
+            const defaults = (window.APP.settings || {}).defaultExcludedLocations || [];
+            if (!defaults.length) return;
+
+            const container = document.getElementById('location-exclude-tags');
+            const inputEl = document.getElementById('loc-exclude-search');
+            if (!container) return;
+
+            // Only pre-fill if the user hasn't added anything yet
+            const existing = container.querySelectorAll('.location-tag');
+            if (existing.length > 0) return;
+
+            defaults.forEach(loc => {
+                const tag = document.createElement('span');
+                tag.className = 'tag location-tag';
+                tag.setAttribute('data-key', loc.key || '');
+                tag.setAttribute('data-type', loc.type || 'region');
+                tag.setAttribute('data-name', loc.name);
+                tag.setAttribute('data-value', loc.name);
+                tag.innerHTML = `${loc.name} 📍 <span class="tag-remove" onclick="this.parentElement.remove()">✖</span>`;
+                container.insertBefore(tag, inputEl);
+            });
+        },
+
+        // ── Bind global events ───────────────────────────────────────────
         bindEvents: function() {
             const btnNext = document.getElementById('btn-next-step');
             const btnPrev = document.getElementById('btn-prev-step');
@@ -69,99 +198,56 @@
             if (btnPrev) btnPrev.addEventListener('click', () => this.prevStep());
             if (btnCreate) btnCreate.addEventListener('click', () => this.createCampaign());
 
-            // Adset number input
             const numAdsets = document.getElementById('num-adsets');
-            if (numAdsets) {
-                numAdsets.addEventListener('change', () => this.updateAudienceCards());
-            }
+            if (numAdsets) numAdsets.addEventListener('change', () => this.updateAudienceCards());
 
-            // Add adset button
             const btnAddAdset = document.getElementById('btn-add-adset');
             if (btnAddAdset) {
                 btnAddAdset.addEventListener('click', () => {
-                    const numInput = document.getElementById('num-adsets');
-                    if (numInput) {
-                        numInput.value = parseInt(numInput.value) + 1;
-                        this.updateAudienceCards();
-                    }
+                    const n = document.getElementById('num-adsets');
+                    if (n) { n.value = parseInt(n.value) + 1; this.updateAudienceCards(); }
                 });
             }
 
-            // AI generate ALL audiences button
             const btnAiAll = document.getElementById('btn-ai-all-audiences');
-            if (btnAiAll) {
-                btnAiAll.addEventListener('click', () => this.aiGenerateAllAudiences());
-            }
+            if (btnAiAll) btnAiAll.addEventListener('click', () => this.aiGenerateAllAudiences());
 
-            // Media upload
             const dropZone = document.getElementById('media-upload-zone');
             const fileInput = document.getElementById('media-file-input');
             if (dropZone && fileInput) {
                 dropZone.addEventListener('click', () => fileInput.click());
-                dropZone.addEventListener('dragover', (e) => {
-                    e.preventDefault();
-                    dropZone.classList.add('dragover');
-                    dropZone.style.borderColor = 'var(--accent-blue)';
-                    dropZone.style.background = 'rgba(67, 97, 238, 0.1)';
-                });
-                dropZone.addEventListener('dragleave', () => {
-                    dropZone.classList.remove('dragover');
-                    dropZone.style.borderColor = '';
-                    dropZone.style.background = '';
-                });
-                dropZone.addEventListener('drop', (e) => {
-                    e.preventDefault();
-                    dropZone.classList.remove('dragover');
-                    dropZone.style.borderColor = '';
-                    dropZone.style.background = '';
-                    if (e.dataTransfer.files.length) {
-                        this.handleMediaUpload(e.dataTransfer.files[0]);
-                    }
-                });
-                fileInput.addEventListener('change', (e) => {
-                    if (e.target.files.length) {
-                        this.handleMediaUpload(e.target.files[0]);
-                    }
-                });
+                dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.style.borderColor = 'var(--accent-blue)'; });
+                dropZone.addEventListener('dragleave', () => { dropZone.style.borderColor = ''; });
+                dropZone.addEventListener('drop', (e) => { e.preventDefault(); dropZone.style.borderColor = ''; if (e.dataTransfer.files.length) this.handleMediaUpload(e.dataTransfer.files[0]); });
+                fileInput.addEventListener('change', (e) => { if (e.target.files.length) this.handleMediaUpload(e.target.files[0]); });
             }
 
-            // Generate variations
             const btnGenerate = document.getElementById('btn-generate-variations');
-            if (btnGenerate) {
-                btnGenerate.addEventListener('click', () => this.generateVariations());
-            }
-
-            // Add variation manually
+            if (btnGenerate) btnGenerate.addEventListener('click', () => this.generateVariations());
             const btnAddVariation = document.getElementById('btn-add-variation');
-            if (btnAddVariation) {
-                btnAddVariation.addEventListener('click', () => this.addManualVariation());
-            }
+            if (btnAddVariation) btnAddVariation.addEventListener('click', () => this.addManualVariation());
         },
 
+        // ── Step navigation ──────────────────────────────────────────────
         updateStepUI: function() {
             for (let i = 1; i <= this.totalSteps; i++) {
                 const stepEl = document.getElementById(`step-${i}`);
-                if (stepEl) {
-                    stepEl.classList.toggle('active', i === this.currentStep);
-                }
-                const indicator = document.getElementById(`step-indicator-${i}`);
-                if (indicator) {
-                    indicator.classList.remove('active', 'completed');
-                    if (i < this.currentStep) indicator.classList.add('completed');
-                    else if (i === this.currentStep) indicator.classList.add('active');
+                if (stepEl) stepEl.classList.toggle('active', i === this.currentStep);
+                const ind = document.getElementById(`step-indicator-${i}`);
+                if (ind) {
+                    ind.classList.remove('active', 'completed');
+                    if (i < this.currentStep) ind.classList.add('completed');
+                    else if (i === this.currentStep) ind.classList.add('active');
                 }
             }
-
             const btnNext = document.getElementById('btn-next-step');
             const btnPrev = document.getElementById('btn-prev-step');
-            const btnCreate = document.getElementById('btn-create-campaign');
-
             if (btnPrev) btnPrev.style.display = this.currentStep > 1 ? 'inline-flex' : 'none';
             if (btnNext) btnNext.style.display = this.currentStep < this.totalSteps ? 'inline-flex' : 'none';
 
-            if (this.currentStep === this.totalSteps) {
-                this.renderReviewSummary();
-            }
+            // Pre-populate default excluded locations on first entry to step 2
+            if (this.currentStep === 2) this.loadDefaultExcludedLocations();
+            if (this.currentStep === this.totalSteps) this.renderReviewSummary();
         },
 
         validateStep: function(step) {
@@ -192,15 +278,20 @@
                 const url = document.getElementById('website-url')?.value?.trim();
                 if (!url) { window.AppController.showToast('Please enter a Website URL', 'warning'); return false; }
 
-                // Read Global Audience Settings
-                const globalLocInclude = [];
-                document.querySelectorAll('#location-include-tags .location-tag').forEach(tag => {
-                    globalLocInclude.push(tag.getAttribute('data-value') || tag.textContent.replace('✖', '').trim());
-                });
-                const globalLocExclude = [];
-                document.querySelectorAll('#location-exclude-tags .location-tag').forEach(tag => {
-                    globalLocExclude.push(tag.getAttribute('data-value') || tag.textContent.replace('✖', '').trim());
-                });
+                // Read Global settings — structured location tags
+                const readLocTags = (selector) => {
+                    const items = [];
+                    document.querySelectorAll(selector).forEach(tag => {
+                        items.push({
+                            key: tag.getAttribute('data-key') || '',
+                            name: tag.getAttribute('data-name') || tag.getAttribute('data-value') || '',
+                            type: tag.getAttribute('data-type') || 'country'
+                        });
+                    });
+                    return items;
+                };
+                const globalLocInclude = readLocTags('#location-include-tags .location-tag');
+                const globalLocExclude = readLocTags('#location-exclude-tags .location-tag');
                 const globalAgeMin = parseInt(document.getElementById('global-age-min')?.value) || 18;
                 const globalAgeMax = parseInt(document.getElementById('global-age-max')?.value) || 65;
                 const globalGender = document.querySelector('input[name="global-gender"]:checked')?.value || 'all';
@@ -214,23 +305,18 @@
                 const lookalikeExclude = [];
                 document.querySelectorAll('#lookalike-exclude-tags .audience-tag').forEach(t => lookalikeExclude.push(t.getAttribute('data-value')));
 
-                // Collect per-card interests only — everything else is global
+                // Per-card interests only
                 const audienceCards = document.querySelectorAll('.audience-card');
                 const audiences = [];
                 audienceCards.forEach((card, idx) => {
-                    const cardIdx = parseInt(card.getAttribute('data-index'));
                     const interests = [];
                     card.querySelectorAll('.interest-tag').forEach(tag => {
-                        interests.push({
-                            id: tag.getAttribute('data-id') || '',
-                            name: tag.getAttribute('data-value') || tag.textContent.replace('✖', '').trim()
-                        });
+                        interests.push({ id: tag.getAttribute('data-id') || '', name: tag.getAttribute('data-value') || tag.textContent.replace('✖','').trim() });
                     });
-                    // Adset name = first 3 interest keywords
                     const adsetName = interests.slice(0, 3).map(i => i.name).join(', ') || `Audience ${idx + 1}`;
                     audiences.push({
                         name: adsetName,
-                        locations: globalLocInclude.length > 0 ? globalLocInclude : ['IN'],
+                        locationsInclude: globalLocInclude.length > 0 ? globalLocInclude : [{ key: 'IN', type: 'country', name: 'India' }],
                         locationsExclude: globalLocExclude,
                         ageMin: globalAgeMin,
                         ageMax: globalAgeMax,
@@ -272,10 +358,8 @@
             if (!container) return;
             const variations = [];
             container.querySelectorAll('.variation-card').forEach(card => {
-                const textarea = card.querySelector('textarea');
-                if (textarea && textarea.value.trim()) {
-                    variations.push(textarea.value.trim());
-                }
+                const ta = card.querySelector('textarea');
+                if (ta && ta.value.trim()) variations.push(ta.value.trim());
             });
             this.campaignData.step3.variations = variations;
         },
@@ -296,6 +380,7 @@
             }
         },
 
+        // ── Account handling ─────────────────────────────────────────────
         populateAccountSelect: function() {
             const select = document.getElementById('campaign-account-select');
             if (select) {
@@ -316,38 +401,44 @@
         handleAccountChange: async function(account) {
             if (!account) return;
 
+            // Fetch pixels
             const pixelSelect = document.getElementById('pixel-select');
-            const pageSelect = document.getElementById('ad-page');
-            const igSelect = document.getElementById('ad-instagram');
-
             if (pixelSelect) {
                 pixelSelect.innerHTML = '<option value="">Loading pixels...</option>';
                 try {
                     const pixels = await window.API.getPixels(account.accountId || account.id);
                     pixelSelect.innerHTML = '<option value="">Select Pixel</option>';
-                    if (Array.isArray(pixels)) {
-                        pixels.forEach(p => {
-                            const opt = document.createElement('option');
-                            opt.value = p.id;
-                            opt.textContent = p.name ? `${p.name} (${p.id})` : p.id;
-                            pixelSelect.appendChild(opt);
-                        });
-                    }
-                } catch (error) {
-                    pixelSelect.innerHTML = '<option value="">No pixels found</option>';
-                }
+                    (pixels || []).forEach(p => {
+                        const opt = document.createElement('option');
+                        opt.value = p.id;
+                        opt.textContent = p.name ? `${p.name} (${p.id})` : p.id;
+                        pixelSelect.appendChild(opt);
+                    });
+                } catch { pixelSelect.innerHTML = '<option value="">No pixels found</option>'; }
             }
 
+            // Fetch custom audiences and cache them
+            try {
+                const audiences = await window.API.getCustomAudiences(account.accountId || account.id);
+                this._customAudiences = audiences || [];
+                const statusEl = document.getElementById('custom-load-status');
+                if (statusEl) statusEl.textContent = `${this._customAudiences.length} audiences loaded`;
+            } catch (err) {
+                this._customAudiences = [];
+                console.log('Could not load custom audiences:', err.message);
+            }
+
+            // Fetch pages + Instagram
+            const pageSelect = document.getElementById('ad-page');
+            const igSelect = document.getElementById('ad-instagram');
             if ((pageSelect || igSelect) && account.id) {
                 if (pageSelect) pageSelect.innerHTML = '<option value="">Loading pages...</option>';
                 if (igSelect) igSelect.innerHTML = '<option value="">Loading...</option>';
                 try {
                     const result = await window.API.getPages(account.id);
                     const pages = result.pages || [];
-
                     if (pageSelect) pageSelect.innerHTML = '<option value="">Select Facebook Page</option>';
                     if (igSelect) igSelect.innerHTML = '<option value="">No Instagram linked</option>';
-
                     pages.forEach(page => {
                         if (pageSelect) {
                             const opt = document.createElement('option');
@@ -357,40 +448,35 @@
                         }
                         if (igSelect && page.instagram_business_account) {
                             const ig = page.instagram_business_account;
-                            const igOpt = document.createElement('option');
-                            igOpt.value = ig.id;
-                            igOpt.textContent = `@${ig.username || ig.name || ig.id}`;
-                            igSelect.appendChild(igOpt);
+                            const o = document.createElement('option');
+                            o.value = ig.id;
+                            o.textContent = `@${ig.username || ig.name || ig.id}`;
+                            igSelect.appendChild(o);
                         }
                     });
-
                     if (igSelect && account.instagramAccountId && igSelect.options.length <= 1) {
-                        const igOpt = document.createElement('option');
-                        igOpt.value = account.instagramAccountId;
-                        igOpt.textContent = `@${account.instagramUsername || account.instagramAccountId}`;
-                        igSelect.appendChild(igOpt);
+                        const o = document.createElement('option');
+                        o.value = account.instagramAccountId;
+                        o.textContent = `@${account.instagramUsername || account.instagramAccountId}`;
+                        igSelect.appendChild(o);
                     }
                     if (pageSelect && account.pageId) pageSelect.value = account.pageId;
-                } catch (error) {
+                } catch {
                     if (pageSelect) pageSelect.innerHTML = '<option value="">Could not load pages</option>';
-                    if (igSelect) igSelect.innerHTML = '<option value="">Could not load</option>';
                 }
             }
         },
 
-        // Build audience cards — interests only, global settings apply to all
+        // ── Audience cards (interests only) ──────────────────────────────
         updateAudienceCards: function() {
             const container = document.getElementById('audience-container');
-            const numAdsets = parseInt(document.getElementById('num-adsets')?.value || 3, 10);
+            const num = parseInt(document.getElementById('num-adsets')?.value || 3, 10);
             if (!container) return;
             container.innerHTML = '';
-
-            for (let i = 0; i < numAdsets; i++) {
-                this._createAudienceCard(container, i, numAdsets);
-            }
+            for (let i = 0; i < num; i++) this._createAudienceCard(container, i, num);
         },
 
-        _createAudienceCard: function(container, i, totalCards) {
+        _createAudienceCard: function(container, i, total) {
             const card = document.createElement('div');
             card.className = 'glass-card audience-card mb-3';
             card.style.position = 'relative';
@@ -399,8 +485,8 @@
                 <div class="flex justify-between align-center mb-2">
                     <h4>🎯 Audience ${i + 1}</h4>
                     <div class="flex gap-2 align-center">
-                        <button class="btn btn-gemini btn-sm btn-ai-audience" data-index="${i}" title="Gemini will read your website and pick unique interests for this audience">🤖 AI</button>
-                        ${totalCards > 1 ? `<button class="remove-card-btn" onclick="this.closest('.audience-card').remove()"><span>✖</span></button>` : ''}
+                        <button class="btn btn-gemini btn-sm btn-ai-audience" data-index="${i}" title="Gemini reads your website and picks unique interests">🤖 AI</button>
+                        ${total > 1 ? `<button class="remove-card-btn" onclick="this.closest('.audience-card').remove()"><span>✖</span></button>` : ''}
                     </div>
                 </div>
                 <div class="form-group" style="margin-bottom:0; position:relative;">
@@ -416,12 +502,8 @@
             `;
             container.appendChild(card);
 
-            // AI button for this card
-            card.querySelector('.btn-ai-audience').addEventListener('click', () => {
-                this.aiGenerateAudience(i);
-            });
+            card.querySelector('.btn-ai-audience').addEventListener('click', () => this.aiGenerateAudience(i));
 
-            // Interest search with debounce
             const searchInput = card.querySelector('.interest-search');
             let debounceTimeout;
             searchInput.addEventListener('input', (e) => {
@@ -437,7 +519,7 @@
                             if (Array.isArray(results) && results.length > 0) {
                                 results.forEach(r => {
                                     const item = document.createElement('div');
-                                    item.style.cssText = 'padding:0.75rem 1rem; cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.05);';
+                                    item.style.cssText = 'padding:0.65rem 1rem; cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.05);';
                                     item.textContent = r.name || r;
                                     item.addEventListener('mouseenter', () => item.style.background = 'rgba(67,97,238,0.2)');
                                     item.addEventListener('mouseleave', () => item.style.background = 'transparent');
@@ -449,46 +531,35 @@
                                     dropdown.appendChild(item);
                                 });
                                 dropdown.style.display = 'block';
-                            } else {
-                                dropdown.style.display = 'none';
-                            }
-                        } catch (err) {
-                            dropdown.style.display = 'none';
-                        }
-                    } else if (dropdown) {
-                        dropdown.style.display = 'none';
-                    }
+                            } else { dropdown.style.display = 'none'; }
+                        } catch { dropdown.style.display = 'none'; }
+                    } else if (dropdown) { dropdown.style.display = 'none'; }
                 }, 500);
             });
-
-            // Hide dropdowns on outside click
             document.addEventListener('click', (e) => {
                 if (!e.target.classList.contains('interest-search')) {
                     document.querySelectorAll('.interest-dropdown').forEach(d => d.style.display = 'none');
                 }
-            }, { once: false });
+            });
         },
 
-        // Add a single interest tag to a card
         _addInterestTag: function(card, idx, id, name) {
-            const tagsContainer = card.querySelector(`.interests-tags-${idx}`);
-            const input = tagsContainer?.querySelector('.interest-search');
-            if (!tagsContainer || !input) return;
+            const tc = card.querySelector(`.interests-tags-${idx}`);
+            const input = tc?.querySelector('.interest-search');
+            if (!tc || !input) return;
             const tag = document.createElement('span');
             tag.className = 'tag interest-tag';
             tag.setAttribute('data-id', id);
             tag.setAttribute('data-value', name);
             tag.innerHTML = `${name} <span class="tag-remove" onclick="this.parentElement.remove()">✖</span>`;
-            tagsContainer.insertBefore(tag, input);
+            tc.insertBefore(tag, input);
         },
 
-        // Populate an audience card with a list of keywords (from AI)
         _populateAudienceCard: function(card, idx, interests) {
-            const tagsContainer = card.querySelector(`.interests-tags-${idx}`);
-            if (!tagsContainer) return;
-            // Remove existing interest tags
-            tagsContainer.querySelectorAll('.interest-tag').forEach(t => t.remove());
-            const input = tagsContainer.querySelector('.interest-search');
+            const tc = card.querySelector(`.interests-tags-${idx}`);
+            if (!tc) return;
+            tc.querySelectorAll('.interest-tag').forEach(t => t.remove());
+            const input = tc.querySelector('.interest-search');
             interests.forEach(kw => {
                 const name = typeof kw === 'string' ? kw : (kw.name || kw);
                 const id = typeof kw === 'object' ? (kw.id || '') : '';
@@ -497,25 +568,20 @@
                 tag.setAttribute('data-id', id);
                 tag.setAttribute('data-value', name);
                 tag.innerHTML = `${name} <span class="tag-remove" onclick="this.parentElement.remove()">✖</span>`;
-                tagsContainer.insertBefore(tag, input);
+                tc.insertBefore(tag, input);
             });
         },
 
-        // AI: generate interests for ONE audience card
+        // ── AI audience generation ────────────────────────────────────────
         aiGenerateAudience: async function(cardIndex) {
             const websiteUrl = document.getElementById('website-url')?.value?.trim();
-            if (!websiteUrl) {
-                window.AppController.showToast('Enter the Website URL in Campaign Settings first', 'warning');
-                return;
-            }
+            if (!websiteUrl) { window.AppController.showToast('Enter the Website URL in Campaign Settings first', 'warning'); return; }
 
-            // Collect keywords already in ALL OTHER cards to avoid duplicates
             const alreadyUsed = [];
             document.querySelectorAll('.audience-card').forEach(card => {
-                const ci = parseInt(card.getAttribute('data-index'));
-                if (ci !== cardIndex) {
+                if (parseInt(card.getAttribute('data-index')) !== cardIndex) {
                     card.querySelectorAll('.interest-tag').forEach(tag => {
-                        const kw = tag.getAttribute('data-value') || tag.textContent.replace('✖', '').trim();
+                        const kw = tag.getAttribute('data-value') || tag.textContent.replace('✖','').trim();
                         if (kw) alreadyUsed.push(kw);
                     });
                 }
@@ -523,7 +589,6 @@
 
             const targetCard = document.querySelector(`.audience-card[data-index="${cardIndex}"]`);
             if (!targetCard) return;
-
             const btn = targetCard.querySelector('.btn-ai-audience');
             if (btn) { btn.disabled = true; btn.textContent = '⏳…'; }
 
@@ -533,9 +598,7 @@
                 if (audiences.length > 0) {
                     this._populateAudienceCard(targetCard, cardIndex, audiences[0].interests || []);
                     window.AppController.showToast(`Audience ${cardIndex + 1} generated ✨`, 'success');
-                } else {
-                    window.AppController.showToast('No audience returned. Try again.', 'warning');
-                }
+                } else { window.AppController.showToast('No audience returned. Try again.', 'warning'); }
             } catch (error) {
                 window.AppController.showToast('AI error: ' + error.message, 'error');
             } finally {
@@ -543,32 +606,23 @@
             }
         },
 
-        // AI: generate interests for ALL audience cards at once (no overlap)
         aiGenerateAllAudiences: async function() {
             const websiteUrl = document.getElementById('website-url')?.value?.trim();
-            if (!websiteUrl) {
-                window.AppController.showToast('Enter the Website URL in Campaign Settings first', 'warning');
-                return;
-            }
+            if (!websiteUrl) { window.AppController.showToast('Enter the Website URL in Campaign Settings first', 'warning'); return; }
 
             const cards = document.querySelectorAll('.audience-card');
-            const numAudiences = cards.length;
-            if (numAudiences === 0) return;
+            if (!cards.length) return;
 
             const btn = document.getElementById('btn-ai-all-audiences');
             if (btn) { btn.disabled = true; btn.textContent = '⏳ Generating…'; }
 
             try {
-                const result = await window.API.aiAudiences({ websiteUrl, numAudiences, alreadyUsed: [] });
+                const result = await window.API.aiAudiences({ websiteUrl, numAudiences: cards.length, alreadyUsed: [] });
                 const audiences = result.audiences || [];
-
                 cards.forEach((card, idx) => {
                     const cardIdx = parseInt(card.getAttribute('data-index'));
-                    if (audiences[idx]) {
-                        this._populateAudienceCard(card, cardIdx, audiences[idx].interests || []);
-                    }
+                    if (audiences[idx]) this._populateAudienceCard(card, cardIdx, audiences[idx].interests || []);
                 });
-
                 window.AppController.showToast(`${audiences.length} unique audiences generated 🎯`, 'success');
             } catch (error) {
                 window.AppController.showToast('AI generation failed: ' + error.message, 'error');
@@ -577,20 +631,16 @@
             }
         },
 
+        // ── Media upload ─────────────────────────────────────────────────
         handleMediaUpload: async function(file) {
             if (!file) return;
             const dropZone = document.getElementById('media-upload-zone');
             const preview = document.getElementById('media-preview');
             if (preview) {
-                if (file.type.startsWith('image/')) {
-                    preview.innerHTML = `<img src="${URL.createObjectURL(file)}" style="max-width:100%; max-height:200px; border-radius:8px; margin-top:1rem;" />`;
-                } else if (file.type.startsWith('video/')) {
-                    preview.innerHTML = `<video src="${URL.createObjectURL(file)}" controls style="max-width:100%; max-height:200px; border-radius:8px; margin-top:1rem;"></video>`;
-                }
+                if (file.type.startsWith('image/')) preview.innerHTML = `<img src="${URL.createObjectURL(file)}" style="max-width:100%; max-height:200px; border-radius:8px; margin-top:1rem;" />`;
+                else if (file.type.startsWith('video/')) preview.innerHTML = `<video src="${URL.createObjectURL(file)}" controls style="max-width:100%; max-height:200px; border-radius:8px; margin-top:1rem;"></video>`;
             }
-            if (dropZone) {
-                dropZone.innerHTML = `<i>✅</i><h4>${file.name}</h4><p>${(file.size / (1024*1024)).toFixed(2)} MB — Click to change</p>`;
-            }
+            if (dropZone) dropZone.innerHTML = `<i>✅</i><h4>${file.name}</h4><p>${(file.size/(1024*1024)).toFixed(2)} MB — Click to change</p>`;
             try {
                 const formData = new FormData();
                 formData.append('file', file);
@@ -598,33 +648,29 @@
                 this.campaignData.step3.media = response.filePath || response.filename;
                 this.campaignData.step3.mediaFile = file.name;
                 window.AppController.showToast('Media uploaded successfully! ✅', 'success');
-            } catch (error) {
-                window.AppController.showToast('Media saved locally. Will upload during campaign creation.', 'info');
+            } catch {
+                window.AppController.showToast('Media saved locally.', 'info');
                 this.campaignData.step3.media = file.name;
                 this.campaignData.step3.mediaFile = file.name;
             }
         },
 
+        // ── Variations ───────────────────────────────────────────────────
         generateVariations: async function() {
             const primaryText = document.getElementById('primary-text')?.value?.trim();
             const num = parseInt(document.getElementById('num-variations')?.value) || 3;
-            if (!primaryText) {
-                window.AppController.showToast('Please write base primary text first', 'warning');
-                return;
-            }
+            if (!primaryText) { window.AppController.showToast('Please write base primary text first', 'warning'); return; }
             const btn = document.getElementById('btn-generate-variations');
             if (btn) { btn.disabled = true; btn.textContent = '🤖 Generating...'; }
             try {
                 const response = await window.API.generateVariations({ primaryText, count: num });
                 const variations = response.variations || response || [];
                 this.campaignData.step3.variations = Array.isArray(variations) ? variations : [primaryText];
-                if (!this.campaignData.step3.variations.includes(primaryText)) {
-                    this.campaignData.step3.variations.unshift(primaryText);
-                }
+                if (!this.campaignData.step3.variations.includes(primaryText)) this.campaignData.step3.variations.unshift(primaryText);
                 this.renderVariations();
                 window.AppController.showToast(`${this.campaignData.step3.variations.length} variations generated! 🎉`, 'success');
             } catch (error) {
-                window.AppController.showToast('Gemini generation failed: ' + error.message + '. Add variations manually.', 'error');
+                window.AppController.showToast('Gemini generation failed: ' + error.message, 'error');
                 this.campaignData.step3.variations = [primaryText];
                 this.renderVariations();
             } finally {
@@ -635,8 +681,8 @@
         addManualVariation: function() {
             const container = document.getElementById('variations-container');
             if (!container) return;
-            const placeholder = container.querySelector('p');
-            if (placeholder && !container.querySelector('.variation-card')) container.innerHTML = '';
+            const ph = container.querySelector('p');
+            if (ph && !container.querySelector('.variation-card')) container.innerHTML = '';
             const idx = container.querySelectorAll('.variation-card').length + 1;
             const card = document.createElement('div');
             card.className = 'glass-card variation-card mb-2';
@@ -661,7 +707,7 @@
                 card.style.background = 'rgba(0,0,0,0.2)';
                 card.innerHTML = `
                     <div class="flex justify-between align-center mb-1">
-                        <label style="font-weight:600; color:var(--accent-cyan);">Variation ${idx + 1} ${idx === 0 ? '(Original)' : ''}</label>
+                        <label style="font-weight:600; color:var(--accent-cyan);">Variation ${idx+1} ${idx===0 ? '(Original)' : ''}</label>
                         <button class="remove-card-btn" onclick="this.closest('.variation-card').remove()"><span>✖</span></button>
                     </div>
                     <textarea class="form-control" rows="3">${typeof text === 'string' ? text : text.primaryText || ''}</textarea>
@@ -670,26 +716,21 @@
             });
         },
 
+        // ── Review ───────────────────────────────────────────────────────
         renderReviewSummary: function() {
             this.collectVariationsFromDOM();
             const { step1, step2, step3 } = this.campaignData;
-            const totalAdsets = step2.audiences ? step2.audiences.length : 0;
-            const totalVariations = step3.variations ? step3.variations.length : 0;
-            const totalAds = totalAdsets * totalVariations;
+            const totalAdsets = step2.audiences?.length || 0;
+            const totalVariations = step3.variations?.length || 0;
 
-            const nameEl = document.getElementById('review-campaign-name');
-            const objEl = document.getElementById('review-campaign-objective');
-            const budgetEl = document.getElementById('review-campaign-budget');
-            const adsetsEl = document.getElementById('review-adsets-count');
-            const varsEl = document.getElementById('review-variations-count');
+            const set = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; };
+            set('review-campaign-name', `Name: <strong>${step1.name || '—'}</strong>`);
+            set('review-campaign-objective', `Objective: <strong>${step1.objective || '—'}</strong>`);
+            set('review-campaign-budget', `Budget: <strong>$${step1.budgetAmount || 0}/day (${step1.budgetType || 'CBO'})</strong>`);
+            set('review-adsets-count', `Ad Sets: <strong>${totalAdsets}</strong>`);
+            set('review-variations-count', `Ads per Ad Set: <strong>${totalVariations}</strong>`);
             const totalEl = document.getElementById('review-total-ads');
-
-            if (nameEl) nameEl.innerHTML = `Name: <strong>${step1.name || '—'}</strong>`;
-            if (objEl) objEl.innerHTML = `Objective: <strong>${step1.objective || '—'}</strong>`;
-            if (budgetEl) budgetEl.innerHTML = `Budget: <strong>$${step1.budgetAmount || 0}/day (${step1.budgetType || 'CBO'})</strong>`;
-            if (adsetsEl) adsetsEl.innerHTML = `Ad Sets: <strong>${totalAdsets}</strong>`;
-            if (varsEl) varsEl.innerHTML = `Ads per Ad Set: <strong>${totalVariations}</strong>`;
-            if (totalEl) totalEl.textContent = `Total Ads: ${totalAds}`;
+            if (totalEl) totalEl.textContent = `Total Ads: ${totalAdsets * totalVariations}`;
 
             const detailContainer = document.getElementById('review-adsets-detail');
             if (detailContainer && step2.audiences) {
@@ -698,13 +739,16 @@
                     const card = document.createElement('div');
                     card.className = 'glass-card mb-2';
                     card.style.background = 'rgba(0,0,0,0.15)';
+                    const locNames = (aud.locationsInclude || []).map(l => l.name || l.key || l).join(', ') || 'IN';
+                    const excNames = (aud.locationsExclude || []).map(l => l.name || l.key || l).join(', ');
                     card.innerHTML = `
-                        <h4 style="color:var(--accent-cyan);">📋 Ad Set ${idx + 1}: ${aud.name}</h4>
+                        <h4 style="color:var(--accent-cyan);">📋 Ad Set ${idx+1}: ${aud.name}</h4>
                         <div class="flex gap-2 mt-2" style="flex-wrap:wrap;">
-                            <span class="badge badge-info">📍 ${(aud.locations || []).join(', ') || 'IN'}</span>
-                            <span class="badge badge-info">👤 ${aud.ageMin || 18}–${aud.ageMax || 65}</span>
-                            <span class="badge badge-info">⚧ ${aud.gender || 'All'}</span>
-                            <span class="badge badge-info">🎯 ${(aud.interests || []).map(i => i.name || i).join(', ') || 'Broad'}</span>
+                            <span class="badge badge-info">📍 ${locNames}</span>
+                            ${excNames ? `<span class="badge badge-warning">🚫 ${excNames}</span>` : ''}
+                            <span class="badge badge-info">👤 ${aud.ageMin||18}–${aud.ageMax||65}</span>
+                            <span class="badge badge-info">⚧ ${aud.gender||'All'}</span>
+                            <span class="badge badge-info">🎯 ${(aud.interests||[]).map(i=>i.name||i).join(', ')||'Broad'}</span>
                         </div>
                     `;
                     detailContainer.appendChild(card);
@@ -712,6 +756,7 @@
             }
         },
 
+        // ── Create campaign ───────────────────────────────────────────────
         createCampaign: async function() {
             const btn = document.getElementById('btn-create-campaign');
             const statusDiv = document.getElementById('creation-status');
@@ -739,9 +784,9 @@
                         <div style="text-align:center; padding:1rem;">
                             <p style="font-size:3rem; margin-bottom:1rem;">✅</p>
                             <h3>Campaign "${this.campaignData.step1.name}" created!</h3>
-                            <p class="mt-2" style="color:var(--text-secondary);">Campaign ID: ${result.campaignId || 'Created'}</p>
-                            <p style="color:var(--text-secondary);">Ad Sets: ${result.adSetIds?.length || this.campaignData.step2.audiences?.length || 0}</p>
-                            <p style="color:var(--text-secondary);">Ads: ${result.adIds?.length || 'Created'}</p>
+                            <p class="mt-2" style="color:var(--text-secondary);">Campaign ID: ${result.results?.campaignId || 'Created'}</p>
+                            <p style="color:var(--text-secondary);">Ad Sets: ${result.results?.adsets?.length || 0}</p>
+                            <p style="color:var(--text-secondary);">Ads: ${result.results?.ads?.length || 'Created'}</p>
                         </div>
                     `;
                 }
@@ -757,8 +802,5 @@
     };
 
     window.CampaignWizard = CampaignWizard;
-
-    document.addEventListener('DOMContentLoaded', () => {
-        CampaignWizard.init();
-    });
+    document.addEventListener('DOMContentLoaded', () => { CampaignWizard.init(); });
 })();

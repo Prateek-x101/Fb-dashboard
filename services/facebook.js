@@ -108,6 +108,35 @@ const facebookService = {
         return handleResponse(response);
     },
 
+    async searchLocations(query, token) {
+        const url = `${BASE_URL}/search?type=adgeolocation&q=${encodeURIComponent(query)}&location_types=["country","region","city","zip"]&access_token=${token}`;
+        const response = await fetch(url, { method: 'GET' });
+        return handleResponse(response);
+    },
+
+    async getCustomAudiences(accountId, token) {
+        const url = `${BASE_URL}/act_${accountId}/customaudiences?fields=id,name,subtype,approximate_count_lower_bound&limit=200&access_token=${token}`;
+        const response = await fetch(url, { method: 'GET' });
+        return handleResponse(response);
+    },
+
+    async resolveLocationNames(names, token) {
+        // Resolve a list of location names to their FB keys via search
+        const resolved = [];
+        for (const name of names) {
+            try {
+                const url = `${BASE_URL}/search?type=adgeolocation&q=${encodeURIComponent(name)}&location_types=["region","city","country"]&access_token=${token}`;
+                const response = await fetch(url, { method: 'GET' });
+                const data = await response.json();
+                if (data.data && data.data.length > 0) {
+                    const match = data.data.find(d => d.name.toLowerCase() === name.toLowerCase()) || data.data[0];
+                    resolved.push({ key: match.key, name: match.name, type: match.type, countryCode: match.country_code });
+                }
+            } catch (e) { /* skip if can't resolve */ }
+        }
+        return resolved;
+    },
+
     async testConnection(accountId, token) {
         const url = `${BASE_URL}/act_${accountId}?access_token=${token}`;
         const response = await fetch(url, { method: 'GET' });

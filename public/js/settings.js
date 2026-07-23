@@ -3,6 +3,7 @@
     const SettingsManager = {
         init: function() {
             this.bindEvents();
+            this.wireDefaultExcludeSearch();
             document.addEventListener('appReady', () => {
                 this.loadSettings();
                 this.renderAccounts();
@@ -77,6 +78,85 @@
             }
         },
 
+        // Wire location search for the "Default Excluded Locations" field in Settings
+        wireDefaultExcludeSearch: function() {
+            const self = this;
+            const input = document.getElementById('setting-default-exclude-search');
+            const dropdown = document.getElementById('setting-default-exclude-dropdown');
+            const container = document.getElementById('setting-default-exclude-tags');
+            if (!input || !dropdown || !container) return;
+
+            let timer;
+            input.addEventListener('input', () => {
+                clearTimeout(timer);
+                const q = input.value.trim();
+                if (q.length < 2) { dropdown.style.display = 'none'; return; }
+                timer = setTimeout(async () => {
+                    try {
+                        const results = await window.API.searchLocations(q);
+                        self._renderSettingsLocationDropdown(dropdown, container, input, results || []);
+                    } catch { dropdown.style.display = 'none'; }
+                }, 400);
+            });
+            input.addEventListener('blur', () => { setTimeout(() => { dropdown.style.display = 'none'; }, 200); });
+            document.addEventListener('click', (e) => {
+                if (!container.contains(e.target)) dropdown.style.display = 'none';
+            });
+        },
+
+        _renderSettingsLocationDropdown: function(dropdown, container, input, results) {
+            dropdown.innerHTML = '';
+            if (!results.length) { dropdown.style.display = 'none'; return; }
+            const typeIcon = { country: '🌍', region: '📍', city: '🏙️', zip: '📮' };
+            results.slice(0, 15).forEach(r => {
+                const item = document.createElement('div');
+                item.style.cssText = 'padding:0.6rem 1rem; cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.05); display:flex; gap:0.6rem;';
+                item.innerHTML = `<span style="margin-top:2px;">${typeIcon[r.type] || '📍'}</span>
+                    <div><div style="font-weight:600;">${r.name}</div>
+                    <div style="font-size:0.72rem; color:var(--text-secondary);">${r.type}${r.country_code && r.type !== 'country' ? ' · ' + r.country_code : ''}</div></div>`;
+                item.addEventListener('mouseenter', () => item.style.background = 'rgba(67,97,238,0.2)');
+                item.addEventListener('mouseleave', () => item.style.background = 'transparent');
+                item.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    // Avoid duplicates
+                    const existing = Array.from(container.querySelectorAll('.location-tag')).map(t => t.getAttribute('data-key'));
+                    if (existing.includes(r.key)) return;
+                    const tag = document.createElement('span');
+                    tag.className = 'tag location-tag';
+                    tag.setAttribute('data-key', r.key || '');
+                    tag.setAttribute('data-type', r.type || 'region');
+                    tag.setAttribute('data-name', r.name);
+                    tag.setAttribute('data-value', r.name);
+                    const ico = { country: '🌍', region: '📍', city: '🏙️' }[r.type] || '📍';
+                    tag.innerHTML = `${r.name} ${ico} <span class="tag-remove" onclick="this.parentElement.remove()">✖</span>`;
+                    container.insertBefore(tag, input);
+                    input.value = '';
+                    dropdown.style.display = 'none';
+                });
+                dropdown.appendChild(item);
+            });
+            dropdown.style.display = 'block';
+        },
+
+        renderDefaultExcludedTags: function(locations) {
+            const container = document.getElementById('setting-default-exclude-tags');
+            const input = document.getElementById('setting-default-exclude-search');
+            if (!container || !input) return;
+            // Remove existing tags
+            container.querySelectorAll('.location-tag').forEach(t => t.remove());
+            locations.forEach(loc => {
+                const tag = document.createElement('span');
+                tag.className = 'tag location-tag';
+                tag.setAttribute('data-key', loc.key || '');
+                tag.setAttribute('data-type', loc.type || 'region');
+                tag.setAttribute('data-name', loc.name);
+                tag.setAttribute('data-value', loc.name);
+                const ico = { country: '🌍', region: '📍', city: '🏙️' }[loc.type] || '📍';
+                tag.innerHTML = `${loc.name} ${ico} <span class="tag-remove" onclick="this.parentElement.remove()">✖</span>`;
+                container.insertBefore(tag, input);
+            });
+        },
+
         loadSettings: async function() {
             try {
                 const settings = await window.API.getSettings();
@@ -91,7 +171,11 @@
                 if (appSecret && settings.facebookAppSecret) appSecret.value = settings.facebookAppSecret;
                 if (geminiKey && settings.geminiApiKey) geminiKey.value = settings.geminiApiKey;
                 if (geminiModel && settings.geminiModel) geminiModel.value = settings.geminiModel;
-                
+
+                // Load default excluded locations
+                if (settings.defaultExcludedLocations) {
+                    this.renderDefaultExcludedTags(settings.defaultExcludedLocations);
+                }
             } catch (error) {
                 console.log("Settings not configured yet");
             }
@@ -102,11 +186,22 @@
             if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
 
             try {
+                // Collect default excluded locations from tags
+                const defaultExcludedLocations = [];
+                document.querySelectorAll('#setting-default-exclude-tags .location-tag').forEach(tag => {
+                    defaultExcludedLocations.push({
+                        key: tag.getAttribute('data-key') || '',
+                        name: tag.getAttribute('data-name') || tag.getAttribute('data-value') || '',
+                        type: tag.getAttribute('data-type') || 'region'
+                    });
+                });
+
                 const data = {
                     facebookAppId: document.getElementById('setting-app-id')?.value || '',
                     facebookAppSecret: document.getElementById('setting-app-secret')?.value || '',
                     geminiApiKey: document.getElementById('setting-gemini-key')?.value || '',
-                    geminiModel: document.getElementById('setting-gemini-model')?.value || 'gemini-2.5-flash'
+                    geminiModel: document.getElementById('setting-gemini-model')?.value || 'gemini-2.5-flash',
+                    defaultExcludedLocations
                 };
 
                 await window.API.saveSettings(data);

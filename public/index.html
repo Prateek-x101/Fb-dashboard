@@ -233,15 +233,21 @@
                         <div class="grid-2 mb-2">
                             <div class="form-group">
                                 <label>📍 Include Locations</label>
-                                <div class="form-control tags-input" id="location-include-tags" style="min-height:44px;flex-wrap:wrap;">
-                                    <span class="tag location-tag" data-value="IN">India <span class="tag-remove" onclick="this.parentElement.remove()">✖</span></span>
-                                    <input type="text" placeholder="Country code (e.g. US)…" class="loc-include-input" style="background:transparent;border:none;color:white;outline:none;flex:1;min-width:80px;">
+                                <div style="position:relative;">
+                                    <div class="form-control tags-input" id="location-include-tags" style="min-height:44px;flex-wrap:wrap;">
+                                        <span class="tag location-tag" data-key="IN" data-type="country" data-name="India" data-value="India">India 🌍 <span class="tag-remove" onclick="this.parentElement.remove()">✖</span></span>
+                                        <input type="text" id="loc-include-search" placeholder="Search country, state, city…" style="background:transparent;border:none;color:white;outline:none;flex:1;min-width:100px;">
+                                    </div>
+                                    <div id="loc-include-dropdown" class="interest-dropdown" style="display:none; position:absolute; z-index:60; background:rgba(26,26,46,0.98); border:1px solid var(--glass-border); border-radius:8px; max-height:220px; overflow-y:auto; width:100%; top:100%; left:0;"></div>
                                 </div>
                             </div>
                             <div class="form-group">
                                 <label>🚫 Exclude Locations</label>
-                                <div class="form-control tags-input" id="location-exclude-tags" style="min-height:44px;flex-wrap:wrap;">
-                                    <input type="text" placeholder="Country code (e.g. PK)…" class="loc-exclude-input" style="background:transparent;border:none;color:white;outline:none;flex:1;min-width:80px;">
+                                <div style="position:relative;">
+                                    <div class="form-control tags-input" id="location-exclude-tags" style="min-height:44px;flex-wrap:wrap;">
+                                        <input type="text" id="loc-exclude-search" placeholder="Search country, state, city…" style="background:transparent;border:none;color:white;outline:none;flex:1;min-width:100px;">
+                                    </div>
+                                    <div id="loc-exclude-dropdown" class="interest-dropdown" style="display:none; position:absolute; z-index:60; background:rgba(26,26,46,0.98); border:1px solid var(--glass-border); border-radius:8px; max-height:220px; overflow-y:auto; width:100%; top:100%; left:0;"></div>
                                 </div>
                             </div>
                         </div>
@@ -267,15 +273,23 @@
 
                         <div class="grid-2 mb-2">
                             <div class="form-group">
-                                <label>✅ Include Custom Audiences</label>
-                                <div class="form-control tags-input" id="custom-include-tags" style="min-height:44px;flex-wrap:wrap;">
-                                    <input type="text" placeholder="Audience ID, press Enter…" class="custom-include-input" style="background:transparent;border:none;color:white;outline:none;flex:1;min-width:120px;">
+                                <label>✅ Include Custom Audiences
+                                    <span id="custom-load-status" style="font-size:0.72rem; color:var(--text-secondary); margin-left:0.5rem;"></span>
+                                </label>
+                                <div style="position:relative;">
+                                    <div class="form-control tags-input" id="custom-include-tags" style="min-height:44px;flex-wrap:wrap;">
+                                        <input type="text" id="custom-include-search" placeholder="Select account first, then search…" style="background:transparent;border:none;color:white;outline:none;flex:1;min-width:120px;">
+                                    </div>
+                                    <div id="custom-include-dropdown" class="interest-dropdown" style="display:none; position:absolute; z-index:60; background:rgba(26,26,46,0.98); border:1px solid var(--glass-border); border-radius:8px; max-height:220px; overflow-y:auto; width:100%; top:100%; left:0;"></div>
                                 </div>
                             </div>
                             <div class="form-group">
                                 <label>❌ Exclude Custom Audiences</label>
-                                <div class="form-control tags-input" id="custom-exclude-tags" style="min-height:44px;flex-wrap:wrap;">
-                                    <input type="text" placeholder="Audience ID, press Enter…" class="custom-exclude-input" style="background:transparent;border:none;color:white;outline:none;flex:1;min-width:120px;">
+                                <div style="position:relative;">
+                                    <div class="form-control tags-input" id="custom-exclude-tags" style="min-height:44px;flex-wrap:wrap;">
+                                        <input type="text" id="custom-exclude-search" placeholder="Search custom audiences…" style="background:transparent;border:none;color:white;outline:none;flex:1;min-width:120px;">
+                                    </div>
+                                    <div id="custom-exclude-dropdown" class="interest-dropdown" style="display:none; position:absolute; z-index:60; background:rgba(26,26,46,0.98); border:1px solid var(--glass-border); border-radius:8px; max-height:220px; overflow-y:auto; width:100%; top:100%; left:0;"></div>
                                 </div>
                             </div>
                         </div>
@@ -283,14 +297,20 @@
                         <div class="grid-2">
                             <div class="form-group">
                                 <label>✅ Include Lookalike Audiences</label>
-                                <div class="form-control tags-input" id="lookalike-include-tags" style="min-height:44px;flex-wrap:wrap;">
-                                    <input type="text" placeholder="Audience ID, press Enter…" class="lookalike-include-input" style="background:transparent;border:none;color:white;outline:none;flex:1;min-width:120px;">
+                                <div style="position:relative;">
+                                    <div class="form-control tags-input" id="lookalike-include-tags" style="min-height:44px;flex-wrap:wrap;">
+                                        <input type="text" id="lookalike-include-search" placeholder="Search lookalike audiences…" style="background:transparent;border:none;color:white;outline:none;flex:1;min-width:120px;">
+                                    </div>
+                                    <div id="lookalike-include-dropdown" class="interest-dropdown" style="display:none; position:absolute; z-index:60; background:rgba(26,26,46,0.98); border:1px solid var(--glass-border); border-radius:8px; max-height:220px; overflow-y:auto; width:100%; top:100%; left:0;"></div>
                                 </div>
                             </div>
                             <div class="form-group">
                                 <label>❌ Exclude Lookalike Audiences</label>
-                                <div class="form-control tags-input" id="lookalike-exclude-tags" style="min-height:44px;flex-wrap:wrap;">
-                                    <input type="text" placeholder="Audience ID, press Enter…" class="lookalike-exclude-input" style="background:transparent;border:none;color:white;outline:none;flex:1;min-width:120px;">
+                                <div style="position:relative;">
+                                    <div class="form-control tags-input" id="lookalike-exclude-tags" style="min-height:44px;flex-wrap:wrap;">
+                                        <input type="text" id="lookalike-exclude-search" placeholder="Search lookalike audiences…" style="background:transparent;border:none;color:white;outline:none;flex:1;min-width:120px;">
+                                    </div>
+                                    <div id="lookalike-exclude-dropdown" class="interest-dropdown" style="display:none; position:absolute; z-index:60; background:rgba(26,26,46,0.98); border:1px solid var(--glass-border); border-radius:8px; max-height:220px; overflow-y:auto; width:100%; top:100%; left:0;"></div>
                                 </div>
                             </div>
                         </div>
@@ -491,6 +511,23 @@
                 </div>
             </div>
             
+            <!-- Targeting Defaults -->
+            <div class="glass-card mt-3" style="border-color:rgba(0,245,212,0.25);">
+                <h3 class="mb-1" style="color:var(--accent-cyan);">🎯 Targeting Defaults</h3>
+                <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:1.25rem;">These locations are automatically pre-excluded on every new campaign. Search and add/remove as needed.</p>
+                <div class="form-group" style="position:relative;">
+                    <label>📍 Default Excluded States / Locations</label>
+                    <div style="position:relative;">
+                        <div class="form-control tags-input" id="setting-default-exclude-tags" style="min-height:54px; flex-wrap:wrap;">
+                            <!-- tags rendered by settings.js -->
+                            <input type="text" id="setting-default-exclude-search" placeholder="Search country, state, city to always exclude…" style="background:transparent;border:none;color:white;outline:none;flex:1;min-width:180px;">
+                        </div>
+                        <div id="setting-default-exclude-dropdown" style="display:none; position:absolute; z-index:100; background:rgba(26,26,46,0.98); border:1px solid var(--glass-border); border-radius:8px; max-height:220px; overflow-y:auto; width:100%; top:100%; left:0;"></div>
+                    </div>
+                    <p style="font-size:0.75rem; color:var(--text-secondary); margin-top:0.5rem;">⚠️ Requires a Facebook account to be connected — used to resolve location names via API.</p>
+                </div>
+            </div>
+
             <div class="mt-3" style="text-align:right;">
                 <button class="btn btn-primary" id="btn-save-settings">💾 Save All Settings</button>
             </div>

@@ -49,6 +49,8 @@
         // Campaign
         getPixels: (accountId) => API.request(`/api/campaigns/pixels/${accountId}`),
         searchInterests: (query) => API.request(`/api/campaigns/interests?q=${encodeURIComponent(query)}`),
+        searchLocations: (query) => API.request(`/api/campaigns/locations?q=${encodeURIComponent(query)}`),
+        getCustomAudiences: (accountId) => API.request(`/api/campaigns/custom-audiences/${accountId}`),
         createCampaign: (data) => API.request('/api/campaigns/create', { method: 'POST', body: JSON.stringify(data) }),
         generateVariations: (data) => API.request('/api/campaigns/generate-variations', { method: 'POST', body: JSON.stringify(data) }),
         getRecentCampaigns: () => API.request('/api/campaigns/recent'),

@@ -11,7 +11,7 @@
   "settings": {
     "facebookAppId": "",
     "facebookAppSecret": "",
-    "geminiApiKey": "EAAcqG9PIZCkgBRiKqaFgbsBZCEbBMQl5J0oUYXSAxssgtvYwRLrtY2ydSVT7rxhweJakOcb5nMagAW8OyBajmzlj2YRaSsUTWHjHAPII7iqz1k8RVuZBb6MxceiPmW894h0aKLGouj84S4XDJyi2256rED4u8APgi3Gn9HJ91YVDC5IA66ICXzYAF3nXgZDZD",
+    "geminiApiKey": "AIzaSyBRZQ_R1RD9R8tacj3i3mC78Z43e70yCa0",
     "geminiModel": "gemini-2.5-flash"
   },
   "recentCampaigns": []
