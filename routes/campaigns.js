@@ -260,9 +260,9 @@ router.post('/create', async (req, res) => {
             name: campaign.name,
             objective: campaign.objective || 'OUTCOME_SALES',
             status: 'PAUSED',
-            // Meta now requires this flag on campaign creation. CBO shares
-            // the budget at campaign level; ABO keeps budgets on each ad set.
-            is_adset_budget_sharing_enabled: isCBO,
+            // This is ad-set budget sharing, not CBO. It must be explicitly
+            // disabled when a campaign-level budget is used.
+            is_adset_budget_sharing_enabled: false,
             special_ad_categories: campaign.specialAdCategory && campaign.specialAdCategory !== 'NONE'
                 ? [campaign.specialAdCategory] : []
         };
