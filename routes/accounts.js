@@ -149,6 +149,21 @@ router.post('/bulk-add', async (req, res) => {
     }
 });
 
+// Get Facebook Pages (with linked Instagram) for a stored account
+router.get('/:id/pages', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const storage = getStorage();
+        const account = (storage.accounts || []).find(a => a.id === id);
+        if (!account) return res.status(404).json({ error: 'Account not found' });
+
+        const result = await facebookService.getConnectedInstagram(account.accessToken);
+        res.json({ pages: result.data || [] });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch pages', details: error.message });
+    }
+});
+
 // Fetch and save Instagram account linked to a stored account
 router.post('/:id/fetch-instagram', async (req, res) => {
     try {

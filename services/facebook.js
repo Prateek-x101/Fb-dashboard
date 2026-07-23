@@ -78,7 +78,7 @@ const facebookService = {
     },
 
     async getPixels(accountId, token) {
-        const url = `${BASE_URL}/act_${accountId}/adspixels?access_token=${token}`;
+        const url = `${BASE_URL}/act_${accountId}/adspixels?fields=id,name&access_token=${token}`;
         const response = await fetch(url, { method: 'GET' });
         return handleResponse(response);
     },

@@ -38,6 +38,7 @@
         fetchAccountsFromToken: (data) => API.request('/api/accounts/fetch-from-token', { method: 'POST', body: JSON.stringify(data) }),
         bulkAddAccounts: (data) => API.request('/api/accounts/bulk-add', { method: 'POST', body: JSON.stringify(data) }),
         fetchInstagram: (id) => API.request(`/api/accounts/${id}/fetch-instagram`, { method: 'POST' }),
+        getPages: (id) => API.request(`/api/accounts/${id}/pages`),
 
         // Settings
         getSettings: () => API.request('/api/settings'),

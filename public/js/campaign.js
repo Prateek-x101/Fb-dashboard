@@ -288,23 +288,74 @@
         },
 
         handleAccountChange: async function(account) {
+            if (!account) return;
+
             const pixelSelect = document.getElementById('pixel-select');
-            if (!pixelSelect || !account) return;
-            
-            pixelSelect.innerHTML = '<option value="">Loading pixels...</option>';
-            try {
-                const pixels = await window.API.getPixels(account.accountId || account.id);
-                pixelSelect.innerHTML = '<option value="">Select Pixel</option>';
-                if (Array.isArray(pixels)) {
-                    pixels.forEach(p => {
-                        const opt = document.createElement('option');
-                        opt.value = p.id;
-                        opt.textContent = p.name || p.id;
-                        pixelSelect.appendChild(opt);
-                    });
+            const pageSelect = document.getElementById('ad-page');
+            const igSelect = document.getElementById('ad-instagram');
+
+            // Fetch pixels
+            if (pixelSelect) {
+                pixelSelect.innerHTML = '<option value="">Loading pixels...</option>';
+                try {
+                    const pixels = await window.API.getPixels(account.accountId || account.id);
+                    pixelSelect.innerHTML = '<option value="">Select Pixel</option>';
+                    if (Array.isArray(pixels)) {
+                        pixels.forEach(p => {
+                            const opt = document.createElement('option');
+                            opt.value = p.id;
+                            opt.textContent = p.name ? `${p.name} (${p.id})` : p.id;
+                            pixelSelect.appendChild(opt);
+                        });
+                    }
+                } catch (error) {
+                    pixelSelect.innerHTML = '<option value="">No pixels found</option>';
                 }
-            } catch (error) {
-                pixelSelect.innerHTML = '<option value="">No pixels found</option>';
+            }
+
+            // Fetch Facebook Pages + Instagram (using our stored account UUID)
+            if ((pageSelect || igSelect) && account.id) {
+                if (pageSelect) pageSelect.innerHTML = '<option value="">Loading pages...</option>';
+                if (igSelect) igSelect.innerHTML = '<option value="">Loading...</option>';
+                try {
+                    const result = await window.API.getPages(account.id);
+                    const pages = result.pages || [];
+
+                    if (pageSelect) pageSelect.innerHTML = '<option value="">Select Facebook Page</option>';
+                    if (igSelect) igSelect.innerHTML = '<option value="">No Instagram linked</option>';
+
+                    pages.forEach(page => {
+                        if (pageSelect) {
+                            const opt = document.createElement('option');
+                            opt.value = page.id;
+                            opt.textContent = page.name || page.id;
+                            pageSelect.appendChild(opt);
+                        }
+                        if (igSelect && page.instagram_business_account) {
+                            const ig = page.instagram_business_account;
+                            const igOpt = document.createElement('option');
+                            igOpt.value = ig.id;
+                            igOpt.textContent = `@${ig.username || ig.name || ig.id}`;
+                            igSelect.appendChild(igOpt);
+                        }
+                    });
+
+                    // If no pages found but account has saved Instagram, show it
+                    if (igSelect && account.instagramAccountId && igSelect.options.length <= 1) {
+                        const igOpt = document.createElement('option');
+                        igOpt.value = account.instagramAccountId;
+                        igOpt.textContent = `@${account.instagramUsername || account.instagramAccountId}`;
+                        igSelect.appendChild(igOpt);
+                    }
+
+                    // Auto-select page from account if pageId saved
+                    if (pageSelect && account.pageId) {
+                        pageSelect.value = account.pageId;
+                    }
+                } catch (error) {
+                    if (pageSelect) pageSelect.innerHTML = '<option value="">Could not load pages</option>';
+                    if (igSelect) igSelect.innerHTML = '<option value="">Could not load</option>';
+                }
             }
         },
 

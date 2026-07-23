@@ -6,7 +6,18 @@ const geminiService = {
     async generateVariations(apiKey, model, baseText, count) {
         const url = `${BASE_URL}/models/${model || 'gemini-2.5-flash'}:generateContent?key=${apiKey}`;
         
-        const prompt = `Create ${count} unique variations of the following ad primary text. Keep the core message but vary the hook, tone, and CTA. Return each variation separated by "|||". Do not include any extra formatting or numbering. Base text: "${baseText}"`;
+        const prompt = `You are an expert Facebook ad copywriter. Create ${count} unique variations of the following ad primary text.
+
+Rules:
+- Keep ALL URLs exactly as they appear — do not modify, shorten, or remove any links
+- Keep ALL emojis, checkmarks (✔️), and special characters
+- Vary ONLY the hook (opening line), tone, and CTA (call-to-action) phrasing
+- Maintain the same product details, features, and value propositions
+- Each variation should feel fresh but carry the same message
+- Return ONLY the variations separated by "|||" with no numbering or extra text
+
+Base text:
+${baseText}`;
         
         const response = await fetch(url, {
             method: 'POST',
