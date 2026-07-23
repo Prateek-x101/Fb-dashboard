@@ -265,9 +265,33 @@ router.post('/create', async (req, res) => {
         };
         if (isCBO) {
             campaignParams.daily_budget = Math.round(campaign.budgetAmount * 100); // cents
-            campaignParams.bid_strategy = 'LOWEST_COST_WITHOUT_CAP';
         }
-        const campaignResponse = await facebookService.createCampaign(accountId, token, campaignParams);
+        let campaignResponse;
+        try {
+            campaignResponse = await facebookService.createCampaign(accountId, token, campaignParams);
+        } catch (error) {
+            const providerDetails = error.provider === 'facebook'
+                ? {
+                    code: error.code,
+                    errorSubcode: error.errorSubcode,
+                    type: error.type,
+                    fbtraceId: error.fbtraceId
+                }
+                : undefined;
+            console.error('Facebook campaign request rejected', {
+                params: campaignParams,
+                providerDetails,
+                message: error.message
+            });
+            const detail = providerDetails?.code
+                ? `${error.message} (Facebook code ${providerDetails.code}${providerDetails.errorSubcode ? `/${providerDetails.errorSubcode}` : ''})`
+                : error.message;
+            return res.status(400).json({
+                error: 'Facebook rejected the campaign parameters.',
+                details: detail,
+                facebook: providerDetails
+            });
+        }
         const campaignId = campaignResponse.id;
 
         const results = { campaignId, adsets: [], ads: [] };
@@ -392,8 +416,24 @@ router.post('/create', async (req, res) => {
 
         res.json({ success: true, results });
     } catch (error) {
-        console.error('Campaign creation error:', error);
-        res.status(500).json({ error: 'Failed to create campaign', details: error.message });
+        console.error('Campaign creation error:', {
+            message: error.message,
+            provider: error.provider,
+            code: error.code,
+            errorSubcode: error.errorSubcode,
+            type: error.type,
+            fbtraceId: error.fbtraceId
+        });
+        res.status(error.provider === 'facebook' ? 400 : 500).json({
+            error: 'Failed to create campaign',
+            details: error.message,
+            facebook: error.provider === 'facebook' ? {
+                code: error.code,
+                errorSubcode: error.errorSubcode,
+                type: error.type,
+                fbtraceId: error.fbtraceId
+            } : undefined
+        });
     }
 });
 

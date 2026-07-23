@@ -7,9 +7,26 @@ const BASE_URL = 'https://graph.facebook.com/v21.0';
 async function handleResponse(response) {
     const data = await response.json();
     if (!response.ok) {
-        throw new Error(data.error ? data.error.message : 'Unknown Facebook API Error');
+        const apiError = data.error || {};
+        const error = new Error(apiError.message || data.message || 'Unknown Facebook API Error');
+        error.provider = 'facebook';
+        error.code = apiError.code;
+        error.errorSubcode = apiError.error_subcode;
+        error.type = apiError.type;
+        error.fbtraceId = apiError.fbtrace_id;
+        error.details = data;
+        throw error;
     }
     return data;
+}
+
+function formEncodedParams(params) {
+    const body = new URLSearchParams();
+    Object.entries(params || {}).forEach(([key, value]) => {
+        if (value === undefined || value === null || value === '') return;
+        body.set(key, typeof value === 'object' ? JSON.stringify(value) : String(value));
+    });
+    return body;
 }
 
 const facebookService = {
@@ -17,8 +34,8 @@ const facebookService = {
         const url = `${BASE_URL}/act_${accountId}/campaigns?access_token=${token}`;
         const response = await fetch(url, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(params)
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: formEncodedParams(params)
         });
         return handleResponse(response);
     },
