@@ -4,7 +4,29 @@ const fs = require('fs');
 const path = require('path');
 const geminiService = require('../services/gemini');
 
-const storagePath = path.join(__dirname, '..', 'config', 'storage.json');
+const storagePath = path.join(__dirname, '..', 'config', 'storage.local.json');
+
+const DEFAULT_EXCLUDED_LOCATIONS = [
+    'Andaman and Nicobar Islands',
+    'Andhra Pradesh',
+    'Arunachal Pradesh',
+    'Assam',
+    'Bihar - India',
+    'Chhattisgarh',
+    'Daman and Diu',
+    'Jammu and Kashmir - India',
+    'Jharkhand',
+    'Manipur',
+    'Meghalaya',
+    'Mizoram',
+    'Nagaland',
+    'Odisha',
+    'Sikkim',
+    'Telangana',
+    'Tripura',
+    'Uttar Pradesh',
+    'Pondicherry'
+].map(name => ({ key: '', name, type: 'region' }));
 
 function getStorage() {
     if (fs.existsSync(storagePath)) {
@@ -21,7 +43,10 @@ function saveStorage(data) {
 router.get('/', (req, res) => {
     try {
         const storage = getStorage();
-        res.json(storage.settings || {});
+        res.json({
+            ...storage.settings,
+            defaultExcludedLocations: storage.settings?.defaultExcludedLocations || DEFAULT_EXCLUDED_LOCATIONS
+        });
     } catch (error) {
         res.status(500).json({ error: 'Failed to read settings', details: error.message });
     }

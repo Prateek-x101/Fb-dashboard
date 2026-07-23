@@ -1,0 +1,3 @@
+config/storage.local.json
+uploads/*
+screenshots/*

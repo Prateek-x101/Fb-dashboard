@@ -6,7 +6,7 @@ A Node.js/Express dashboard for creating and managing Facebook ad campaigns acro
 
 - **Backend**: Node.js + Express
 - **Frontend**: Vanilla HTML/CSS/JS (served as static files from `public/`)
-- **Storage**: Local `public/storage.json` (no external database)
+- **Storage**: Local ignored `config/storage.local.json` (no external database)
 - **APIs**: Facebook Graph API, Google Gemini API
 
 ## How to run
@@ -19,7 +19,7 @@ Runs on port 5000. The workflow `Start application` is pre-configured.
 
 ## Configuration
 
-API credentials are configured through the in-app **Settings** page (no `.env` required):
+API credentials are configured through the in-app **Settings** page and stored only in the ignored local runtime file:
 
 - **Facebook App ID** — from your Facebook Developer app
 - **Facebook App Secret** — from your Facebook Developer app
@@ -33,7 +33,7 @@ server.js          # Express entry point
 routes/            # API route handlers (accounts, campaigns, settings)
 services/          # facebook.js and gemini.js API clients
 public/            # Static frontend (index.html, css/, js/)
-config/            # settings.json (runtime config, auto-updated by app)
+config/            # storage.example.json (safe template); storage.local.json is runtime-only
 uploads/           # Temp storage for media uploads (auto-created)
 ```
 

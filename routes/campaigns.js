@@ -6,7 +6,7 @@ const { v4: uuidv4 } = require('uuid');
 const facebookService = require('../services/facebook');
 const geminiService = require('../services/gemini');
 
-const storagePath = path.join(__dirname, '..', 'config', 'storage.json');
+const storagePath = path.join(__dirname, '..', 'config', 'storage.local.json');
 
 function getStorage() {
     if (fs.existsSync(storagePath)) {
