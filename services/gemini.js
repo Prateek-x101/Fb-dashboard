@@ -41,6 +41,51 @@ ${baseText}`;
         }
     },
 
+    async generateAudiences(apiKey, model, websiteContent, numAudiences, alreadyUsedKeywords) {
+        const url = `${BASE_URL}/models/${model || 'gemini-2.5-flash'}:generateContent?key=${apiKey}`;
+
+        const usedList = alreadyUsedKeywords && alreadyUsedKeywords.length > 0
+            ? `\nKeywords already used in other audiences — DO NOT repeat any of these: ${alreadyUsedKeywords.join(', ')}`
+            : '';
+
+        const prompt = `You are a Facebook Ads targeting expert. Analyze the product/service from the website information below and generate ${numAudiences} DISTINCT Facebook interest-based audience segments.
+
+Website info:
+${websiteContent}
+${usedList}
+
+Rules:
+- Generate exactly ${numAudiences} audience objects
+- Each audience targets a clearly different interest/lifestyle group relevant to this product
+- Each audience must contain 5 to 8 Facebook interest keywords (real targeting categories)
+- NO keyword should appear in more than one audience — every keyword must be unique across ALL ${numAudiences} audiences
+- Return ONLY valid JSON — no extra text, no markdown code fences
+- Format: [{"audienceName":"Short label","interests":["keyword1","keyword2",...]},...]`;
+
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{ parts: [{ text: prompt }] }]
+            })
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+            throw new Error(data.error ? data.error.message : 'Unknown Gemini API Error');
+        }
+
+        try {
+            const rawText = data.candidates[0].content.parts[0].text;
+            const jsonMatch = rawText.match(/\[[\s\S]*\]/);
+            if (!jsonMatch) throw new Error('No JSON array in response');
+            const audiences = JSON.parse(jsonMatch[0]);
+            return audiences.slice(0, numAudiences);
+        } catch (error) {
+            throw new Error('Failed to parse Gemini audience response: ' + error.message);
+        }
+    },
+
     async testConnection(apiKey, model) {
         const url = `${BASE_URL}/models/${model || 'gemini-2.5-flash'}:generateContent?key=${apiKey}`;
         const response = await fetch(url, {

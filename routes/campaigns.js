@@ -63,6 +63,56 @@ router.get('/interests', async (req, res) => {
     }
 });
 
+router.post('/ai-audiences', async (req, res) => {
+    try {
+        const { websiteUrl, numAudiences, alreadyUsed } = req.body;
+        const storage = getStorage();
+        const settings = storage.settings || {};
+
+        if (!settings.geminiApiKey) {
+            return res.status(400).json({ error: 'Gemini API key not configured. Please add it in Settings.' });
+        }
+        if (!websiteUrl) {
+            return res.status(400).json({ error: 'Website URL is required' });
+        }
+
+        // Fetch website content so Gemini can understand the product
+        let websiteContent = `URL: ${websiteUrl}`;
+        try {
+            const fetch = require('node-fetch');
+            const response = await fetch(websiteUrl, {
+                timeout: 8000,
+                headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AdPilot/1.0)' }
+            });
+            if (response.ok) {
+                const html = await response.text();
+                const text = html
+                    .replace(/<script[\s\S]*?<\/script>/gi, '')
+                    .replace(/<style[\s\S]*?<\/style>/gi, '')
+                    .replace(/<[^>]+>/g, ' ')
+                    .replace(/\s+/g, ' ')
+                    .trim()
+                    .slice(0, 3000);
+                websiteContent = `URL: ${websiteUrl}\n\nPage content:\n${text}`;
+            }
+        } catch (fetchErr) {
+            console.log('Could not fetch website content, using URL only:', fetchErr.message);
+        }
+
+        const audiences = await geminiService.generateAudiences(
+            settings.geminiApiKey,
+            settings.geminiModel,
+            websiteContent,
+            numAudiences || 3,
+            alreadyUsed || []
+        );
+
+        res.json({ audiences });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to generate audiences', details: error.message });
+    }
+});
+
 router.post('/generate-variations', async (req, res) => {
     try {
         const { primaryText, baseText, count } = req.body;

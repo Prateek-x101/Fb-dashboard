@@ -32,6 +32,34 @@
             }
         },
 
+        // Wire up all tag inputs in the Global Audience Settings box
+        setupGlobalAudienceTags: function() {
+            function wireTagInput(inputSelector, containerSelector, tagClass) {
+                const input = document.querySelector(inputSelector);
+                const container = document.querySelector(containerSelector);
+                if (!input || !container) return;
+                input.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        const val = e.target.value.trim().toUpperCase ? e.target.value.trim() : e.target.value.trim();
+                        if (!val) return;
+                        const tag = document.createElement('span');
+                        tag.className = `tag ${tagClass}`;
+                        tag.setAttribute('data-value', val);
+                        tag.innerHTML = `${val} <span class="tag-remove" onclick="this.parentElement.remove()">✖</span>`;
+                        container.insertBefore(tag, input);
+                        input.value = '';
+                    }
+                });
+            }
+            wireTagInput('.loc-include-input', '#location-include-tags', 'location-tag');
+            wireTagInput('.loc-exclude-input', '#location-exclude-tags', 'location-tag');
+            wireTagInput('.custom-include-input', '#custom-include-tags', 'audience-tag');
+            wireTagInput('.custom-exclude-input', '#custom-exclude-tags', 'audience-tag');
+            wireTagInput('.lookalike-include-input', '#lookalike-include-tags', 'audience-tag');
+            wireTagInput('.lookalike-exclude-input', '#lookalike-exclude-tags', 'audience-tag');
+        },
+
         bindEvents: function() {
             const btnNext = document.getElementById('btn-next-step');
             const btnPrev = document.getElementById('btn-prev-step');
@@ -41,7 +69,7 @@
             if (btnPrev) btnPrev.addEventListener('click', () => this.prevStep());
             if (btnCreate) btnCreate.addEventListener('click', () => this.createCampaign());
 
-            // Adset number controls
+            // Adset number input
             const numAdsets = document.getElementById('num-adsets');
             if (numAdsets) {
                 numAdsets.addEventListener('change', () => this.updateAudienceCards());
@@ -59,7 +87,7 @@
                 });
             }
 
-            // AI generate all audiences button
+            // AI generate ALL audiences button
             const btnAiAll = document.getElementById('btn-ai-all-audiences');
             if (btnAiAll) {
                 btnAiAll.addEventListener('click', () => this.aiGenerateAllAudiences());
@@ -111,30 +139,19 @@
         },
 
         updateStepUI: function() {
-            // Update step visibility
             for (let i = 1; i <= this.totalSteps; i++) {
                 const stepEl = document.getElementById(`step-${i}`);
                 if (stepEl) {
-                    if (i === this.currentStep) {
-                        stepEl.classList.add('active');
-                    } else {
-                        stepEl.classList.remove('active');
-                    }
+                    stepEl.classList.toggle('active', i === this.currentStep);
                 }
-                
-                // Update step indicators
                 const indicator = document.getElementById(`step-indicator-${i}`);
                 if (indicator) {
                     indicator.classList.remove('active', 'completed');
-                    if (i < this.currentStep) {
-                        indicator.classList.add('completed');
-                    } else if (i === this.currentStep) {
-                        indicator.classList.add('active');
-                    }
+                    if (i < this.currentStep) indicator.classList.add('completed');
+                    else if (i === this.currentStep) indicator.classList.add('active');
                 }
             }
 
-            // Buttons visibility
             const btnNext = document.getElementById('btn-next-step');
             const btnPrev = document.getElementById('btn-prev-step');
             const btnCreate = document.getElementById('btn-create-campaign');
@@ -142,7 +159,6 @@
             if (btnPrev) btnPrev.style.display = this.currentStep > 1 ? 'inline-flex' : 'none';
             if (btnNext) btnNext.style.display = this.currentStep < this.totalSteps ? 'inline-flex' : 'none';
 
-            // Show create button only on review step
             if (this.currentStep === this.totalSteps) {
                 this.renderReviewSummary();
             }
@@ -151,31 +167,18 @@
         validateStep: function(step) {
             if (step === 1) {
                 const name = document.getElementById('campaign-name')?.value?.trim();
-                const objective = document.getElementById('campaign-objective')?.value;
                 const budgetAmount = document.getElementById('budget-amount')?.value;
                 const start = document.getElementById('schedule-start')?.value;
                 const account = document.getElementById('campaign-account-select')?.value;
 
-                if (!name) {
-                    window.AppController.showToast('Campaign name is required', 'warning');
-                    return false;
-                }
-                if (!budgetAmount || budgetAmount <= 0) {
-                    window.AppController.showToast('Please enter a valid budget amount', 'warning');
-                    return false;
-                }
-                if (!start) {
-                    window.AppController.showToast('Please set a start date', 'warning');
-                    return false;
-                }
-                if (!account) {
-                    window.AppController.showToast('Please select an ad account', 'warning');
-                    return false;
-                }
+                if (!name) { window.AppController.showToast('Campaign name is required', 'warning'); return false; }
+                if (!budgetAmount || budgetAmount <= 0) { window.AppController.showToast('Please enter a valid budget amount', 'warning'); return false; }
+                if (!start) { window.AppController.showToast('Please set a start date', 'warning'); return false; }
+                if (!account) { window.AppController.showToast('Please select an ad account', 'warning'); return false; }
 
                 this.campaignData.step1 = {
                     name,
-                    objective,
+                    objective: document.getElementById('campaign-objective')?.value,
                     budgetType: document.getElementById('budget-type-cbo')?.checked ? 'CBO' : 'ABO',
                     budgetAmount: parseFloat(budgetAmount),
                     scheduleStart: start,
@@ -184,21 +187,19 @@
                     specialAdCategory: document.getElementById('camp-special')?.value || 'NONE'
                 };
                 return true;
+
             } else if (step === 2) {
                 const url = document.getElementById('website-url')?.value?.trim();
-                if (!url) {
-                    window.AppController.showToast('Please enter a Website URL', 'warning');
-                    return false;
-                }
+                if (!url) { window.AppController.showToast('Please enter a Website URL', 'warning'); return false; }
 
-                // --- Read Global Audience Settings ---
+                // Read Global Audience Settings
                 const globalLocInclude = [];
                 document.querySelectorAll('#location-include-tags .location-tag').forEach(tag => {
-                    globalLocInclude.push(tag.getAttribute('data-value') || tag.textContent.replace('✖','').trim());
+                    globalLocInclude.push(tag.getAttribute('data-value') || tag.textContent.replace('✖', '').trim());
                 });
                 const globalLocExclude = [];
                 document.querySelectorAll('#location-exclude-tags .location-tag').forEach(tag => {
-                    globalLocExclude.push(tag.getAttribute('data-value') || tag.textContent.replace('✖','').trim());
+                    globalLocExclude.push(tag.getAttribute('data-value') || tag.textContent.replace('✖', '').trim());
                 });
                 const globalAgeMin = parseInt(document.getElementById('global-age-min')?.value) || 18;
                 const globalAgeMax = parseInt(document.getElementById('global-age-max')?.value) || 65;
@@ -213,18 +214,19 @@
                 const lookalikeExclude = [];
                 document.querySelectorAll('#lookalike-exclude-tags .audience-tag').forEach(t => lookalikeExclude.push(t.getAttribute('data-value')));
 
-                // --- Collect per-card interests ---
+                // Collect per-card interests only — everything else is global
                 const audienceCards = document.querySelectorAll('.audience-card');
                 const audiences = [];
                 audienceCards.forEach((card, idx) => {
+                    const cardIdx = parseInt(card.getAttribute('data-index'));
                     const interests = [];
                     card.querySelectorAll('.interest-tag').forEach(tag => {
                         interests.push({
                             id: tag.getAttribute('data-id') || '',
-                            name: tag.getAttribute('data-value') || tag.textContent.replace('✖','').trim()
+                            name: tag.getAttribute('data-value') || tag.textContent.replace('✖', '').trim()
                         });
                     });
-                    // Auto-name from first 3 interests
+                    // Adset name = first 3 interest keywords
                     const adsetName = interests.slice(0, 3).map(i => i.name).join(', ') || `Audience ${idx + 1}`;
                     audiences.push({
                         name: adsetName,
@@ -249,20 +251,17 @@
                     audiences
                 };
                 return true;
-            } else if (step === 3) {
-                // Collect variations from DOM
-                this.collectVariationsFromDOM();
 
+            } else if (step === 3) {
+                this.collectVariationsFromDOM();
                 if (this.campaignData.step3.variations.length === 0) {
                     window.AppController.showToast('Please add at least one primary text variation', 'warning');
                     return false;
                 }
-
                 this.campaignData.step3.headline = document.getElementById('headline')?.value || '';
                 this.campaignData.step3.description = document.getElementById('description')?.value || '';
                 this.campaignData.step3.cta = document.getElementById('cta-select')?.value || 'SHOP_NOW';
                 this.campaignData.step3.pageId = document.getElementById('ad-page')?.value || '';
-
                 return true;
             }
             return true;
@@ -271,7 +270,6 @@
         collectVariationsFromDOM: function() {
             const container = document.getElementById('variations-container');
             if (!container) return;
-
             const variations = [];
             container.querySelectorAll('.variation-card').forEach(card => {
                 const textarea = card.querySelector('textarea');
@@ -322,7 +320,6 @@
             const pageSelect = document.getElementById('ad-page');
             const igSelect = document.getElementById('ad-instagram');
 
-            // Fetch pixels
             if (pixelSelect) {
                 pixelSelect.innerHTML = '<option value="">Loading pixels...</option>';
                 try {
@@ -341,7 +338,6 @@
                 }
             }
 
-            // Fetch Facebook Pages + Instagram (using our stored account UUID)
             if ((pageSelect || igSelect) && account.id) {
                 if (pageSelect) pageSelect.innerHTML = '<option value="">Loading pages...</option>';
                 if (igSelect) igSelect.innerHTML = '<option value="">Loading...</option>';
@@ -368,18 +364,13 @@
                         }
                     });
 
-                    // If no pages found but account has saved Instagram, show it
                     if (igSelect && account.instagramAccountId && igSelect.options.length <= 1) {
                         const igOpt = document.createElement('option');
                         igOpt.value = account.instagramAccountId;
                         igOpt.textContent = `@${account.instagramUsername || account.instagramAccountId}`;
                         igSelect.appendChild(igOpt);
                     }
-
-                    // Auto-select page from account if pageId saved
-                    if (pageSelect && account.pageId) {
-                        pageSelect.value = account.pageId;
-                    }
+                    if (pageSelect && account.pageId) pageSelect.value = account.pageId;
                 } catch (error) {
                     if (pageSelect) pageSelect.innerHTML = '<option value="">Could not load pages</option>';
                     if (igSelect) igSelect.innerHTML = '<option value="">Could not load</option>';
@@ -387,168 +378,225 @@
             }
         },
 
+        // Build audience cards — interests only, global settings apply to all
         updateAudienceCards: function() {
             const container = document.getElementById('audience-container');
             const numAdsets = parseInt(document.getElementById('num-adsets')?.value || 3, 10);
-            
             if (!container) return;
             container.innerHTML = '';
-            
+
             for (let i = 0; i < numAdsets; i++) {
-                const card = document.createElement('div');
-                card.className = 'glass-card audience-card mb-3';
-                card.style.position = 'relative';
-                card.innerHTML = `
-                    <div class="flex justify-between align-center mb-2">
-                        <h4>🎯 Audience ${i + 1}</h4>
-                        ${numAdsets > 1 ? `<button class="remove-card-btn" onclick="this.closest('.audience-card').remove()"><span>✖</span></button>` : ''}
-                    </div>
-                    <div class="grid-2">
-                        <div class="form-group">
-                            <label>Locations</label>
-                            <div class="form-control tags-input" style="min-height:45px;">
-                                <span class="tag location-tag" data-value="IN">India <span class="tag-remove" onclick="this.parentElement.remove()">✖</span></span>
-                                <input type="text" placeholder="Add country code..." class="location-input" style="background:transparent; border:none; color:white; outline:none; flex:1; min-width:100px;">
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <div class="flex gap-2">
-                                <div style="flex:1">
-                                    <label>Min Age</label>
-                                    <input type="number" class="form-control age-min" value="18" min="13" max="65">
-                                </div>
-                                <div style="flex:1">
-                                    <label>Max Age</label>
-                                    <input type="number" class="form-control age-max" value="65" min="13" max="65">
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label>Gender</label>
-                        <div class="flex gap-2">
-                            <label style="cursor:pointer"><input type="radio" name="gender_${i}" value="all" checked> All</label>
-                            <label style="cursor:pointer"><input type="radio" name="gender_${i}" value="male"> Male</label>
-                            <label style="cursor:pointer"><input type="radio" name="gender_${i}" value="female"> Female</label>
-                        </div>
-                    </div>
+                this._createAudienceCard(container, i, numAdsets);
+            }
+        },
 
-                    <div class="form-group">
-                        <label>Interests (Detailed Targeting)</label>
-                        <div class="form-control tags-input interests-tags-${i}" style="min-height:45px; position:relative;">
-                            <input type="text" placeholder="Search interests..." class="interest-search" data-index="${i}" style="background:transparent; border:none; color:white; outline:none; flex:1; min-width:150px;">
-                        </div>
-                        <div class="interest-dropdown" id="interest-dropdown-${i}" style="display:none; position:absolute; z-index:50; background:rgba(26,26,46,0.98); border:1px solid var(--glass-border); border-radius:8px; max-height:200px; overflow-y:auto; width:calc(100% - 3rem);"></div>
+        _createAudienceCard: function(container, i, totalCards) {
+            const card = document.createElement('div');
+            card.className = 'glass-card audience-card mb-3';
+            card.style.position = 'relative';
+            card.setAttribute('data-index', i);
+            card.innerHTML = `
+                <div class="flex justify-between align-center mb-2">
+                    <h4>🎯 Audience ${i + 1}</h4>
+                    <div class="flex gap-2 align-center">
+                        <button class="btn btn-gemini btn-sm btn-ai-audience" data-index="${i}" title="Gemini will read your website and pick unique interests for this audience">🤖 AI</button>
+                        ${totalCards > 1 ? `<button class="remove-card-btn" onclick="this.closest('.audience-card').remove()"><span>✖</span></button>` : ''}
                     </div>
-                `;
-                container.appendChild(card);
-                
-                // Set up location tag input
-                const locationInput = card.querySelector('.location-input');
-                locationInput.addEventListener('keydown', (e) => {
-                    if (e.key === 'Enter') {
-                        e.preventDefault();
-                        const val = e.target.value.trim().toUpperCase();
-                        if (val) {
-                            const tag = document.createElement('span');
-                            tag.className = 'tag location-tag';
-                            tag.setAttribute('data-value', val);
-                            tag.innerHTML = `${val} <span class="tag-remove" onclick="this.parentElement.remove()">✖</span>`;
-                            e.target.parentElement.insertBefore(tag, e.target);
-                            e.target.value = '';
-                        }
-                    }
-                });
+                </div>
+                <div class="form-group" style="margin-bottom:0; position:relative;">
+                    <label style="font-size:0.8rem; color:var(--text-secondary);">
+                        Interests / Keywords
+                        <span style="font-size:0.72rem; color:var(--accent-cyan); margin-left:0.4rem;">first 3 keywords → ad set name on Facebook</span>
+                    </label>
+                    <div class="form-control tags-input interests-tags-${i}" style="min-height:50px; position:relative; flex-wrap:wrap;">
+                        <input type="text" placeholder="Search interests or type and press Enter…" class="interest-search" data-index="${i}" style="background:transparent; border:none; color:white; outline:none; flex:1; min-width:150px;">
+                    </div>
+                    <div class="interest-dropdown" id="interest-dropdown-${i}" style="display:none; position:absolute; z-index:50; background:rgba(26,26,46,0.98); border:1px solid var(--glass-border); border-radius:8px; max-height:200px; overflow-y:auto; width:100%;"></div>
+                </div>
+            `;
+            container.appendChild(card);
 
-                // Set up interest search with debounce
-                const searchInput = card.querySelector('.interest-search');
-                let debounceTimeout;
-                searchInput.addEventListener('input', (e) => {
-                    clearTimeout(debounceTimeout);
-                    const idx = e.target.getAttribute('data-index');
-                    debounceTimeout = setTimeout(async () => {
-                        const val = e.target.value.trim();
-                        const dropdown = document.getElementById(`interest-dropdown-${idx}`);
-                        if (val.length > 2 && dropdown) {
-                            try {
-                                const results = await window.API.searchInterests(val);
-                                dropdown.innerHTML = '';
-                                if (Array.isArray(results) && results.length > 0) {
-                                    results.forEach(r => {
-                                        const item = document.createElement('div');
-                                        item.style.cssText = 'padding:0.75rem 1rem; cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.05);';
-                                        item.textContent = r.name || r;
-                                        item.addEventListener('mouseenter', () => item.style.background = 'rgba(67,97,238,0.2)');
-                                        item.addEventListener('mouseleave', () => item.style.background = 'transparent');
-                                        item.addEventListener('click', () => {
-                                            const tagsContainer = card.querySelector(`.interests-tags-${idx}`);
-                                            const input = tagsContainer?.querySelector('.interest-search');
-                                            if (tagsContainer && input) {
-                                                const tag = document.createElement('span');
-                                                tag.className = 'tag interest-tag';
-                                                tag.setAttribute('data-id', r.id || '');
-                                                tag.setAttribute('data-value', r.name || r);
-                                                tag.innerHTML = `${r.name || r} <span class="tag-remove" onclick="this.parentElement.remove()">✖</span>`;
-                                                tagsContainer.insertBefore(tag, input);
-                                            }
-                                            dropdown.style.display = 'none';
-                                            e.target.value = '';
-                                        });
-                                        dropdown.appendChild(item);
+            // AI button for this card
+            card.querySelector('.btn-ai-audience').addEventListener('click', () => {
+                this.aiGenerateAudience(i);
+            });
+
+            // Interest search with debounce
+            const searchInput = card.querySelector('.interest-search');
+            let debounceTimeout;
+            searchInput.addEventListener('input', (e) => {
+                clearTimeout(debounceTimeout);
+                const idx = parseInt(e.target.getAttribute('data-index'));
+                debounceTimeout = setTimeout(async () => {
+                    const val = e.target.value.trim();
+                    const dropdown = document.getElementById(`interest-dropdown-${idx}`);
+                    if (val.length > 2 && dropdown) {
+                        try {
+                            const results = await window.API.searchInterests(val);
+                            dropdown.innerHTML = '';
+                            if (Array.isArray(results) && results.length > 0) {
+                                results.forEach(r => {
+                                    const item = document.createElement('div');
+                                    item.style.cssText = 'padding:0.75rem 1rem; cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.05);';
+                                    item.textContent = r.name || r;
+                                    item.addEventListener('mouseenter', () => item.style.background = 'rgba(67,97,238,0.2)');
+                                    item.addEventListener('mouseleave', () => item.style.background = 'transparent');
+                                    item.addEventListener('click', () => {
+                                        this._addInterestTag(card, idx, r.id || '', r.name || r);
+                                        dropdown.style.display = 'none';
+                                        e.target.value = '';
                                     });
-                                    dropdown.style.display = 'block';
-                                } else {
-                                    dropdown.style.display = 'none';
-                                }
-                            } catch (err) {
-                                console.error('Interest search failed', err);
+                                    dropdown.appendChild(item);
+                                });
+                                dropdown.style.display = 'block';
+                            } else {
                                 dropdown.style.display = 'none';
                             }
-                        } else if (dropdown) {
+                        } catch (err) {
                             dropdown.style.display = 'none';
                         }
-                    }, 500);
-                });
+                    } else if (dropdown) {
+                        dropdown.style.display = 'none';
+                    }
+                }, 500);
+            });
 
-                // Hide dropdown when clicking outside
-                document.addEventListener('click', (e) => {
-                    if (!e.target.classList.contains('interest-search')) {
-                        document.querySelectorAll('.interest-dropdown').forEach(d => d.style.display = 'none');
+            // Hide dropdowns on outside click
+            document.addEventListener('click', (e) => {
+                if (!e.target.classList.contains('interest-search')) {
+                    document.querySelectorAll('.interest-dropdown').forEach(d => d.style.display = 'none');
+                }
+            }, { once: false });
+        },
+
+        // Add a single interest tag to a card
+        _addInterestTag: function(card, idx, id, name) {
+            const tagsContainer = card.querySelector(`.interests-tags-${idx}`);
+            const input = tagsContainer?.querySelector('.interest-search');
+            if (!tagsContainer || !input) return;
+            const tag = document.createElement('span');
+            tag.className = 'tag interest-tag';
+            tag.setAttribute('data-id', id);
+            tag.setAttribute('data-value', name);
+            tag.innerHTML = `${name} <span class="tag-remove" onclick="this.parentElement.remove()">✖</span>`;
+            tagsContainer.insertBefore(tag, input);
+        },
+
+        // Populate an audience card with a list of keywords (from AI)
+        _populateAudienceCard: function(card, idx, interests) {
+            const tagsContainer = card.querySelector(`.interests-tags-${idx}`);
+            if (!tagsContainer) return;
+            // Remove existing interest tags
+            tagsContainer.querySelectorAll('.interest-tag').forEach(t => t.remove());
+            const input = tagsContainer.querySelector('.interest-search');
+            interests.forEach(kw => {
+                const name = typeof kw === 'string' ? kw : (kw.name || kw);
+                const id = typeof kw === 'object' ? (kw.id || '') : '';
+                const tag = document.createElement('span');
+                tag.className = 'tag interest-tag';
+                tag.setAttribute('data-id', id);
+                tag.setAttribute('data-value', name);
+                tag.innerHTML = `${name} <span class="tag-remove" onclick="this.parentElement.remove()">✖</span>`;
+                tagsContainer.insertBefore(tag, input);
+            });
+        },
+
+        // AI: generate interests for ONE audience card
+        aiGenerateAudience: async function(cardIndex) {
+            const websiteUrl = document.getElementById('website-url')?.value?.trim();
+            if (!websiteUrl) {
+                window.AppController.showToast('Enter the Website URL in Campaign Settings first', 'warning');
+                return;
+            }
+
+            // Collect keywords already in ALL OTHER cards to avoid duplicates
+            const alreadyUsed = [];
+            document.querySelectorAll('.audience-card').forEach(card => {
+                const ci = parseInt(card.getAttribute('data-index'));
+                if (ci !== cardIndex) {
+                    card.querySelectorAll('.interest-tag').forEach(tag => {
+                        const kw = tag.getAttribute('data-value') || tag.textContent.replace('✖', '').trim();
+                        if (kw) alreadyUsed.push(kw);
+                    });
+                }
+            });
+
+            const targetCard = document.querySelector(`.audience-card[data-index="${cardIndex}"]`);
+            if (!targetCard) return;
+
+            const btn = targetCard.querySelector('.btn-ai-audience');
+            if (btn) { btn.disabled = true; btn.textContent = '⏳…'; }
+
+            try {
+                const result = await window.API.aiAudiences({ websiteUrl, numAudiences: 1, alreadyUsed });
+                const audiences = result.audiences || [];
+                if (audiences.length > 0) {
+                    this._populateAudienceCard(targetCard, cardIndex, audiences[0].interests || []);
+                    window.AppController.showToast(`Audience ${cardIndex + 1} generated ✨`, 'success');
+                } else {
+                    window.AppController.showToast('No audience returned. Try again.', 'warning');
+                }
+            } catch (error) {
+                window.AppController.showToast('AI error: ' + error.message, 'error');
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = '🤖 AI'; }
+            }
+        },
+
+        // AI: generate interests for ALL audience cards at once (no overlap)
+        aiGenerateAllAudiences: async function() {
+            const websiteUrl = document.getElementById('website-url')?.value?.trim();
+            if (!websiteUrl) {
+                window.AppController.showToast('Enter the Website URL in Campaign Settings first', 'warning');
+                return;
+            }
+
+            const cards = document.querySelectorAll('.audience-card');
+            const numAudiences = cards.length;
+            if (numAudiences === 0) return;
+
+            const btn = document.getElementById('btn-ai-all-audiences');
+            if (btn) { btn.disabled = true; btn.textContent = '⏳ Generating…'; }
+
+            try {
+                const result = await window.API.aiAudiences({ websiteUrl, numAudiences, alreadyUsed: [] });
+                const audiences = result.audiences || [];
+
+                cards.forEach((card, idx) => {
+                    const cardIdx = parseInt(card.getAttribute('data-index'));
+                    if (audiences[idx]) {
+                        this._populateAudienceCard(card, cardIdx, audiences[idx].interests || []);
                     }
                 });
+
+                window.AppController.showToast(`${audiences.length} unique audiences generated 🎯`, 'success');
+            } catch (error) {
+                window.AppController.showToast('AI generation failed: ' + error.message, 'error');
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = '🤖 AI Generate All'; }
             }
         },
 
         handleMediaUpload: async function(file) {
             if (!file) return;
-            
             const dropZone = document.getElementById('media-upload-zone');
-            
-            // Show local preview immediately
             const preview = document.getElementById('media-preview');
             if (preview) {
                 if (file.type.startsWith('image/')) {
-                    preview.innerHTML = `<img src="${URL.createObjectURL(file)}" style="max-width: 100%; max-height: 200px; border-radius:8px; margin-top:1rem;" />`;
+                    preview.innerHTML = `<img src="${URL.createObjectURL(file)}" style="max-width:100%; max-height:200px; border-radius:8px; margin-top:1rem;" />`;
                 } else if (file.type.startsWith('video/')) {
-                    preview.innerHTML = `<video src="${URL.createObjectURL(file)}" controls style="max-width: 100%; max-height: 200px; border-radius:8px; margin-top:1rem;"></video>`;
+                    preview.innerHTML = `<video src="${URL.createObjectURL(file)}" controls style="max-width:100%; max-height:200px; border-radius:8px; margin-top:1rem;"></video>`;
                 }
             }
-
-            // Update drop zone text
             if (dropZone) {
                 dropZone.innerHTML = `<i>✅</i><h4>${file.name}</h4><p>${(file.size / (1024*1024)).toFixed(2)} MB — Click to change</p>`;
             }
-
-            // Upload to server
             try {
                 const formData = new FormData();
                 formData.append('file', file);
-                
                 const response = await window.API.uploadMedia(formData);
                 this.campaignData.step3.media = response.filePath || response.filename;
                 this.campaignData.step3.mediaFile = file.name;
-                
                 window.AppController.showToast('Media uploaded successfully! ✅', 'success');
             } catch (error) {
                 window.AppController.showToast('Media saved locally. Will upload during campaign creation.', 'info');
@@ -560,57 +608,35 @@
         generateVariations: async function() {
             const primaryText = document.getElementById('primary-text')?.value?.trim();
             const num = parseInt(document.getElementById('num-variations')?.value) || 3;
-            
             if (!primaryText) {
                 window.AppController.showToast('Please write base primary text first', 'warning');
                 return;
             }
-
             const btn = document.getElementById('btn-generate-variations');
-            if (btn) {
-                btn.disabled = true;
-                btn.textContent = '🤖 Generating...';
-            }
-
+            if (btn) { btn.disabled = true; btn.textContent = '🤖 Generating...'; }
             try {
-                const response = await window.API.generateVariations({
-                    primaryText,
-                    count: num
-                });
-                
+                const response = await window.API.generateVariations({ primaryText, count: num });
                 const variations = response.variations || response || [];
                 this.campaignData.step3.variations = Array.isArray(variations) ? variations : [primaryText];
-                
-                // Always include the original as first variation
                 if (!this.campaignData.step3.variations.includes(primaryText)) {
                     this.campaignData.step3.variations.unshift(primaryText);
                 }
-                
                 this.renderVariations();
                 window.AppController.showToast(`${this.campaignData.step3.variations.length} variations generated! 🎉`, 'success');
             } catch (error) {
                 window.AppController.showToast('Gemini generation failed: ' + error.message + '. Add variations manually.', 'error');
-                // Fallback: create manual variations from base text
                 this.campaignData.step3.variations = [primaryText];
                 this.renderVariations();
             } finally {
-                if (btn) {
-                    btn.disabled = false;
-                    btn.textContent = '🤖 Generate Variations with Gemini';
-                }
+                if (btn) { btn.disabled = false; btn.textContent = '🤖 Generate Variations with Gemini'; }
             }
         },
 
         addManualVariation: function() {
             const container = document.getElementById('variations-container');
             if (!container) return;
-
-            // Clear placeholder text if present
             const placeholder = container.querySelector('p');
-            if (placeholder && !container.querySelector('.variation-card')) {
-                container.innerHTML = '';
-            }
-
+            if (placeholder && !container.querySelector('.variation-card')) container.innerHTML = '';
             const idx = container.querySelectorAll('.variation-card').length + 1;
             const card = document.createElement('div');
             card.className = 'glass-card variation-card mb-2';
@@ -628,7 +654,6 @@
         renderVariations: function() {
             const container = document.getElementById('variations-container');
             if (!container) return;
-            
             container.innerHTML = '';
             this.campaignData.step3.variations.forEach((text, idx) => {
                 const card = document.createElement('div');
@@ -646,15 +671,12 @@
         },
 
         renderReviewSummary: function() {
-            // Collect latest variations from DOM
             this.collectVariationsFromDOM();
-
             const { step1, step2, step3 } = this.campaignData;
             const totalAdsets = step2.audiences ? step2.audiences.length : 0;
             const totalVariations = step3.variations ? step3.variations.length : 0;
             const totalAds = totalAdsets * totalVariations;
 
-            // Update review cards
             const nameEl = document.getElementById('review-campaign-name');
             const objEl = document.getElementById('review-campaign-objective');
             const budgetEl = document.getElementById('review-campaign-budget');
@@ -669,7 +691,6 @@
             if (varsEl) varsEl.innerHTML = `Ads per Ad Set: <strong>${totalVariations}</strong>`;
             if (totalEl) totalEl.textContent = `Total Ads: ${totalAds}`;
 
-            // Render adset details
             const detailContainer = document.getElementById('review-adsets-detail');
             if (detailContainer && step2.audiences) {
                 detailContainer.innerHTML = '';
@@ -680,8 +701,8 @@
                     card.innerHTML = `
                         <h4 style="color:var(--accent-cyan);">📋 Ad Set ${idx + 1}: ${aud.name}</h4>
                         <div class="flex gap-2 mt-2" style="flex-wrap:wrap;">
-                            <span class="badge badge-info">📍 ${(aud.locations || []).join(', ') || 'India'}</span>
-                            <span class="badge badge-info">👤 ${aud.ageMin || 18}-${aud.ageMax || 65}</span>
+                            <span class="badge badge-info">📍 ${(aud.locations || []).join(', ') || 'IN'}</span>
+                            <span class="badge badge-info">👤 ${aud.ageMin || 18}–${aud.ageMax || 65}</span>
                             <span class="badge badge-info">⚧ ${aud.gender || 'All'}</span>
                             <span class="badge badge-info">🎯 ${(aud.interests || []).map(i => i.name || i).join(', ') || 'Broad'}</span>
                         </div>
@@ -695,29 +716,21 @@
             const btn = document.getElementById('btn-create-campaign');
             const statusDiv = document.getElementById('creation-status');
             const statusText = document.getElementById('creation-status-text');
-            
-            if (btn) {
-                btn.disabled = true;
-                btn.textContent = '⏳ Creating...';
-            }
+
+            if (btn) { btn.disabled = true; btn.textContent = '⏳ Creating...'; }
             if (statusDiv) statusDiv.style.display = 'block';
 
             try {
-                // Compile final payload
                 const payload = {
                     campaign: this.campaignData.step1,
                     adsets: this.campaignData.step2,
                     creative: this.campaignData.step3
                 };
-
                 if (statusText) statusText.textContent = 'Creating campaign on Facebook...';
-                
                 const result = await window.API.createCampaign(payload);
-                
                 if (statusText) statusText.textContent = '✅ Campaign created successfully!';
                 window.AppController.showToast('Campaign created successfully! 🎉', 'success');
-                
-                // Show result modal
+
                 const resultBody = document.getElementById('modal-result-body');
                 const resultTitle = document.getElementById('modal-result-title');
                 if (resultTitle) resultTitle.textContent = '🎉 Campaign Created!';
@@ -733,18 +746,12 @@
                     `;
                 }
                 window.AppController.openModal('modal-result');
-
-                // Refresh recent campaigns
                 window.AppController.loadRecentCampaigns();
-
             } catch (error) {
                 if (statusText) statusText.textContent = '❌ Failed: ' + error.message;
                 window.AppController.showToast('Failed to create campaign: ' + error.message, 'error');
             } finally {
-                if (btn) {
-                    btn.disabled = false;
-                    btn.textContent = '🚀 Create Campaign';
-                }
+                if (btn) { btn.disabled = false; btn.textContent = '🚀 Create Campaign'; }
             }
         }
     };
