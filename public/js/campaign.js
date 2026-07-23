@@ -659,6 +659,8 @@
         }
     };
 
+    window.CampaignWizard = CampaignWizard;
+
     document.addEventListener('DOMContentLoaded', () => {
         CampaignWizard.init();
     });

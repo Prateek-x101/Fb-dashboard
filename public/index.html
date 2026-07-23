@@ -348,7 +348,10 @@
         <section id="section-accounts" class="section">
             <div class="flex justify-between align-center mb-3">
                 <h2>Ad Accounts Management</h2>
-                <button class="btn btn-primary" id="btn-add-account"><span>➕</span> Add Account</button>
+                <div class="flex gap-2">
+                    <button class="btn btn-secondary" id="btn-connect-token"><span>🔗</span> Connect with Token</button>
+                    <button class="btn btn-primary" id="btn-add-account"><span>➕</span> Add Account</button>
+                </div>
             </div>
 
             <div class="grid-cards" id="accounts-grid">
@@ -435,6 +438,47 @@
                     <button type="button" class="btn btn-primary" id="btn-save-account">💾 Save Account</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- Modal: Connect with Token -->
+    <div class="modal-overlay" id="modal-token-connect">
+        <div class="glass-card modal-content" style="max-width:580px; width:90%;">
+            <div class="modal-header">
+                <h3>🔗 Connect with Access Token</h3>
+                <button class="modal-close" data-dismiss="modal">✖</button>
+            </div>
+
+            <!-- Step 1: Token Input -->
+            <div id="token-step-1">
+                <p style="color:var(--text-secondary); margin-bottom:1.25rem; font-size:0.9rem;">Enter your Facebook <strong>System User Token</strong> or <strong>Page Access Token</strong>. We'll fetch all linked ad accounts automatically — no manual entry needed.</p>
+                <div class="form-group password-input">
+                    <label>Access Token *</label>
+                    <input type="password" class="form-control" placeholder="EAAB... or system user token" id="token-input">
+                    <button class="password-toggle" type="button">👁️</button>
+                </div>
+                <div class="form-group">
+                    <label>Default Facebook Page ID <span style="color:var(--text-secondary); font-weight:400;">(Optional)</span></label>
+                    <input type="text" class="form-control" placeholder="e.g. 123456789" id="token-page-id">
+                    <small style="color:var(--text-secondary); font-size:0.75rem; margin-top:0.25rem; display:block;">Applied to all fetched accounts. You can update per-account later.</small>
+                </div>
+                <div class="flex gap-2 mt-3">
+                    <button type="button" class="btn btn-primary" style="flex:1;" id="btn-fetch-accounts">🔍 Fetch Ad Accounts</button>
+                </div>
+            </div>
+
+            <!-- Step 2: Account Selection -->
+            <div id="token-step-2" style="display:none;">
+                <div class="flex justify-between align-center mb-2">
+                    <h4>Select Accounts to Add</h4>
+                    <span id="fetched-count" style="color:var(--accent-cyan); font-size:0.85rem;"></span>
+                </div>
+                <div id="fetched-accounts-list" style="max-height:320px; overflow-y:auto; margin-bottom:1rem;"></div>
+                <div class="flex gap-2">
+                    <button type="button" class="btn btn-secondary" id="btn-back-to-token">← Back</button>
+                    <button type="button" class="btn btn-primary" style="flex:1;" id="btn-add-selected-accounts">✅ Add Selected Accounts</button>
+                </div>
+            </div>
         </div>
     </div>
 

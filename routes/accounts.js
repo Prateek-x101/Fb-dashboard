@@ -101,6 +101,54 @@ router.post('/:id/test', async (req, res) => {
     }
 });
 
+// Fetch all ad accounts linked to an access token
+router.post('/fetch-from-token', async (req, res) => {
+    try {
+        const { accessToken } = req.body;
+        if (!accessToken) {
+            return res.status(400).json({ error: 'Access token is required' });
+        }
+        const result = await facebookService.getAdAccounts(accessToken);
+        res.json({ success: true, accounts: result.data || [] });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch accounts', details: error.message });
+    }
+});
+
+// Bulk add accounts from a token
+router.post('/bulk-add', async (req, res) => {
+    try {
+        const { accounts, accessToken, pageId } = req.body;
+        if (!accounts || !Array.isArray(accounts) || accounts.length === 0) {
+            return res.status(400).json({ error: 'No accounts provided' });
+        }
+        const storage = getStorage();
+        if (!storage.accounts) storage.accounts = [];
+
+        const added = [];
+        accounts.forEach(acc => {
+            // Avoid duplicates by accountId
+            const exists = storage.accounts.find(a => a.accountId === acc.account_id);
+            if (!exists) {
+                const newAccount = {
+                    id: uuidv4(),
+                    label: acc.name || `Account ${acc.account_id}`,
+                    accountId: acc.account_id,
+                    accessToken: accessToken,
+                    pageId: pageId || ''
+                };
+                storage.accounts.push(newAccount);
+                added.push(newAccount);
+            }
+        });
+
+        saveStorage(storage);
+        res.status(201).json({ success: true, added, total: accounts.length, skipped: accounts.length - added.length });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to add accounts', details: error.message });
+    }
+});
+
 // Test connection with new credentials (before saving)
 router.post('/test-connection', async (req, res) => {
     try {

@@ -25,11 +25,43 @@
             const btnAddAcc = document.getElementById('btn-add-account');
             if (btnAddAcc) {
                 btnAddAcc.addEventListener('click', () => {
-                    // Clear form
                     const form = document.getElementById('account-form');
                     if (form) form.reset();
                     window.AppController.openModal('modal-add-account');
                 });
+            }
+
+            // Connect with Token button
+            const btnConnectToken = document.getElementById('btn-connect-token');
+            if (btnConnectToken) {
+                btnConnectToken.addEventListener('click', () => {
+                    document.getElementById('token-step-1').style.display = 'block';
+                    document.getElementById('token-step-2').style.display = 'none';
+                    document.getElementById('token-input').value = '';
+                    document.getElementById('token-page-id').value = '';
+                    window.AppController.openModal('modal-token-connect');
+                });
+            }
+
+            // Fetch accounts button (inside token modal)
+            const btnFetch = document.getElementById('btn-fetch-accounts');
+            if (btnFetch) {
+                btnFetch.addEventListener('click', () => this.fetchAccountsFromToken());
+            }
+
+            // Back button in token modal step 2
+            const btnBackToken = document.getElementById('btn-back-to-token');
+            if (btnBackToken) {
+                btnBackToken.addEventListener('click', () => {
+                    document.getElementById('token-step-1').style.display = 'block';
+                    document.getElementById('token-step-2').style.display = 'none';
+                });
+            }
+
+            // Add selected accounts button
+            const btnAddSelected = document.getElementById('btn-add-selected-accounts');
+            if (btnAddSelected) {
+                btnAddSelected.addEventListener('click', () => this.addSelectedAccounts());
             }
             
             // Save Account button (in modal)
@@ -92,12 +124,129 @@
             if (btn) { btn.disabled = true; btn.textContent = '🧪 Testing...'; }
 
             try {
-                await window.API.testGemini();
+                const apiKey = document.getElementById('setting-gemini-key')?.value?.trim();
+                const model = document.getElementById('setting-gemini-model')?.value || 'gemini-2.5-flash';
+                if (!apiKey) {
+                    window.AppController.showToast('Please enter a Gemini API key first', 'warning');
+                    return;
+                }
+                await window.API.testGemini({ apiKey, model });
                 window.AppController.showToast('Gemini connection successful! ✅', 'success');
             } catch (error) {
                 window.AppController.showToast('Gemini test failed: ' + error.message, 'error');
             } finally {
                 if (btn) { btn.disabled = false; btn.textContent = '🧪 Test Gemini Connection'; }
+            }
+        },
+
+        fetchAccountsFromToken: async function() {
+            const token = document.getElementById('token-input')?.value?.trim();
+            if (!token) {
+                window.AppController.showToast('Please enter an access token', 'warning');
+                return;
+            }
+
+            const btn = document.getElementById('btn-fetch-accounts');
+            if (btn) { btn.disabled = true; btn.textContent = '🔍 Fetching...'; }
+
+            try {
+                const result = await window.API.fetchAccountsFromToken({ accessToken: token });
+                const accounts = result.accounts || [];
+
+                if (accounts.length === 0) {
+                    window.AppController.showToast('No ad accounts found for this token', 'warning');
+                    return;
+                }
+
+                // Render account list with checkboxes
+                const listEl = document.getElementById('fetched-accounts-list');
+                const countEl = document.getElementById('fetched-count');
+                if (countEl) countEl.textContent = `${accounts.length} account(s) found`;
+
+                if (listEl) {
+                    listEl.innerHTML = '';
+                    accounts.forEach((acc, i) => {
+                        const statusLabel = acc.account_status === 1 ? '🟢 Active' : '🔴 Inactive';
+                        const row = document.createElement('label');
+                        row.style.cssText = 'display:flex; align-items:center; gap:0.75rem; padding:0.75rem; border-radius:8px; cursor:pointer; border:1px solid var(--glass-border); margin-bottom:0.5rem; background:rgba(255,255,255,0.03);';
+                        row.innerHTML = `
+                            <input type="checkbox" class="fetched-acc-checkbox" data-index="${i}" checked style="width:16px;height:16px;accent-color:var(--accent-blue);">
+                            <div style="flex:1;">
+                                <div style="font-weight:600;">${acc.name || 'Unnamed Account'}</div>
+                                <div style="font-size:0.78rem; color:var(--text-secondary);">ID: act_${acc.account_id} &nbsp;|&nbsp; ${statusLabel}</div>
+                            </div>
+                        `;
+                        listEl.appendChild(row);
+                    });
+                }
+
+                // Store fetched data for use in addSelectedAccounts
+                this._fetchedAccounts = accounts;
+                this._fetchedToken = token;
+
+                document.getElementById('token-step-1').style.display = 'none';
+                document.getElementById('token-step-2').style.display = 'block';
+
+            } catch (error) {
+                window.AppController.showToast('Failed to fetch accounts: ' + error.message, 'error');
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = '🔍 Fetch Ad Accounts'; }
+            }
+        },
+
+        addSelectedAccounts: async function() {
+            const checkboxes = document.querySelectorAll('.fetched-acc-checkbox:checked');
+            if (checkboxes.length === 0) {
+                window.AppController.showToast('Please select at least one account', 'warning');
+                return;
+            }
+
+            const selectedAccounts = [];
+            checkboxes.forEach(cb => {
+                const idx = parseInt(cb.getAttribute('data-index'));
+                if (this._fetchedAccounts && this._fetchedAccounts[idx]) {
+                    selectedAccounts.push(this._fetchedAccounts[idx]);
+                }
+            });
+
+            const pageId = document.getElementById('token-page-id')?.value?.trim() || '';
+
+            const btn = document.getElementById('btn-add-selected-accounts');
+            if (btn) { btn.disabled = true; btn.textContent = '⏳ Adding...'; }
+
+            try {
+                const result = await window.API.bulkAddAccounts({
+                    accounts: selectedAccounts,
+                    accessToken: this._fetchedToken,
+                    pageId
+                });
+
+                const msg = result.skipped > 0
+                    ? `${result.added.length} account(s) added, ${result.skipped} already existed ✅`
+                    : `${result.added.length} account(s) added successfully! ✅`;
+
+                window.AppController.showToast(msg, 'success');
+                window.AppController.closeModal('modal-token-connect');
+
+                // Refresh everything
+                const accountsData = await window.API.getAccounts();
+                window.APP.accounts = accountsData || [];
+                this.renderAccounts();
+                window.AppController.updateAccountSelector();
+                window.AppController.updateDashboardStats();
+                if (window.CampaignWizard) window.CampaignWizard.populateAccountSelect();
+
+                // Auto-select first account if none active
+                if (!window.APP.activeAccount && window.APP.accounts.length > 0) {
+                    window.APP.activeAccount = window.APP.accounts[0];
+                    const sel = document.getElementById('sidebar-account-select');
+                    if (sel) sel.value = window.APP.activeAccount.id;
+                }
+
+            } catch (error) {
+                window.AppController.showToast('Failed to add accounts: ' + error.message, 'error');
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = '✅ Add Selected Accounts'; }
             }
         },
 
@@ -179,6 +328,7 @@
                 this.renderAccounts();
                 window.AppController.updateAccountSelector();
                 window.AppController.updateDashboardStats();
+                if (window.CampaignWizard) window.CampaignWizard.populateAccountSelect();
                 
             } catch (error) {
                 window.AppController.showToast('Failed to add account: ' + error.message, 'error');

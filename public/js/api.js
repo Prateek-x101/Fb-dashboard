@@ -35,11 +35,13 @@
         updateAccount: (id, data) => API.request(`/api/accounts/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
         deleteAccount: (id) => API.request(`/api/accounts/${id}`, { method: 'DELETE' }),
         testAccount: (id) => API.request(`/api/accounts/${id}/test`, { method: 'POST' }),
+        fetchAccountsFromToken: (data) => API.request('/api/accounts/fetch-from-token', { method: 'POST', body: JSON.stringify(data) }),
+        bulkAddAccounts: (data) => API.request('/api/accounts/bulk-add', { method: 'POST', body: JSON.stringify(data) }),
 
         // Settings
         getSettings: () => API.request('/api/settings'),
         saveSettings: (data) => API.request('/api/settings', { method: 'POST', body: JSON.stringify(data) }),
-        testGemini: () => API.request('/api/settings/test-gemini', { method: 'POST' }),
+        testGemini: (data) => API.request('/api/settings/test-gemini', { method: 'POST', body: JSON.stringify(data) }),
 
         // Campaign
         getPixels: (accountId) => API.request(`/api/campaigns/pixels/${accountId}`),
