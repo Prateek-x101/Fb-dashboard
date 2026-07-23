@@ -5,6 +5,8 @@ const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const facebookService = require('../services/facebook');
 const geminiService = require('../services/gemini');
+const dns = require('dns').promises;
+const net = require('net');
 
 const storagePath = path.join(__dirname, '..', 'config', 'storage.local.json');
 
@@ -110,15 +112,12 @@ router.post('/ai-audiences', async (req, res) => {
         if (!websiteUrl) {
             return res.status(400).json({ error: 'Website URL is required' });
         }
+        await assertSafeExternalUrl(websiteUrl);
 
         // Fetch website content so Gemini can understand the product
         let websiteContent = `URL: ${websiteUrl}`;
         try {
-            const fetch = require('node-fetch');
-            const response = await fetch(websiteUrl, {
-                timeout: 8000,
-                headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AdPilot/1.0)' }
-            });
+            const response = await fetchSafeExternal(websiteUrl);
             if (response.ok) {
                 const html = await response.text();
                 const text = html
@@ -145,6 +144,34 @@ router.post('/ai-audiences', async (req, res) => {
         res.json({ audiences });
     } catch (error) {
         res.status(500).json({ error: 'Failed to generate audiences', details: error.message });
+    }
+});
+
+router.post('/generate-ad-copy', async (req, res) => {
+    try {
+        const { websiteUrl } = req.body;
+        const storage = getStorage();
+        const settings = storage.settings || {};
+
+        if (!settings.geminiApiKey) {
+            return res.status(400).json({ error: 'Gemini API key not configured. Please add it in Settings.' });
+        }
+        if (!websiteUrl) {
+            return res.status(400).json({ error: 'Website URL is required' });
+        }
+
+        const details = await fetchWebsiteDetails(websiteUrl);
+        const copy = await geminiService.generateAdCopy(
+            settings.geminiApiKey,
+            settings.geminiModel,
+            websiteUrl,
+            details.content,
+            details.productName
+        );
+
+        res.json({ ...copy, productName: details.productName });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to generate ad copy', details: error.message });
     }
 });
 
@@ -184,6 +211,20 @@ router.post('/create', async (req, res) => {
 
         const accountId = accountRecord.accountId;
         const token = accountRecord.accessToken;
+        const selectedPageId = step3.pageId || accountRecord.pageId || '';
+        if (!selectedPageId) {
+            return res.status(400).json({ error: 'Facebook Page is required.' });
+        }
+        const connectedPages = await facebookService.getConnectedInstagram(token);
+        const pageIsConnected = (connectedPages.data || []).some(page => String(page.id) === String(selectedPageId));
+        if (!pageIsConnected) {
+            return res.status(400).json({ error: 'Selected Facebook Page is not connected to the selected ad account.' });
+        }
+
+        const creativeAds = normalizeCreativeAds(step3);
+        if (!creativeAds.length || creativeAds.some(ad => !ad.media)) {
+            return res.status(400).json({ error: 'Every ad must have an uploaded media file.' });
+        }
 
         // ── 1. Create Campaign ──────────────────────────────────────────
         const isCBO = campaign.budgetType === 'CBO';
@@ -201,27 +242,31 @@ router.post('/create', async (req, res) => {
         const campaignResponse = await facebookService.createCampaign(accountId, token, campaignParams);
         const campaignId = campaignResponse.id;
 
-        // ── 2. Upload media ─────────────────────────────────────────────
-        let imageHash = null;
-        let videoId = null;
-        if (step3.media) {
-            const ext = path.extname(step3.media).toLowerCase();
-            try {
-                if (['.mp4', '.mov', '.avi'].includes(ext)) {
-                    const videoRes = await facebookService.uploadVideo(accountId, token, step3.media);
-                    videoId = videoRes.id;
-                } else {
-                    const imageRes = await facebookService.uploadImage(accountId, token, step3.media);
-                    const firstKey = Object.keys(imageRes.images || {})[0];
-                    if (firstKey) imageHash = imageRes.images[firstKey].hash;
+        // ── 2. Normalize and upload each ad's media ──────────────────────
+        const uploadedMedia = [];
+        for (const ad of creativeAds) {
+            let imageHash = null;
+            let videoId = null;
+            if (ad.media) {
+                const ext = path.extname(ad.media).toLowerCase();
+                try {
+                    if (['.mp4', '.mov', '.avi', '.webm'].includes(ext)) {
+                        const videoRes = await facebookService.uploadVideo(accountId, token, ad.media);
+                        videoId = videoRes.id;
+                    } else {
+                        const imageRes = await facebookService.uploadImage(accountId, token, ad.media);
+                        const firstKey = Object.keys(imageRes.images || {})[0];
+                        if (firstKey) imageHash = imageRes.images[firstKey].hash;
+                    }
+                } catch (mediaErr) {
+                    console.warn(`Media upload failed for ${ad.name}, continuing without media:`, mediaErr.message);
                 }
-            } catch (mediaErr) {
-                console.warn('Media upload failed, continuing without media:', mediaErr.message);
             }
+            uploadedMedia.push({ ...ad, imageHash, videoId });
         }
 
         const results = { campaignId, adsets: [], ads: [] };
-        const pageId = step3.pageId || accountRecord.pageId || '';
+        const pageId = selectedPageId;
 
         // ── 3. Create AdSets + Ads per audience ─────────────────────────
         for (const audience of (step2.audiences || [])) {
@@ -281,12 +326,12 @@ router.post('/create', async (req, res) => {
             const adsetResponse = await facebookService.createAdSet(accountId, token, adsetParams);
             results.adsets.push(adsetResponse.id);
 
-            // ── 4. Creative + Ad per variation ─────────────────────────
-            for (let i = 0; i < (step3.variations || []).length; i++) {
-                const textVariation = step3.variations[i];
+            // ── 4. Creative + Ad per media card ─────────────────────────
+            for (const ad of uploadedMedia) {
+                const textVariation = ad.primaryText || '';
 
                 const creativeParams = {
-                    name: `${campaign.name} — ${audience.name} — V${i + 1}`,
+                    name: `${campaign.name} — ${audience.name} — ${ad.name}`,
                     object_story_spec: {
                         page_id: pageId,
                         link_data: {
@@ -299,20 +344,25 @@ router.post('/create', async (req, res) => {
                     }
                 };
 
-                if (imageHash) creativeParams.object_story_spec.link_data.image_hash = imageHash;
-                if (videoId) {
+                if (ad.imageHash) creativeParams.object_story_spec.link_data.image_hash = ad.imageHash;
+                if (ad.videoId) {
                     creativeParams.object_story_spec.video_data = {
-                        video_id: videoId,
+                        video_id: ad.videoId,
                         message: textVariation,
+                        title: step3.headline || '',
+                        link_description: step3.description || '',
                         call_to_action: { type: step3.cta || 'SHOP_NOW', value: { link: step2.url } }
                     };
                     delete creativeParams.object_story_spec.link_data;
+                }
+                if (step3.instagramId) {
+                    creativeParams.object_story_spec.instagram_actor_id = step3.instagramId;
                 }
 
                 const creativeResponse = await facebookService.createAdCreative(accountId, token, creativeParams);
 
                 const adResponse = await facebookService.createAd(accountId, token, {
-                    name: `${audience.name} — V${i + 1}`,
+                    name: ad.name,
                     adset_id: adsetResponse.id,
                     creative: { creative_id: creativeResponse.id },
                     status: 'PAUSED'
@@ -341,6 +391,115 @@ router.post('/create', async (req, res) => {
         res.status(500).json({ error: 'Failed to create campaign', details: error.message });
     }
 });
+
+function normalizeCreativeAds(step3 = {}) {
+    if (Array.isArray(step3.ads) && step3.ads.length > 0) {
+        const total = step3.ads.length;
+        return step3.ads.map((ad, index) => ({
+            name: total === 1 ? 'Single content-Reel' : `Content-${index + 1} Reel`,
+            media: ad.media || null,
+            primaryText: ad.primaryText || '',
+            mediaFile: ad.mediaFile || ''
+        }));
+    }
+
+    const legacyVariations = Array.isArray(step3.variations) ? step3.variations : [];
+    return legacyVariations.map((primaryText, index) => ({
+        name: legacyVariations.length === 1 ? 'Single content-Reel' : `Content-${index + 1} Reel`,
+        media: index === 0 ? step3.media || null : null,
+        primaryText: typeof primaryText === 'string' ? primaryText : primaryText.primaryText || ''
+    }));
+}
+
+async function fetchWebsiteDetails(websiteUrl) {
+    let html;
+    try {
+        const response = await fetchSafeExternal(websiteUrl);
+        if (!response.ok) throw new Error(`Website returned ${response.status}`);
+        html = await response.text();
+    } catch (error) {
+        throw new Error(`Could not read website: ${error.message}`);
+    }
+
+    const firstMatch = (regex) => {
+        const match = html.match(regex);
+        return match ? match[1].replace(/\s+/g, ' ').trim() : '';
+    };
+    const productName =
+        firstMatch(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i) ||
+        firstMatch(/<meta[^>]+name=["']twitter:title["'][^>]+content=["']([^"']+)["']/i) ||
+        firstMatch(/<h1[^>]*>([\s\S]*?)<\/h1>/i).replace(/<[^>]+>/g, '') ||
+        firstMatch(/<title[^>]*>([\s\S]*?)<\/title>/i).replace(/<[^>]+>/g, '') ||
+        'Product';
+    const content = html
+        .replace(/<script[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[\s\S]*?<\/style>/gi, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 6000);
+
+    return { productName, content: `URL: ${websiteUrl}\n\nPage content:\n${content}` };
+}
+
+function isPrivateIp(address) {
+    if (net.isIP(address) === 4) {
+        const parts = address.split('.').map(Number);
+        return parts[0] === 10 ||
+            parts[0] === 127 ||
+            (parts[0] === 169 && parts[1] === 254) ||
+            (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+            (parts[0] === 192 && parts[1] === 168) ||
+            parts[0] === 0;
+    }
+    if (net.isIP(address) === 6) {
+        const normalized = address.toLowerCase();
+        return normalized === '::1' ||
+            normalized.startsWith('fc') ||
+            normalized.startsWith('fd') ||
+            normalized.startsWith('fe80:');
+    }
+    return true;
+}
+
+async function assertSafeExternalUrl(value) {
+    let parsed;
+    try {
+        parsed = new URL(value);
+    } catch {
+        throw new Error('Website URL must be valid.');
+    }
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
+        throw new Error('Only public HTTP(S) website URLs are allowed.');
+    }
+    const hostname = parsed.hostname.toLowerCase();
+    if (hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local')) {
+        throw new Error('Private or local website URLs are not allowed.');
+    }
+    const addresses = await dns.lookup(hostname, { all: true, verbatim: true });
+    if (!addresses.length || addresses.some(entry => isPrivateIp(entry.address))) {
+        throw new Error('Private or internal website URLs are not allowed.');
+    }
+    return parsed;
+}
+
+async function fetchSafeExternal(value) {
+    const fetch = require('node-fetch');
+    let currentUrl = value;
+    for (let redirects = 0; redirects <= 3; redirects++) {
+        await assertSafeExternalUrl(currentUrl);
+        const response = await fetch(currentUrl, {
+            timeout: 10000,
+            redirect: 'manual',
+            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AdPilot/1.0)' }
+        });
+        if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+        const location = response.headers.get('location');
+        if (!location) return response;
+        currentUrl = new URL(location, currentUrl).toString();
+    }
+    throw new Error('Too many website redirects.');
+}
 
 // Build FB geo_locations object from structured location array
 function buildGeoLocations(locations) {

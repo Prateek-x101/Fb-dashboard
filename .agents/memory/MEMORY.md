@@ -1,1 +1,2 @@
 - [Runtime credentials](runtime-credentials.md) — keep API tokens and account credentials in ignored local runtime storage, never tracked project config.
+- [Facebook page access](facebook-page-access.md) — page dropdowns can only show pages returned by each token’s `/me/accounts` permission scope.

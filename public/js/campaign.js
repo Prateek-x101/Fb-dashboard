@@ -8,8 +8,10 @@
         campaignData: {
             step1: {},
             step2: { audiences: [] },
-            step3: { media: null, mediaFile: null, variations: [] }
+            step3: { ads: [], headline: '', description: '', cta: 'SHOP_NOW', pageId: '', instagramId: '' }
         },
+        _copyAutoFilledForUrl: '',
+        _autoFilledCopy: { headline: '', description: '', primaryText: '' },
 
         init: function() {
             this.bindEvents();
@@ -218,14 +220,25 @@
                 dropZone.addEventListener('click', () => fileInput.click());
                 dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.style.borderColor = 'var(--accent-blue)'; });
                 dropZone.addEventListener('dragleave', () => { dropZone.style.borderColor = ''; });
-                dropZone.addEventListener('drop', (e) => { e.preventDefault(); dropZone.style.borderColor = ''; if (e.dataTransfer.files.length) this.handleMediaUpload(e.dataTransfer.files[0]); });
-                fileInput.addEventListener('change', (e) => { if (e.target.files.length) this.handleMediaUpload(e.target.files[0]); });
+                dropZone.addEventListener('drop', (e) => { e.preventDefault(); dropZone.style.borderColor = ''; if (e.dataTransfer.files.length) this.handleMediaUpload(Array.from(e.dataTransfer.files)); });
+                fileInput.addEventListener('change', (e) => { if (e.target.files.length) this.handleMediaUpload(Array.from(e.target.files)); e.target.value = ''; });
             }
 
-            const btnGenerate = document.getElementById('btn-generate-variations');
-            if (btnGenerate) btnGenerate.addEventListener('click', () => this.generateVariations());
-            const btnAddVariation = document.getElementById('btn-add-variation');
-            if (btnAddVariation) btnAddVariation.addEventListener('click', () => this.addManualVariation());
+            const btnAutoFill = document.getElementById('btn-auto-fill-copy');
+            if (btnAutoFill) btnAutoFill.addEventListener('click', () => this.autoFillCreativeCopy());
+            const btnAddAd = document.getElementById('btn-add-creative-ad');
+            if (btnAddAd) btnAddAd.addEventListener('click', () => this.addCreativeAd());
+
+            const campaignAccount = document.getElementById('campaign-account-select');
+            if (campaignAccount) {
+                campaignAccount.addEventListener('change', e => {
+                    const account = window.APP.accounts.find(item => item.id === e.target.value);
+                    if (account) {
+                        window.APP.activeAccount = account;
+                        this.handleAccountChange(account);
+                    }
+                });
+            }
         },
 
         // ── Step navigation ──────────────────────────────────────────────
@@ -247,6 +260,10 @@
 
             // Pre-populate default excluded locations on first entry to step 2
             if (this.currentStep === 2) this.loadDefaultExcludedLocations();
+            if (this.currentStep === 3) {
+                if (this.campaignData.step3.ads.length === 0) this.addCreativeAd();
+                this.ensureCreativeCopyLoaded();
+            }
             if (this.currentStep === this.totalSteps) this.renderReviewSummary();
         },
 
@@ -339,29 +356,41 @@
                 return true;
 
             } else if (step === 3) {
-                this.collectVariationsFromDOM();
-                if (this.campaignData.step3.variations.length === 0) {
-                    window.AppController.showToast('Please add at least one primary text variation', 'warning');
+                this.collectCreativeAdsFromDOM();
+                if (this.campaignData.step3.ads.length === 0) {
+                    window.AppController.showToast('Please add at least one media/ad card', 'warning');
                     return false;
                 }
-                this.campaignData.step3.headline = document.getElementById('headline')?.value || '';
-                this.campaignData.step3.description = document.getElementById('description')?.value || '';
+                if (!document.getElementById('ad-page')?.value) {
+                    window.AppController.showToast('Please select a Facebook Page', 'warning');
+                    return false;
+                }
+                if (this.campaignData.step3.ads.some(ad => !ad.media)) {
+                    window.AppController.showToast('Please upload media for every ad card', 'warning');
+                    return false;
+                }
+                if (this.campaignData.step3.ads.some(ad => !ad.primaryText.trim())) {
+                    window.AppController.showToast('Please add primary text for every ad', 'warning');
+                    return false;
+                }
+                this.campaignData.step3.headline = document.getElementById('headline')?.value?.trim() || '';
+                this.campaignData.step3.description = document.getElementById('description')?.value?.trim() || '';
                 this.campaignData.step3.cta = document.getElementById('cta-select')?.value || 'SHOP_NOW';
                 this.campaignData.step3.pageId = document.getElementById('ad-page')?.value || '';
+                this.campaignData.step3.instagramId = document.getElementById('ad-instagram')?.value || '';
                 return true;
             }
             return true;
         },
 
-        collectVariationsFromDOM: function() {
-            const container = document.getElementById('variations-container');
+        collectCreativeAdsFromDOM: function() {
+            const container = document.getElementById('creative-ads-container');
             if (!container) return;
-            const variations = [];
-            container.querySelectorAll('.variation-card').forEach(card => {
-                const ta = card.querySelector('textarea');
-                if (ta && ta.value.trim()) variations.push(ta.value.trim());
-            });
-            this.campaignData.step3.variations = variations;
+            this.campaignData.step3.ads = Array.from(container.querySelectorAll('.creative-ad-card')).map(card => ({
+                media: card.getAttribute('data-media') || '',
+                mediaFile: card.getAttribute('data-media-file') || '',
+                primaryText: card.querySelector('.creative-primary-text')?.value?.trim() || ''
+            }));
         },
 
         nextStep: function() {
@@ -435,15 +464,17 @@
                 if (pageSelect) pageSelect.innerHTML = '<option value="">Loading pages...</option>';
                 if (igSelect) igSelect.innerHTML = '<option value="">Loading...</option>';
                 try {
-                    const result = await window.API.getPages(account.id);
+                    const result = await window.API.getAllPages();
                     const pages = result.pages || [];
                     if (pageSelect) pageSelect.innerHTML = '<option value="">Select Facebook Page</option>';
                     if (igSelect) igSelect.innerHTML = '<option value="">No Instagram linked</option>';
                     pages.forEach(page => {
+                        const pageBelongsToAccount = !page.accountId || page.accountId === account.id;
                         if (pageSelect) {
                             const opt = document.createElement('option');
                             opt.value = page.id;
-                            opt.textContent = page.name || page.id;
+                            opt.textContent = `${page.name || page.id} — ${page.accountLabel || 'Connected account'}${pageBelongsToAccount ? '' : ' (select matching ad account)'}`;
+                            opt.disabled = !pageBelongsToAccount;
                             pageSelect.appendChild(opt);
                         }
                         if (igSelect && page.instagram_business_account) {
@@ -451,16 +482,20 @@
                             const o = document.createElement('option');
                             o.value = ig.id;
                             o.textContent = `@${ig.username || ig.name || ig.id}`;
+                            o.disabled = !pageBelongsToAccount;
                             igSelect.appendChild(o);
                         }
                     });
+                    if (pageSelect) {
+                        const matchingPage = pages.find(page => page.id === account.pageId && page.accountId === account.id);
+                        pageSelect.value = matchingPage ? account.pageId : '';
+                    }
                     if (igSelect && account.instagramAccountId && igSelect.options.length <= 1) {
                         const o = document.createElement('option');
                         o.value = account.instagramAccountId;
                         o.textContent = `@${account.instagramUsername || account.instagramAccountId}`;
                         igSelect.appendChild(o);
                     }
-                    if (pageSelect && account.pageId) pageSelect.value = account.pageId;
                 } catch {
                     if (pageSelect) pageSelect.innerHTML = '<option value="">Could not load pages</option>';
                 }
@@ -631,106 +666,197 @@
             }
         },
 
-        // ── Media upload ─────────────────────────────────────────────────
-        handleMediaUpload: async function(file) {
-            if (!file) return;
-            const dropZone = document.getElementById('media-upload-zone');
-            const preview = document.getElementById('media-preview');
-            if (preview) {
-                if (file.type.startsWith('image/')) preview.innerHTML = `<img src="${URL.createObjectURL(file)}" style="max-width:100%; max-height:200px; border-radius:8px; margin-top:1rem;" />`;
-                else if (file.type.startsWith('video/')) preview.innerHTML = `<video src="${URL.createObjectURL(file)}" controls style="max-width:100%; max-height:200px; border-radius:8px; margin-top:1rem;"></video>`;
+        // ── Media and ad cards ─────────────────────────────────────────────
+        handleMediaUpload: async function(files, card = null) {
+            const selectedFiles = Array.isArray(files) ? files : [files];
+            if (!selectedFiles.length) return;
+            const uploaded = [];
+
+            for (const file of selectedFiles) {
+                const item = {
+                    mediaFile: file.name,
+                    previewUrl: URL.createObjectURL(file)
+                };
+                try {
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    const response = await window.API.uploadMedia(formData);
+                    item.media = response.filePath || response.filename;
+                } catch {
+                    item.media = file.name;
+                }
+                uploaded.push(item);
             }
-            if (dropZone) dropZone.innerHTML = `<i>✅</i><h4>${file.name}</h4><p>${(file.size/(1024*1024)).toFixed(2)} MB — Click to change</p>`;
-            try {
-                const formData = new FormData();
-                formData.append('file', file);
-                const response = await window.API.uploadMedia(formData);
-                this.campaignData.step3.media = response.filePath || response.filename;
-                this.campaignData.step3.mediaFile = file.name;
-                window.AppController.showToast('Media uploaded successfully! ✅', 'success');
-            } catch {
-                window.AppController.showToast('Media saved locally.', 'info');
-                this.campaignData.step3.media = file.name;
-                this.campaignData.step3.mediaFile = file.name;
+
+            if (card && uploaded[0]) {
+                card.setAttribute('data-media', uploaded[0].media);
+                card.setAttribute('data-media-file', uploaded[0].mediaFile);
+                this.setCreativePreview(card, uploaded[0]);
+                this.renumberCreativeAds();
+            } else {
+                const blankIndex = this.campaignData.step3.ads.findIndex(ad => !ad.media && !ad.mediaFile);
+                uploaded.forEach((item, index) => {
+                    if (index === 0 && blankIndex !== -1) {
+                        this.campaignData.step3.ads[blankIndex] = {
+                            ...this.campaignData.step3.ads[blankIndex],
+                            media: item.media,
+                            mediaFile: item.mediaFile,
+                            previewUrl: item.previewUrl
+                        };
+                    } else {
+                        this.addCreativeAd(item, false);
+                    }
+                });
+                this.renderCreativeAds();
             }
+
+            window.AppController.showToast(`${uploaded.length} media file${uploaded.length === 1 ? '' : 's'} added ✅`, 'success');
         },
 
-        // ── Variations ───────────────────────────────────────────────────
-        generateVariations: async function() {
-            const primaryText = document.getElementById('primary-text')?.value?.trim();
-            const num = parseInt(document.getElementById('num-variations')?.value) || 3;
-            if (!primaryText) { window.AppController.showToast('Please write base primary text first', 'warning'); return; }
-            const btn = document.getElementById('btn-generate-variations');
-            if (btn) { btn.disabled = true; btn.textContent = '🤖 Generating...'; }
-            try {
-                const response = await window.API.generateVariations({ primaryText, count: num });
-                const variations = response.variations || response || [];
-                this.campaignData.step3.variations = Array.isArray(variations) ? variations : [primaryText];
-                if (!this.campaignData.step3.variations.includes(primaryText)) this.campaignData.step3.variations.unshift(primaryText);
-                this.renderVariations();
-                window.AppController.showToast(`${this.campaignData.step3.variations.length} variations generated! 🎉`, 'success');
-            } catch (error) {
-                window.AppController.showToast('Gemini generation failed: ' + error.message, 'error');
-                this.campaignData.step3.variations = [primaryText];
-                this.renderVariations();
-            } finally {
-                if (btn) { btn.disabled = false; btn.textContent = '🤖 Generate Variations with Gemini'; }
-            }
+        addCreativeAd: function(media = {}, rerender = true) {
+            this.campaignData.step3.ads.push({
+                media: media.media || '',
+                mediaFile: media.mediaFile || '',
+                previewUrl: media.previewUrl || '',
+                primaryText: media.primaryText || ''
+            });
+            if (rerender) this.renderCreativeAds();
         },
 
-        addManualVariation: function() {
-            const container = document.getElementById('variations-container');
-            if (!container) return;
-            const ph = container.querySelector('p');
-            if (ph && !container.querySelector('.variation-card')) container.innerHTML = '';
-            const idx = container.querySelectorAll('.variation-card').length + 1;
-            const card = document.createElement('div');
-            card.className = 'glass-card variation-card mb-2';
-            card.style.background = 'rgba(0,0,0,0.2)';
-            card.innerHTML = `
-                <div class="flex justify-between align-center mb-1">
-                    <label style="font-weight:600; color:var(--accent-cyan);">Variation ${idx}</label>
-                    <button class="remove-card-btn" onclick="this.closest('.variation-card').remove()"><span>✖</span></button>
-                </div>
-                <textarea class="form-control" rows="3" placeholder="Write your ad copy variation here..."></textarea>
-            `;
-            container.appendChild(card);
+        removeCreativeAd: function(index) {
+            this.collectCreativeAdsFromDOM();
+            this.campaignData.step3.ads.splice(index, 1);
+            this.renderCreativeAds();
         },
 
-        renderVariations: function() {
-            const container = document.getElementById('variations-container');
+        renumberCreativeAds: function() {
+            const cards = document.querySelectorAll('.creative-ad-card');
+            const total = cards.length;
+            cards.forEach((card, index) => {
+                const label = card.querySelector('.creative-ad-name');
+                if (label) label.textContent = total === 1 ? 'Single content-Reel' : `Content-${index + 1} Reel`;
+            });
+        },
+
+        setCreativePreview: function(card, item) {
+            const preview = card.querySelector('.creative-media-preview');
+            if (!preview || !item.previewUrl) return;
+            const isVideo = /\.(mp4|mov|avi|webm)$/i.test(item.mediaFile || '');
+            preview.innerHTML = isVideo
+                ? `<video src="${item.previewUrl}" controls style="max-width:100%;max-height:160px;border-radius:8px;"></video>`
+                : `<img src="${item.previewUrl}" alt="${this.escapeHtml(item.mediaFile || 'Ad media')}" style="max-width:100%;max-height:160px;border-radius:8px;">`;
+        },
+
+        renderCreativeAds: function() {
+            const container = document.getElementById('creative-ads-container');
             if (!container) return;
             container.innerHTML = '';
-            this.campaignData.step3.variations.forEach((text, idx) => {
+            const total = this.campaignData.step3.ads.length;
+
+            this.campaignData.step3.ads.forEach((ad, index) => {
                 const card = document.createElement('div');
-                card.className = 'glass-card variation-card mb-2';
-                card.style.background = 'rgba(0,0,0,0.2)';
+                card.className = 'glass-card creative-ad-card mb-2';
+                card.setAttribute('data-index', index);
+                card.setAttribute('data-media', ad.media || '');
+                card.setAttribute('data-media-file', ad.mediaFile || '');
+                card.style.background = 'rgba(0,0,0,0.15)';
                 card.innerHTML = `
-                    <div class="flex justify-between align-center mb-1">
-                        <label style="font-weight:600; color:var(--accent-cyan);">Variation ${idx+1} ${idx===0 ? '(Original)' : ''}</label>
-                        <button class="remove-card-btn" onclick="this.closest('.variation-card').remove()"><span>✖</span></button>
+                    <div class="flex justify-between align-center mb-2">
+                        <h4 class="creative-ad-name" style="color:var(--accent-cyan);">${total === 1 ? 'Single content-Reel' : `Content-${index + 1} Reel`}</h4>
+                        <div class="flex gap-2">
+                            <label class="btn btn-secondary btn-sm" style="cursor:pointer;">📁 Change Media
+                                <input type="file" class="creative-media-input" accept="image/*,video/*" style="display:none;">
+                            </label>
+                            <button type="button" class="remove-card-btn creative-remove-ad"><span>✖</span></button>
+                        </div>
                     </div>
-                    <textarea class="form-control" rows="3">${typeof text === 'string' ? text : text.primaryText || ''}</textarea>
+                    <div class="creative-media-preview mb-2" style="min-height:${ad.mediaFile ? '0' : '30px'};">
+                        ${ad.mediaFile ? `<span style="color:var(--text-secondary);">📎 ${this.escapeHtml(ad.mediaFile)}</span>` : '<span style="color:var(--text-secondary);">No media selected yet</span>'}
+                    </div>
+                    <label>Primary Text *</label>
+                    <textarea class="form-control creative-primary-text" rows="7" placeholder="Use Auto-fill from Website or write the primary text here...">${this.escapeHtml(ad.primaryText || '')}</textarea>
                 `;
                 container.appendChild(card);
+                if (ad.previewUrl) this.setCreativePreview(card, ad);
+
+                card.querySelector('.creative-remove-ad').addEventListener('click', () => this.removeCreativeAd(index));
+                card.querySelector('.creative-media-input').addEventListener('change', e => {
+                    if (e.target.files[0]) this.handleMediaUpload([e.target.files[0]], card);
+                });
+                card.querySelector('.creative-primary-text').addEventListener('input', e => {
+                    this.campaignData.step3.ads[index].primaryText = e.target.value;
+                });
             });
+        },
+
+        escapeHtml: function(value) {
+            return String(value).replace(/[&<>"']/g, char => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
+            }[char]));
+        },
+
+        ensureCreativeCopyLoaded: function() {
+            const websiteUrl = document.getElementById('website-url')?.value?.trim();
+            if (websiteUrl && this._copyAutoFilledForUrl !== websiteUrl && this.campaignData.step3.ads.length > 0) {
+                this.autoFillCreativeCopy(true);
+            }
+        },
+
+        autoFillCreativeCopy: async function(silent = false) {
+            const websiteUrl = document.getElementById('website-url')?.value?.trim();
+            if (!websiteUrl) {
+                if (!silent) window.AppController.showToast('Please enter Website URL in Campaign Settings first', 'warning');
+                return;
+            }
+
+            const btn = document.getElementById('btn-auto-fill-copy');
+            if (btn) { btn.disabled = true; btn.textContent = '⏳ Reading website...'; }
+            try {
+                const result = await window.API.generateAdCopy({ websiteUrl });
+                const headline = document.getElementById('headline');
+                const description = document.getElementById('description');
+                if (headline && (!headline.value.trim() || headline.value === this._autoFilledCopy.headline)) {
+                    headline.value = result.productName || result.headline || '';
+                }
+                if (description && (!description.value.trim() || description.value === this._autoFilledCopy.description)) {
+                    description.value = result.description || '';
+                }
+
+                this.campaignData.step3.ads.forEach(ad => {
+                    if (!ad.primaryText.trim() || ad.primaryText === this._autoFilledCopy.primaryText) {
+                        ad.primaryText = result.primaryText || '';
+                    }
+                });
+                this.renderCreativeAds();
+                this._copyAutoFilledForUrl = websiteUrl;
+                this._autoFilledCopy = {
+                    headline: headline?.value || '',
+                    description: description?.value || '',
+                    primaryText: result.primaryText || ''
+                };
+                if (!silent) window.AppController.showToast('Headline and primary text auto-filled ✨', 'success');
+            } catch (error) {
+                if (!silent) window.AppController.showToast('Website/Gemini error: ' + error.message, 'error');
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = '🤖 Auto-fill from Website'; }
+            }
         },
 
         // ── Review ───────────────────────────────────────────────────────
         renderReviewSummary: function() {
-            this.collectVariationsFromDOM();
+            this.collectCreativeAdsFromDOM();
             const { step1, step2, step3 } = this.campaignData;
             const totalAdsets = step2.audiences?.length || 0;
-            const totalVariations = step3.variations?.length || 0;
+            const totalAds = step3.ads?.length || 0;
 
             const set = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; };
             set('review-campaign-name', `Name: <strong>${step1.name || '—'}</strong>`);
             set('review-campaign-objective', `Objective: <strong>${step1.objective || '—'}</strong>`);
             set('review-campaign-budget', `Budget: <strong>$${step1.budgetAmount || 0}/day (${step1.budgetType || 'CBO'})</strong>`);
             set('review-adsets-count', `Ad Sets: <strong>${totalAdsets}</strong>`);
-            set('review-variations-count', `Ads per Ad Set: <strong>${totalVariations}</strong>`);
+            set('review-variations-count', `Ads per Ad Set: <strong>${totalAds}</strong>`);
             const totalEl = document.getElementById('review-total-ads');
-            if (totalEl) totalEl.textContent = `Total Ads: ${totalAdsets * totalVariations}`;
+            if (totalEl) totalEl.textContent = `Total Ads: ${totalAdsets * totalAds}`;
 
             const detailContainer = document.getElementById('review-adsets-detail');
             if (detailContainer && step2.audiences) {
@@ -741,6 +867,9 @@
                     card.style.background = 'rgba(0,0,0,0.15)';
                     const locNames = (aud.locationsInclude || []).map(l => l.name || l.key || l).join(', ') || 'IN';
                     const excNames = (aud.locationsExclude || []).map(l => l.name || l.key || l).join(', ');
+                    const adNames = (step3.ads || []).map((ad, adIndex) =>
+                        totalAds === 1 ? 'Single content-Reel' : `Content-${adIndex + 1} Reel`
+                    ).join(', ');
                     card.innerHTML = `
                         <h4 style="color:var(--accent-cyan);">📋 Ad Set ${idx+1}: ${aud.name}</h4>
                         <div class="flex gap-2 mt-2" style="flex-wrap:wrap;">
@@ -749,6 +878,7 @@
                             <span class="badge badge-info">👤 ${aud.ageMin||18}–${aud.ageMax||65}</span>
                             <span class="badge badge-info">⚧ ${aud.gender||'All'}</span>
                             <span class="badge badge-info">🎯 ${(aud.interests||[]).map(i=>i.name||i).join(', ')||'Broad'}</span>
+                            <span class="badge badge-info">🖼️ ${adNames || 'No ads'}</span>
                         </div>
                     `;
                     detailContainer.appendChild(card);

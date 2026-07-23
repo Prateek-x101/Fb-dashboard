@@ -38,6 +38,7 @@
         fetchAccountsFromToken: (data) => API.request('/api/accounts/fetch-from-token', { method: 'POST', body: JSON.stringify(data) }),
         bulkAddAccounts: (data) => API.request('/api/accounts/bulk-add', { method: 'POST', body: JSON.stringify(data) }),
         fetchInstagram: (id) => API.request(`/api/accounts/${id}/fetch-instagram`, { method: 'POST' }),
+        getAllPages: () => API.request('/api/accounts/pages'),
         getPages: (id) => API.request(`/api/accounts/${id}/pages`),
         aiAudiences: (data) => API.request('/api/campaigns/ai-audiences', { method: 'POST', body: JSON.stringify(data) }),
 
@@ -53,6 +54,7 @@
         getCustomAudiences: (accountId) => API.request(`/api/campaigns/custom-audiences/${accountId}`),
         createCampaign: (data) => API.request('/api/campaigns/create', { method: 'POST', body: JSON.stringify(data) }),
         generateVariations: (data) => API.request('/api/campaigns/generate-variations', { method: 'POST', body: JSON.stringify(data) }),
+        generateAdCopy: (data) => API.request('/api/campaigns/generate-ad-copy', { method: 'POST', body: JSON.stringify(data) }),
         getRecentCampaigns: () => API.request('/api/campaigns/recent'),
 
         // Media

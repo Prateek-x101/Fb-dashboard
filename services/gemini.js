@@ -3,6 +3,56 @@ const fetch = require('node-fetch');
 const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 
 const geminiService = {
+    async generateAdCopy(apiKey, model, websiteUrl, websiteContent, productName) {
+        const url = `${BASE_URL}/models/${model || 'gemini-2.5-flash'}:generateContent?key=${apiKey}`;
+        const prompt = `You are an expert Facebook fashion ad copywriter.
+
+Create one Facebook ad copy for this product.
+
+Product name: ${productName || 'the product'}
+Website URL: ${websiteUrl}
+Website information:
+${websiteContent}
+
+Return ONLY valid JSON in this exact shape:
+{"headline":"Product name or a short product-focused headline","primaryText":"...","description":"Short supporting description"}
+
+Primary text rules:
+- Start with a strong benefit-led hook mentioning the product.
+- Use this structure: an opening sentence, a short benefit paragraph, exactly 4 lines beginning with ✔️, a use-cases sentence, a short punchy closing line, and a final CTA sentence.
+- Keep the tone premium, clear, and suitable for Indian fashion ecommerce.
+- Use a few relevant emojis, but do not overdo them.
+- Put the exact website URL as the final line by itself.
+- Do not use markdown headings, bullets other than the four ✔️ lines, or placeholder text.
+- Do not invent product claims that are not supported by the website information.`;
+
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            throw new Error(data.error ? data.error.message : 'Unknown Gemini API Error');
+        }
+
+        try {
+            const rawText = data.candidates[0].content.parts[0].text.trim();
+            const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+            if (!jsonMatch) throw new Error('No JSON object in response');
+            const result = JSON.parse(jsonMatch[0]);
+            if (!result.primaryText) throw new Error('Primary text missing');
+            validateAdCopy(result.primaryText, websiteUrl);
+            return {
+                headline: String(result.headline || productName || '').trim(),
+                primaryText: String(result.primaryText).trim(),
+                description: String(result.description || '').trim()
+            };
+        } catch (error) {
+            throw new Error('Failed to parse Gemini ad copy response: ' + error.message);
+        }
+    },
+
     async generateVariations(apiKey, model, baseText, count) {
         const url = `${BASE_URL}/models/${model || 'gemini-2.5-flash'}:generateContent?key=${apiKey}`;
         
@@ -103,5 +153,20 @@ Rules:
         return true;
     }
 };
+
+function validateAdCopy(primaryText, websiteUrl) {
+    const lines = String(primaryText)
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(Boolean);
+    const benefitLines = lines.filter(line => line.startsWith('✔️'));
+
+    if (benefitLines.length !== 4) {
+        throw new Error('Gemini returned invalid copy: expected exactly four ✔️ benefit lines.');
+    }
+    if (lines.length < 8 || lines[lines.length - 1] !== websiteUrl.trim()) {
+        throw new Error('Gemini returned invalid copy: the exact website URL must be the final line.');
+    }
+}
 
 module.exports = geminiService;

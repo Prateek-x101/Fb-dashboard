@@ -150,6 +150,36 @@ router.post('/bulk-add', async (req, res) => {
 });
 
 // Get Facebook Pages (with linked Instagram) for a stored account
+router.get('/pages', async (req, res) => {
+    try {
+        const storage = getStorage();
+        const accounts = storage.accounts || [];
+        const pageMap = new Map();
+        const errors = [];
+
+        await Promise.all(accounts.map(async account => {
+            if (!account.accessToken) return;
+            try {
+                const result = await facebookService.getConnectedInstagram(account.accessToken);
+                (result.data || []).forEach(page => {
+                    if (!page.id || pageMap.has(page.id)) return;
+                    pageMap.set(page.id, {
+                        ...page,
+                        accountId: account.id,
+                        accountLabel: account.label || account.name || account.accountId
+                    });
+                });
+            } catch (error) {
+                errors.push({ accountId: account.id, message: error.message });
+            }
+        }));
+
+        res.json({ pages: Array.from(pageMap.values()), errors });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch connected pages', details: error.message });
+    }
+});
+
 router.get('/:id/pages', async (req, res) => {
     try {
         const { id } = req.params;
