@@ -267,6 +267,10 @@
             
             grid.innerHTML = '';
             window.APP.accounts.forEach(acc => {
+                const igBadge = acc.instagramUsername
+                    ? `<span class="badge" style="background:linear-gradient(135deg,#833ab4,#fd1d1d,#fcb045); color:#fff;">📷 @${acc.instagramUsername}</span>`
+                    : `<span class="badge" style="background:rgba(255,255,255,0.08); color:var(--text-secondary);">📷 No Instagram</span>`;
+
                 const card = document.createElement('div');
                 card.className = 'glass-card';
                 card.innerHTML = `
@@ -274,16 +278,36 @@
                         <h3>${acc.label || acc.name || 'Unknown Account'}</h3>
                         <span class="badge badge-success">Active</span>
                     </div>
-                    <p class="mb-1">Account ID: <code style="color:var(--accent-cyan);">act_${acc.accountId || acc.id}</code></p>
-                    <p class="mb-1" style="font-size:0.8rem; color:var(--text-secondary);">Page ID: ${acc.pageId || 'Not set'}</p>
-                    <p class="mb-3" style="font-size:0.8rem; color:var(--text-secondary);">Token: <span style="color:var(--success);">${this.maskToken(acc.accessToken || acc.token)}</span></p>
-                    <div class="flex gap-2">
+                    <p class="mb-1">Ad Account: <code style="color:var(--accent-cyan);">act_${acc.accountId || acc.id}</code></p>
+                    <p class="mb-1" style="font-size:0.8rem; color:var(--text-secondary);">Page ID: ${acc.pageId || '<em>Not set</em>'}</p>
+                    <p class="mb-2" style="font-size:0.8rem; color:var(--text-secondary);">Token: <span style="color:var(--success);">${this.maskToken(acc.accessToken || acc.token)}</span></p>
+                    <div class="mb-3">${igBadge}</div>
+                    <div class="flex gap-2" style="flex-wrap:wrap;">
+                        <button class="btn btn-secondary btn-sm" style="flex:1" onclick="window.SettingsManager.fetchInstagram('${acc.id}')">📷 Fetch Instagram</button>
                         <button class="btn btn-secondary btn-sm" style="flex:1" onclick="window.SettingsManager.testAccountById('${acc.id}')">🧪 Test</button>
                         <button class="btn btn-danger btn-sm" style="flex:1" onclick="window.SettingsManager.deleteAccount('${acc.id}')">🗑️ Delete</button>
                     </div>
                 `;
                 grid.appendChild(card);
             });
+        },
+
+        fetchInstagram: async function(id) {
+            window.AppController.showToast('Fetching Instagram account...', 'info');
+            try {
+                const result = await window.API.fetchInstagram(id);
+                if (result.success) {
+                    const ig = result.instagram;
+                    window.AppController.showToast(`Instagram linked: @${ig.username || ig.name || ig.id} ✅`, 'success');
+                    const accountsData = await window.API.getAccounts();
+                    window.APP.accounts = accountsData || [];
+                    this.renderAccounts();
+                } else {
+                    window.AppController.showToast(result.message || 'No Instagram Business account found', 'warning');
+                }
+            } catch (error) {
+                window.AppController.showToast('Instagram fetch failed: ' + error.message, 'error');
+            }
         },
 
         maskToken: function(token) {

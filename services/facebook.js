@@ -95,6 +95,19 @@ const facebookService = {
         return handleResponse(response);
     },
 
+    async getInstagramFromPage(pageId, token) {
+        const url = `${BASE_URL}/${pageId}?fields=instagram_business_account{id,name,username,profile_picture_url}&access_token=${token}`;
+        const response = await fetch(url, { method: 'GET' });
+        return handleResponse(response);
+    },
+
+    async getConnectedInstagram(token) {
+        // Get all pages linked to this token and their Instagram accounts
+        const url = `${BASE_URL}/me/accounts?fields=id,name,instagram_business_account{id,name,username}&access_token=${token}`;
+        const response = await fetch(url, { method: 'GET' });
+        return handleResponse(response);
+    },
+
     async testConnection(accountId, token) {
         const url = `${BASE_URL}/act_${accountId}?access_token=${token}`;
         const response = await fetch(url, { method: 'GET' });

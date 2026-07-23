@@ -23,12 +23,19 @@ function saveStorage(data) {
 router.get('/pixels/:accountId', async (req, res) => {
     try {
         const { accountId } = req.params;
-        const token = req.query.token; // Or get from storage
-        
+        let token = req.query.token;
+
+        // Auto-lookup token from storage when not provided
+        if (!token) {
+            const storage = getStorage();
+            const account = (storage.accounts || []).find(a => a.accountId === accountId);
+            if (account) token = account.accessToken;
+        }
+
         if (!token) return res.status(400).json({ error: 'Missing token' });
-        
+
         const result = await facebookService.getPixels(accountId, token);
-        res.json(result);
+        res.json(result.data || []);
     } catch (error) {
         res.status(500).json({ error: 'Failed to get pixels', details: error.message });
     }
@@ -36,11 +43,21 @@ router.get('/pixels/:accountId', async (req, res) => {
 
 router.get('/interests', async (req, res) => {
     try {
-        const { q, token } = req.query;
-        if (!q || !token) return res.status(400).json({ error: 'Missing query or token' });
-        
+        const { q } = req.query;
+        let token = req.query.token;
+
+        // Auto-lookup token from first available account
+        if (!token) {
+            const storage = getStorage();
+            const first = (storage.accounts || [])[0];
+            if (first) token = first.accessToken;
+        }
+
+        if (!q) return res.status(400).json({ error: 'Missing query' });
+        if (!token) return res.status(400).json({ error: 'No account token available' });
+
         const result = await facebookService.searchInterests(q, token);
-        res.json(result);
+        res.json(result.data || []);
     } catch (error) {
         res.status(500).json({ error: 'Failed to search interests', details: error.message });
     }
@@ -48,7 +65,8 @@ router.get('/interests', async (req, res) => {
 
 router.post('/generate-variations', async (req, res) => {
     try {
-        const { baseText, count } = req.body;
+        const { primaryText, baseText, count } = req.body;
+        const textToUse = primaryText || baseText;
         const storage = getStorage();
         const settings = storage.settings || {};
         
@@ -59,7 +77,7 @@ router.post('/generate-variations', async (req, res) => {
         const variations = await geminiService.generateVariations(
             settings.geminiApiKey,
             settings.geminiModel,
-            baseText,
+            textToUse,
             count || 3
         );
         

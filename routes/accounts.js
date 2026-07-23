@@ -149,6 +149,60 @@ router.post('/bulk-add', async (req, res) => {
     }
 });
 
+// Fetch and save Instagram account linked to a stored account
+router.post('/:id/fetch-instagram', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const storage = getStorage();
+        const accountIndex = (storage.accounts || []).findIndex(a => a.id === id);
+
+        if (accountIndex === -1) {
+            return res.status(404).json({ error: 'Account not found' });
+        }
+
+        const account = storage.accounts[accountIndex];
+        const token = account.accessToken;
+        let instagramData = null;
+
+        // Try pageId first
+        if (account.pageId) {
+            try {
+                const result = await facebookService.getInstagramFromPage(account.pageId, token);
+                if (result.instagram_business_account) {
+                    instagramData = result.instagram_business_account;
+                }
+            } catch (e) { /* fall through */ }
+        }
+
+        // Fallback: scan all pages linked to this token
+        if (!instagramData) {
+            try {
+                const pagesResult = await facebookService.getConnectedInstagram(token);
+                for (const page of (pagesResult.data || [])) {
+                    if (page.instagram_business_account) {
+                        instagramData = page.instagram_business_account;
+                        if (!storage.accounts[accountIndex].pageId) {
+                            storage.accounts[accountIndex].pageId = page.id;
+                        }
+                        break;
+                    }
+                }
+            } catch (e) { /* fall through */ }
+        }
+
+        if (instagramData) {
+            storage.accounts[accountIndex].instagramAccountId = instagramData.id;
+            storage.accounts[accountIndex].instagramUsername = instagramData.username || instagramData.name || instagramData.id;
+            saveStorage(storage);
+            res.json({ success: true, instagram: instagramData, account: storage.accounts[accountIndex] });
+        } else {
+            res.json({ success: false, message: 'No Instagram Business account linked to this Facebook Page' });
+        }
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch Instagram', details: error.message });
+    }
+});
+
 // Test connection with new credentials (before saving)
 router.post('/test-connection', async (req, res) => {
     try {
