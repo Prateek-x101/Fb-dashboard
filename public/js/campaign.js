@@ -11,6 +11,7 @@
 
         init: function() {
             this.bindEvents();
+            this.setDefaultDateTime();
             document.addEventListener('appReady', () => {
                 this.populateAccountSelect();
                 this.updateAudienceCards();
@@ -18,6 +19,16 @@
             document.addEventListener('accountChanged', (e) => {
                 this.handleAccountChange(e.detail);
             });
+        },
+
+        setDefaultDateTime: function() {
+            const startInput = document.getElementById('schedule-start');
+            if (startInput && !startInput.value) {
+                const now = new Date();
+                const pad = n => String(n).padStart(2, '0');
+                const formatted = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+                startInput.value = formatted;
+            }
         },
 
         bindEvents: function() {

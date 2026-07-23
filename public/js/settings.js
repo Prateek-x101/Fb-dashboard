@@ -133,7 +133,7 @@
                 await window.API.testGemini({ apiKey, model });
                 window.AppController.showToast('Gemini connection successful! ✅', 'success');
             } catch (error) {
-                window.AppController.showToast('Gemini test failed: ' + error.message, 'error');
+                window.AppController.showToast('❌ ' + error.message, 'error');
             } finally {
                 if (btn) { btn.disabled = false; btn.textContent = '🧪 Test Gemini Connection'; }
             }

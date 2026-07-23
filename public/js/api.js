@@ -20,7 +20,7 @@
                 }
 
                 if (!response.ok) {
-                    throw new Error(data.message || data.error || data || `HTTP error! status: ${response.status}`);
+                    throw new Error(data.details || data.message || data.error || `HTTP error! status: ${response.status}`);
                 }
                 return data;
             } catch (error) {
