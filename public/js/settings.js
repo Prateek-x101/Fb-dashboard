@@ -200,7 +200,7 @@
                     facebookAppId: document.getElementById('setting-app-id')?.value || '',
                     facebookAppSecret: document.getElementById('setting-app-secret')?.value || '',
                     geminiApiKey: document.getElementById('setting-gemini-key')?.value || '',
-                    geminiModel: document.getElementById('setting-gemini-model')?.value || 'gemini-2.5-flash',
+                    geminiModel: document.getElementById('setting-gemini-model')?.value || 'gemini-2.0-flash',
                     defaultExcludedLocations
                 };
 
@@ -220,7 +220,7 @@
 
             try {
                 const apiKey = document.getElementById('setting-gemini-key')?.value?.trim();
-                const model = document.getElementById('setting-gemini-model')?.value || 'gemini-2.5-flash';
+                const model = document.getElementById('setting-gemini-model')?.value || 'gemini-2.0-flash';
                 if (!apiKey) {
                     window.AppController.showToast('Please enter a Gemini API key first', 'warning');
                     return;

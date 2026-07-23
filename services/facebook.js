@@ -102,10 +102,21 @@ const facebookService = {
     },
 
     async getConnectedInstagram(token) {
-        // Get all pages linked to this token and their Instagram accounts
-        const url = `${BASE_URL}/me/accounts?fields=id,name,instagram_business_account{id,name,username}&access_token=${token}`;
-        const response = await fetch(url, { method: 'GET' });
-        return handleResponse(response);
+        // Get every Page linked to this token, not only the first Graph API page.
+        const fields = encodeURIComponent('id,name,instagram_business_account{id,name,username}');
+        let nextUrl = `${BASE_URL}/me/accounts?fields=${fields}&limit=100&access_token=${token}`;
+        const pages = [];
+        let paging = null;
+
+        for (let requestCount = 0; nextUrl && requestCount < 20; requestCount++) {
+            const response = await fetch(nextUrl, { method: 'GET' });
+            const result = await handleResponse(response);
+            pages.push(...(result.data || []));
+            paging = result.paging || null;
+            nextUrl = paging && paging.next ? paging.next : null;
+        }
+
+        return { data: pages, paging };
     },
 
     async searchLocations(query, token) {

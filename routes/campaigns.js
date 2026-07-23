@@ -216,9 +216,18 @@ router.post('/create', async (req, res) => {
             return res.status(400).json({ error: 'Facebook Page is required.' });
         }
         const connectedPages = await facebookService.getConnectedInstagram(token);
-        const pageIsConnected = (connectedPages.data || []).some(page => String(page.id) === String(selectedPageId));
-        if (!pageIsConnected) {
+        const selectedPage = (connectedPages.data || []).find(page => String(page.id) === String(selectedPageId));
+        if (!selectedPage) {
             return res.status(400).json({ error: 'Selected Facebook Page is not connected to the selected ad account.' });
+        }
+        const linkedInstagramId = selectedPage.instagram_business_account?.id
+            ? String(selectedPage.instagram_business_account.id)
+            : '';
+        const requestedInstagramId = step3.instagramId ? String(step3.instagramId) : '';
+        if (requestedInstagramId && requestedInstagramId !== linkedInstagramId) {
+            return res.status(400).json({
+                error: 'The selected Instagram account is not linked to the selected Facebook Page.'
+            });
         }
 
         const creativeAds = normalizeCreativeAds(step3);
@@ -226,7 +235,26 @@ router.post('/create', async (req, res) => {
             return res.status(400).json({ error: 'Every ad must have an uploaded media file.' });
         }
 
-        // ── 1. Create Campaign ──────────────────────────────────────────
+        // ── 1. Upload and validate every media asset before creating anything ──
+        const uploadedMedia = [];
+        for (const ad of creativeAds) {
+            let imageHash = null;
+            let videoId = null;
+            const ext = path.extname(ad.media).toLowerCase();
+            if (['.mp4', '.mov', '.avi', '.webm'].includes(ext)) {
+                const videoRes = await facebookService.uploadVideo(accountId, token, ad.media);
+                videoId = videoRes.id || null;
+                if (!videoId) throw new Error(`Facebook did not return a video ID for ${ad.name}.`);
+            } else {
+                const imageRes = await facebookService.uploadImage(accountId, token, ad.media);
+                const firstKey = Object.keys(imageRes.images || {})[0];
+                imageHash = firstKey ? imageRes.images[firstKey].hash : null;
+                if (!imageHash) throw new Error(`Facebook did not return an image hash for ${ad.name}.`);
+            }
+            uploadedMedia.push({ ...ad, imageHash, videoId });
+        }
+
+        // ── 2. Create Campaign only after all media is valid ──────────────
         const isCBO = campaign.budgetType === 'CBO';
         const campaignParams = {
             name: campaign.name,
@@ -241,29 +269,6 @@ router.post('/create', async (req, res) => {
         }
         const campaignResponse = await facebookService.createCampaign(accountId, token, campaignParams);
         const campaignId = campaignResponse.id;
-
-        // ── 2. Normalize and upload each ad's media ──────────────────────
-        const uploadedMedia = [];
-        for (const ad of creativeAds) {
-            let imageHash = null;
-            let videoId = null;
-            if (ad.media) {
-                const ext = path.extname(ad.media).toLowerCase();
-                try {
-                    if (['.mp4', '.mov', '.avi', '.webm'].includes(ext)) {
-                        const videoRes = await facebookService.uploadVideo(accountId, token, ad.media);
-                        videoId = videoRes.id;
-                    } else {
-                        const imageRes = await facebookService.uploadImage(accountId, token, ad.media);
-                        const firstKey = Object.keys(imageRes.images || {})[0];
-                        if (firstKey) imageHash = imageRes.images[firstKey].hash;
-                    }
-                } catch (mediaErr) {
-                    console.warn(`Media upload failed for ${ad.name}, continuing without media:`, mediaErr.message);
-                }
-            }
-            uploadedMedia.push({ ...ad, imageHash, videoId });
-        }
 
         const results = { campaignId, adsets: [], ads: [] };
         const pageId = selectedPageId;
@@ -355,8 +360,8 @@ router.post('/create', async (req, res) => {
                     };
                     delete creativeParams.object_story_spec.link_data;
                 }
-                if (step3.instagramId) {
-                    creativeParams.object_story_spec.instagram_actor_id = step3.instagramId;
+                if (linkedInstagramId) {
+                    creativeParams.object_story_spec.instagram_actor_id = linkedInstagramId;
                 }
 
                 const creativeResponse = await facebookService.createAdCreative(accountId, token, creativeParams);

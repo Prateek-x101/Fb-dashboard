@@ -28,6 +28,9 @@ const DEFAULT_EXCLUDED_LOCATIONS = [
     'Pondicherry'
 ].map(name => ({ key: '', name, type: 'region' }));
 
+const DEFAULT_GEMINI_MODEL = 'gemini-2.0-flash';
+const OBSOLETE_GEMINI_MODELS = new Set(['gemini-2.5-flash', 'gemini-2.5-pro']);
+
 function getStorage() {
     if (fs.existsSync(storagePath)) {
         const data = fs.readFileSync(storagePath, 'utf8');
@@ -43,8 +46,10 @@ function saveStorage(data) {
 router.get('/', (req, res) => {
     try {
         const storage = getStorage();
+        const configuredModel = storage.settings?.geminiModel;
         res.json({
             ...storage.settings,
+            geminiModel: OBSOLETE_GEMINI_MODELS.has(configuredModel) ? DEFAULT_GEMINI_MODEL : (configuredModel || DEFAULT_GEMINI_MODEL),
             defaultExcludedLocations: storage.settings?.defaultExcludedLocations || DEFAULT_EXCLUDED_LOCATIONS
         });
     } catch (error) {
@@ -57,7 +62,9 @@ router.post('/', (req, res) => {
         const updates = req.body;
         const storage = getStorage();
         
-        storage.settings = { ...storage.settings, ...updates };
+        const safeUpdates = { ...updates };
+        if (OBSOLETE_GEMINI_MODELS.has(safeUpdates.geminiModel)) safeUpdates.geminiModel = DEFAULT_GEMINI_MODEL;
+        storage.settings = { ...storage.settings, ...safeUpdates };
         saveStorage(storage);
         
         res.json({ success: true, settings: storage.settings });

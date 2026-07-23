@@ -1,10 +1,16 @@
 const fetch = require('node-fetch');
 
 const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
+const DEFAULT_MODEL = 'gemini-2.0-flash';
+const OBSOLETE_MODELS = new Set(['gemini-2.5-flash', 'gemini-2.5-pro']);
+
+function normalizeModel(model) {
+    return !model || OBSOLETE_MODELS.has(model) ? DEFAULT_MODEL : model;
+}
 
 const geminiService = {
     async generateAdCopy(apiKey, model, websiteUrl, websiteContent, productName) {
-        const url = `${BASE_URL}/models/${model || 'gemini-2.5-flash'}:generateContent?key=${apiKey}`;
+        const url = `${BASE_URL}/models/${normalizeModel(model)}:generateContent?key=${apiKey}`;
         const prompt = `You are an expert Facebook fashion ad copywriter.
 
 Create one Facebook ad copy for this product.
@@ -54,7 +60,7 @@ Primary text rules:
     },
 
     async generateVariations(apiKey, model, baseText, count) {
-        const url = `${BASE_URL}/models/${model || 'gemini-2.5-flash'}:generateContent?key=${apiKey}`;
+        const url = `${BASE_URL}/models/${normalizeModel(model)}:generateContent?key=${apiKey}`;
         
         const prompt = `You are an expert Facebook ad copywriter. Create ${count} unique variations of the following ad primary text.
 
@@ -92,7 +98,7 @@ ${baseText}`;
     },
 
     async generateAudiences(apiKey, model, websiteContent, numAudiences, alreadyUsedKeywords) {
-        const url = `${BASE_URL}/models/${model || 'gemini-2.5-flash'}:generateContent?key=${apiKey}`;
+        const url = `${BASE_URL}/models/${normalizeModel(model)}:generateContent?key=${apiKey}`;
 
         const usedList = alreadyUsedKeywords && alreadyUsedKeywords.length > 0
             ? `\nKeywords already used in other audiences — DO NOT repeat any of these: ${alreadyUsedKeywords.join(', ')}`
@@ -137,7 +143,7 @@ Rules:
     },
 
     async testConnection(apiKey, model) {
-        const url = `${BASE_URL}/models/${model || 'gemini-2.5-flash'}:generateContent?key=${apiKey}`;
+        const url = `${BASE_URL}/models/${normalizeModel(model)}:generateContent?key=${apiKey}`;
         const response = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

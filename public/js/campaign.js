@@ -469,11 +469,12 @@
                     if (pageSelect) pageSelect.innerHTML = '<option value="">Select Facebook Page</option>';
                     if (igSelect) igSelect.innerHTML = '<option value="">No Instagram linked</option>';
                     pages.forEach(page => {
-                        const pageBelongsToAccount = !page.accountId || page.accountId === account.id;
+                        const pageBelongsToAccount = !page.accountIds || page.accountIds.includes(account.id) || page.accountId === account.id;
                         if (pageSelect) {
                             const opt = document.createElement('option');
                             opt.value = page.id;
-                            opt.textContent = `${page.name || page.id} — ${page.accountLabel || 'Connected account'}${pageBelongsToAccount ? '' : ' (select matching ad account)'}`;
+                            const accountNames = (page.accountLabels || [page.accountLabel || 'Connected account']).join(', ');
+                            opt.textContent = `${page.name || page.id} — ${accountNames}${pageBelongsToAccount ? '' : ' (select matching ad account)'}`;
                             opt.disabled = !pageBelongsToAccount;
                             pageSelect.appendChild(opt);
                         }
@@ -487,14 +488,11 @@
                         }
                     });
                     if (pageSelect) {
-                        const matchingPage = pages.find(page => page.id === account.pageId && page.accountId === account.id);
+                        const matchingPage = pages.find(page =>
+                            page.id === account.pageId &&
+                            ((!page.accountIds && page.accountId === account.id) || page.accountIds?.includes(account.id))
+                        );
                         pageSelect.value = matchingPage ? account.pageId : '';
-                    }
-                    if (igSelect && account.instagramAccountId && igSelect.options.length <= 1) {
-                        const o = document.createElement('option');
-                        o.value = account.instagramAccountId;
-                        o.textContent = `@${account.instagramUsername || account.instagramAccountId}`;
-                        igSelect.appendChild(o);
                     }
                 } catch {
                     if (pageSelect) pageSelect.innerHTML = '<option value="">Could not load pages</option>';

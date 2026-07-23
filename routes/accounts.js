@@ -162,11 +162,20 @@ router.get('/pages', async (req, res) => {
             try {
                 const result = await facebookService.getConnectedInstagram(account.accessToken);
                 (result.data || []).forEach(page => {
-                    if (!page.id || pageMap.has(page.id)) return;
+                    if (!page.id) return;
+                    const existing = pageMap.get(page.id);
+                    const accountLabel = account.label || account.name || account.accountId;
+                    if (existing) {
+                        if (!existing.accountIds.includes(account.id)) existing.accountIds.push(account.id);
+                        if (!existing.accountLabels.includes(accountLabel)) existing.accountLabels.push(accountLabel);
+                        return;
+                    }
                     pageMap.set(page.id, {
                         ...page,
                         accountId: account.id,
-                        accountLabel: account.label || account.name || account.accountId
+                        accountIds: [account.id],
+                        accountLabel,
+                        accountLabels: [accountLabel]
                     });
                 });
             } catch (error) {
