@@ -260,6 +260,9 @@ router.post('/create', async (req, res) => {
             name: campaign.name,
             objective: campaign.objective || 'OUTCOME_SALES',
             status: 'PAUSED',
+            // Meta now requires this flag on campaign creation. CBO shares
+            // the budget at campaign level; ABO keeps budgets on each ad set.
+            is_adset_budget_sharing_enabled: isCBO,
             special_ad_categories: campaign.specialAdCategory && campaign.specialAdCategory !== 'NONE'
                 ? [campaign.specialAdCategory] : []
         };
@@ -349,6 +352,7 @@ router.post('/create', async (req, res) => {
             };
             if (!isCBO) {
                 adsetParams.daily_budget = Math.round(campaign.budgetAmount * 100);
+                adsetParams.bid_strategy = 'LOWEST_COST_WITHOUT_CAP';
             }
             if (campaign.scheduleEnd) adsetParams.end_time = new Date(campaign.scheduleEnd).toISOString();
 
