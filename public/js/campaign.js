@@ -921,6 +921,39 @@
             }
         },
 
+        extractHeadlineName: function(title) {
+            if (!title) return '';
+            
+            // 1. Remove all emojis
+            let clean = title.replace(/[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDC00-\uDFFF]/g, '');
+            
+            // 2. Remove common promotional keywords
+            const promoWords = [
+                'limited-time', 'limited time', 'sale', 'off', 'subsidy', 'discount', 'free shipping', 'shipping', 'new', 
+                'hot', 'deal', 'promo', 'exclusive', 'special', 'best', 'quality', 'price', 'low', 'cheap', 'click', 
+                'buy', 'shop', 'order', 'gift', 'coupon', 'code', 'save', 'saving', 'percent', 'percentage', 'original',
+                'luxury', 'premium', 'trending', 'viral', 'top', 'rated', 'review', 'guarantee', 'warranty', 'ship',
+                'subsidies', 'limited', 'time', 'heat', 'summer'
+            ];
+            
+            // Replace numbers followed by % off (e.g. 56% off, 50%off)
+            clean = clean.replace(/\d+\s*%?\s*off/g, '');
+            
+            // Split into words
+            let words = clean.split(/\s+/).filter(Boolean);
+            
+            // Filter words
+            let filtered = words.filter(w => {
+                const lower = w.replace(/[^a-zA-Z]/g, '').toLowerCase();
+                return !promoWords.includes(lower);
+            });
+            
+            if (filtered.length === 0) filtered = words;
+            
+            // Keep up to 8 words for a clean but descriptive headline name
+            return filtered.slice(0, 8).join(' ').trim();
+        },
+
         autoFillCreativeCopy: async function(silent = false) {
             const websiteUrl = document.getElementById('website-url')?.value?.trim();
             if (!websiteUrl) {
@@ -934,8 +967,10 @@
                 const result = await window.API.generateAdCopy({ websiteUrl });
                 const headline = document.getElementById('headline');
                 const description = document.getElementById('description');
+                
+                const cleanHeadline = this.extractHeadlineName(result.productName || result.headline || '');
                 if (headline && (!headline.value.trim() || headline.value === this._autoFilledCopy.headline)) {
-                    headline.value = result.productName || result.headline || '';
+                    headline.value = cleanHeadline;
                 }
                 if (description && (!description.value.trim() || description.value === this._autoFilledCopy.description)) {
                     description.value = result.description || '';
@@ -1351,7 +1386,7 @@
             if (statusDiv) statusDiv.style.display = 'none';
         },
 
-        startCampaignWizardWithData: function(campaignName, url) {
+        startCampaignWizardWithData: function(campaignName, url, productTitle) {
             this.resetWizard();
             
             const nameInput = document.getElementById('campaign-name');
@@ -1359,6 +1394,14 @@
             
             const urlInput = document.getElementById('website-url');
             if (urlInput) urlInput.value = url;
+
+            // Pre-fill clean headline if productTitle is provided
+            if (productTitle) {
+                const headlineInput = document.getElementById('headline');
+                if (headlineInput) {
+                    headlineInput.value = this.extractHeadlineName(productTitle);
+                }
+            }
 
             // Set CBO/ABO settings based on campaignName suffix
             const isABO = campaignName.endsWith('ABO');

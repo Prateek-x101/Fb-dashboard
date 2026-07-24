@@ -38,6 +38,17 @@
         },
 
         loginWithFacebookPopup: function() {
+            const btnLoginFb = document.getElementById('btn-login-facebook');
+            if (btnLoginFb) {
+                if (btnLoginFb.disabled) return;
+                btnLoginFb.disabled = true;
+                btnLoginFb.textContent = '⏳ Connecting...';
+                setTimeout(() => {
+                    btnLoginFb.disabled = false;
+                    btnLoginFb.textContent = '🔵 Login with Facebook';
+                }, 5000);
+            }
+
             const width = 600;
             const height = 650;
             const left = (window.screen.width - width) / 2;

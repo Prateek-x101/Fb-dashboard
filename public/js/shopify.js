@@ -240,7 +240,7 @@
                             const campaignName = `${shortName} (${skuPrefix} ${dateStr}-${personName || 'User'}) ${cleanBudget}`;
                             
                             // Initialize campaign wizard with data
-                            window.CampaignWizard.startCampaignWizardWithData(campaignName, result.productUrl);
+                            window.CampaignWizard.startCampaignWizardWithData(campaignName, result.productUrl, result.title);
                             
                             // Navigate to Create Campaign section
                             const navItem = document.querySelector('.nav-item[data-section="section-campaign"]');
