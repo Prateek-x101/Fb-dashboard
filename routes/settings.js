@@ -5,7 +5,6 @@ const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const geminiService = require('../services/gemini');
 
-const storagePath = path.join(__dirname, '..', 'config', 'storage.local.json');
 
 const DEFAULT_EXCLUDED_LOCATIONS = [
     'Andaman and Nicobar Islands',
@@ -32,17 +31,7 @@ const DEFAULT_EXCLUDED_LOCATIONS = [
 const DEFAULT_GEMINI_MODEL = 'gemini-1.5-flash';
 const OBSOLETE_GEMINI_MODELS = new Set();
 
-function getStorage() {
-    if (fs.existsSync(storagePath)) {
-        const data = fs.readFileSync(storagePath, 'utf8');
-        return JSON.parse(data);
-    }
-    return { accounts: [], settings: {}, recentCampaigns: [] };
-}
-
-function saveStorage(data) {
-    fs.writeFileSync(storagePath, JSON.stringify(data, null, 2), 'utf8');
-}
+const { getStorage, saveStorage } = require('../services/storage');
 
 router.get('/', (req, res) => {
     try {
