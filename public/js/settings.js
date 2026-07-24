@@ -116,16 +116,24 @@
             // Add Account button
             const btnAddAcc = document.getElementById('btn-add-account');
             if (btnAddAcc) {
-                btnAddAcc.addEventListener('click', () => {
-                    const form = document.getElementById('account-form');
-                    if (form) form.reset();
-                    const hiddenIdInput = document.getElementById('edit-account-id-internal');
-                    if (hiddenIdInput) hiddenIdInput.value = '';
-                    const titleEl = document.getElementById('modal-account-title');
-                    if (titleEl) titleEl.textContent = '➕ Add Facebook Ad Account';
-                    const idInput = document.getElementById('account-id');
-                    if (idInput) idInput.disabled = false;
-                    window.AppController.openModal('modal-add-account');
+                btnAddAcc.addEventListener('click', async () => {
+                    // Try to find a saved token from existing accounts
+                    let savedToken = '';
+                    if (Array.isArray(this.accounts) && this.accounts.length > 0) {
+                        savedToken = this.accounts[0].accessToken;
+                    }
+                    
+                    if (savedToken) {
+                        // We have a saved token! Fetch accounts from this token and open selection modal
+                        document.getElementById('token-step-1').style.display = 'none';
+                        document.getElementById('token-step-2').style.display = 'block';
+                        window.AppController.openModal('modal-token-connect');
+                        await this.loadAccountsForToken(savedToken);
+                    } else {
+                        // No saved token. Prompt user to connect first
+                        window.AppController.showToast('No saved Facebook connection found. Launching Facebook Login...', 'info');
+                        this.loginWithFacebookPopup();
+                    }
                 });
             }
 
@@ -368,14 +376,23 @@
                 if (listEl) {
                     listEl.innerHTML = '';
                     accounts.forEach((acc, i) => {
+                        const isAdded = Array.isArray(this.accounts) && this.accounts.some(savedAcc => savedAcc.accountId === acc.account_id);
                         const statusLabel = acc.account_status === 1 ? '🟢 Active' : '🔴 Inactive';
+                        const badgeHtml = isAdded 
+                            ? `<span style="margin-left:auto; background:#2ec4b6; font-size:0.65rem; padding:0.15rem 0.4rem; border-radius:4px; color:#fff; font-weight:600;">Added</span>` 
+                            : '';
+                        const checkedAttribute = isAdded ? 'checked' : '';
+                        
                         const row = document.createElement('label');
                         row.style.cssText = 'display:flex; align-items:center; gap:0.75rem; padding:0.75rem; border-radius:8px; cursor:pointer; border:1px solid var(--glass-border); margin-bottom:0.5rem; background:rgba(255,255,255,0.03);';
                         row.innerHTML = `
-                            <input type="checkbox" class="fetched-acc-checkbox" data-index="${i}" checked style="width:16px;height:16px;accent-color:var(--accent-blue);">
-                            <div style="flex:1;">
-                                <div style="font-weight:600;">${acc.name || 'Unnamed Account'}</div>
-                                <div style="font-size:0.78rem; color:var(--text-secondary);">ID: act_${acc.account_id} &nbsp;|&nbsp; ${statusLabel}</div>
+                            <input type="checkbox" class="fetched-acc-checkbox" data-index="${i}" ${checkedAttribute} style="width:16px;height:16px;accent-color:var(--accent-blue);">
+                            <div style="flex:1; display:flex; align-items:center; justify-content:space-between; width:100%;">
+                                <div>
+                                    <div style="font-weight:600;">${acc.name || 'Unnamed Account'}</div>
+                                    <div style="font-size:0.78rem; color:var(--text-secondary);">ID: act_${acc.account_id} &nbsp;|&nbsp; ${statusLabel}</div>
+                                </div>
+                                ${badgeHtml}
                             </div>
                         `;
                         listEl.appendChild(row);
@@ -413,35 +430,62 @@
         },
 
         addSelectedAccounts: async function() {
-            const checkboxes = document.querySelectorAll('.fetched-acc-checkbox:checked');
-            if (checkboxes.length === 0) {
-                window.AppController.showToast('Please select at least one account', 'warning');
-                return;
-            }
+            const checkboxes = document.querySelectorAll('.fetched-acc-checkbox');
+            const selectedAccountsToAdd = [];
+            const accountsToRemove = [];
 
-            const selectedAccounts = [];
             checkboxes.forEach(cb => {
                 const idx = parseInt(cb.getAttribute('data-index'));
-                if (this._fetchedAccounts && this._fetchedAccounts[idx]) {
-                    selectedAccounts.push(this._fetchedAccounts[idx]);
+                const acc = this._fetchedAccounts[idx];
+                if (!acc) return;
+
+                const isChecked = cb.checked;
+                const existing = Array.isArray(this.accounts) ? this.accounts.find(a => a.accountId === acc.account_id) : null;
+
+                if (isChecked) {
+                    if (!existing) {
+                        selectedAccountsToAdd.push(acc);
+                    }
+                } else {
+                    if (existing) {
+                        accountsToRemove.push(existing);
+                    }
                 }
             });
 
             const pageId = document.getElementById('token-page-id')?.value?.trim() || '';
-
             const btn = document.getElementById('btn-add-selected-accounts');
-            if (btn) { btn.disabled = true; btn.textContent = '⏳ Adding...'; }
+            if (btn) { btn.disabled = true; btn.textContent = '⏳ Syncing...'; }
 
             try {
-                const result = await window.API.bulkAddAccounts({
-                    accounts: selectedAccounts,
-                    accessToken: this._fetchedToken,
-                    pageId
-                });
+                // 1. Remove unchecked accounts
+                for (const acc of accountsToRemove) {
+                    await window.API.deleteAccount(acc.id);
+                }
 
-                const msg = result.skipped > 0
-                    ? `${result.added.length} account(s) added, ${result.skipped} already existed ✅`
-                    : `${result.added.length} account(s) added successfully! ✅`;
+                // 2. Add checked accounts
+                let result = { added: [], skipped: 0 };
+                if (selectedAccountsToAdd.length > 0) {
+                    result = await window.API.bulkAddAccounts({
+                        accounts: selectedAccountsToAdd,
+                        accessToken: this._fetchedToken,
+                        pageId
+                    });
+                }
+
+                const addedCount = result.added ? result.added.length : 0;
+                const removedCount = accountsToRemove.length;
+
+                let msg = '';
+                if (addedCount > 0 && removedCount > 0) {
+                    msg = `Synced successfully! Added ${addedCount}, Removed ${removedCount} account(s) ✅`;
+                } else if (addedCount > 0) {
+                    msg = `Added ${addedCount} account(s) successfully! ✅`;
+                } else if (removedCount > 0) {
+                    msg = `Removed ${removedCount} account(s) successfully! ✅`;
+                } else {
+                    msg = `Accounts synced! No changes made.`;
+                }
 
                 window.AppController.showToast(msg, 'success');
                 window.AppController.closeModal('modal-token-connect');
@@ -449,6 +493,7 @@
                 // Refresh everything
                 const accountsData = await window.API.getAccounts();
                 window.APP.accounts = accountsData || [];
+                this.accounts = accountsData || [];
                 this.renderAccounts();
                 window.AppController.updateAccountSelector();
                 window.AppController.updateDashboardStats();
@@ -459,6 +504,10 @@
                     window.APP.activeAccount = window.APP.accounts[0];
                     const sel = document.getElementById('sidebar-account-select');
                     if (sel) sel.value = window.APP.activeAccount.id;
+                } else if (window.APP.accounts.length === 0) {
+                    window.APP.activeAccount = null;
+                    const sel = document.getElementById('sidebar-account-select');
+                    if (sel) sel.value = '';
                 }
 
             } catch (error) {
