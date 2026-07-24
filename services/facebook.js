@@ -2,7 +2,7 @@ const fetch = require('node-fetch');
 const FormData = require('form-data');
 const fs = require('fs');
 
-const BASE_URL = 'https://graph.facebook.com/v19.0';
+const BASE_URL = 'https://graph.facebook.com/v25.0';
 
 async function handleResponse(response) {
     const data = await response.json();

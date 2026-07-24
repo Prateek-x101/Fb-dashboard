@@ -208,7 +208,7 @@ router.post('/ai-audiences', async (req, res) => {
                     const name = typeof interestName === 'string' ? interestName : interestName.name;
                     if (!name) continue;
                     try {
-                        const searchUrl = `https://graph.facebook.com/v19.0/search?type=adinterest&q=${encodeURIComponent(name)}&access_token=${token}`;
+                        const searchUrl = `https://graph.facebook.com/v25.0/search?type=adinterest&q=${encodeURIComponent(name)}&access_token=${token}`;
                         const searchRes = await fetchSafeExternal(searchUrl);
                         if (searchRes.ok) {
                             const searchData = await searchRes.json();
@@ -216,7 +216,7 @@ router.post('/ai-audiences', async (req, res) => {
                                 // Pick exact match first, fallback to first result
                                 const match = searchData.data.find(d => d.name.toLowerCase() === name.toLowerCase()) || searchData.data[0];
                                 // Validate: try a lightweight targeting validation call
-                                const validateUrl = `https://graph.facebook.com/v19.0/act_${activeAccount.accountId}/targeting_validation?targeting_spec=${encodeURIComponent(JSON.stringify({ flexible_spec: [{ interests: [{ id: match.id, name: match.name }] }] }))}&access_token=${token}`;
+                                const validateUrl = `https://graph.facebook.com/v25.0/act_${activeAccount.accountId}/targeting_validation?targeting_spec=${encodeURIComponent(JSON.stringify({ flexible_spec: [{ interests: [{ id: match.id, name: match.name }] }] }))}&access_token=${token}`;
                                 const valRes = await fetch(validateUrl);
                                 if (valRes.ok) {
                                     const valData = await valRes.json();
@@ -345,7 +345,7 @@ router.post('/create', async (req, res) => {
         // Auto-detect offline event dataset ID from recent ads of the ad account
         let offlineDatasetId = null;
         try {
-            const adsUrl = `https://graph.facebook.com/v19.0/act_${accountId}/ads?fields=tracking_specs&limit=10&access_token=${token}`;
+            const adsUrl = `https://graph.facebook.com/v25.0/act_${accountId}/ads?fields=tracking_specs&limit=10&access_token=${token}`;
             const adsRes = await fetch(adsUrl);
             const adsData = await adsRes.json();
             if (adsData.data && adsData.data.length > 0) {
@@ -539,7 +539,7 @@ router.post('/create', async (req, res) => {
             // Validate custom audiences - remove any that don't belong to this ad account
             const getAccountAudienceIds = async () => {
                 const audienceIds = new Set();
-                let url = `https://graph.facebook.com/v19.0/act_${accountId}/customaudiences?fields=id&limit=500&access_token=${token}`;
+                let url = `https://graph.facebook.com/v25.0/act_${accountId}/customaudiences?fields=id&limit=500&access_token=${token}`;
                 try {
                     while (url) {
                         const res = await fetch(url);
