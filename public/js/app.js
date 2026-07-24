@@ -162,9 +162,100 @@
 
         loadInitialData: async function() {
             try {
-                // Load accounts
-                const accountsData = await API.getAccounts();
-                window.APP.accounts = accountsData || [];
+                // 1. Fetch current settings from server
+                let serverSettings = {};
+                try {
+                    serverSettings = await API.getSettings();
+                } catch (e) {
+                    console.warn('Settings load failed:', e.message);
+                }
+
+                // 2. Fetch ad accounts from server
+                let serverAccounts = [];
+                try {
+                    serverAccounts = await API.getAccounts();
+                } catch (e) {
+                    console.warn('Accounts load failed:', e.message);
+                }
+
+                // 3. Fetch Shopify stores from server
+                let serverStores = [];
+                try {
+                    serverStores = await API.getShopifyStores();
+                } catch (e) {
+                    console.warn('Shopify stores load failed:', e.message);
+                }
+
+                // --- SELF HEALING LOCALSTORAGE RESTORE LOGIC ---
+                let restored = false;
+
+                // Restoring Settings
+                const localSettings = JSON.parse(localStorage.getItem('fb_dashboard_settings') || '{}');
+                if ((!serverSettings || !serverSettings.geminiApiKey) && localSettings && localSettings.geminiApiKey) {
+                    console.log('Restoring settings from localStorage backup...');
+                    await API.saveSettings(localSettings);
+                    serverSettings = localSettings;
+                    restored = true;
+                }
+
+                // Restoring Ad Accounts
+                const localAccounts = JSON.parse(localStorage.getItem('fb_dashboard_accounts') || '[]');
+                if ((!serverAccounts || serverAccounts.length === 0) && localAccounts && localAccounts.length > 0) {
+                    console.log('Restoring ad accounts from localStorage backup...');
+                    for (const acc of localAccounts) {
+                        try {
+                            await API.addAccount({
+                                label: acc.label || acc.name,
+                                accountId: acc.accountId,
+                                accessToken: acc.accessToken,
+                                pageId: acc.pageId
+                            });
+                        } catch (accErr) {
+                            console.error('Failed to restore account:', acc.accountId, accErr.message);
+                        }
+                    }
+                    serverAccounts = await API.getAccounts();
+                    restored = true;
+                }
+
+                // Restoring Shopify Stores
+                const localStores = JSON.parse(localStorage.getItem('fb_dashboard_shopify_stores') || '[]');
+                if ((!serverStores || serverStores.length === 0) && localStores && localStores.length > 0) {
+                    console.log('Restoring Shopify stores from localStorage backup...');
+                    for (const store of localStores) {
+                        try {
+                            await API.addShopifyStore({
+                                name: store.shopName || store.name,
+                                shopUrl: store.shopUrl,
+                                accessToken: store.accessToken
+                            });
+                        } catch (storeErr) {
+                            console.error('Failed to restore shopify store:', store.shopUrl, storeErr.message);
+                        }
+                    }
+                    serverStores = await API.getShopifyStores();
+                    restored = true;
+                }
+
+                if (restored) {
+                    this.showToast('Dashboard connection restored from browser backup! 🔌✨', 'success');
+                }
+
+                // --- UPDATE CLIENT LOCALSTORAGE BACKUP ---
+                if (serverSettings && serverSettings.geminiApiKey) {
+                    localStorage.setItem('fb_dashboard_settings', JSON.stringify(serverSettings));
+                }
+                if (serverAccounts && serverAccounts.length > 0) {
+                    localStorage.setItem('fb_dashboard_accounts', JSON.stringify(serverAccounts));
+                }
+                if (serverStores && serverStores.length > 0) {
+                    localStorage.setItem('fb_dashboard_shopify_stores', JSON.stringify(serverStores));
+                }
+
+                // 4. Save to app memory and update UI
+                window.APP.accounts = serverAccounts || [];
+                window.APP.settings = serverSettings || {};
+                
                 this.updateAccountSelector();
                 this.updateDashboardStats();
                 
@@ -176,18 +267,10 @@
                     }
                 }
 
-                // Load settings
-                try {
-                    const settings = await API.getSettings();
-                    window.APP.settings = settings || {};
-                } catch(e) {
-                    console.log('Settings not loaded yet');
-                }
-
                 // Load recent campaigns
                 await this.loadRecentCampaigns();
             } catch (error) {
-                console.log('Initial data load:', error.message);
+                console.error('Initial data load error:', error.message);
             }
         },
 

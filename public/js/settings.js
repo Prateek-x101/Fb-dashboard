@@ -320,6 +320,7 @@
 
                 await window.API.saveSettings(data);
                 window.APP.settings = { ...window.APP.settings, ...data };
+                localStorage.setItem('fb_dashboard_settings', JSON.stringify(window.APP.settings));
                 window.AppController.showToast('Settings saved successfully! ✅', 'success');
             } catch (error) {
                 window.AppController.showToast('Failed to save settings: ' + error.message, 'error');
@@ -784,6 +785,9 @@
                 const res = await window.API.addShopifyStore({ name, shopUrl, accessToken });
                 window.AppController.showToast('Shopify store saved successfully! ✅', 'success');
                 
+                // Back up to localStorage
+                localStorage.setItem('fb_dashboard_shopify_stores', JSON.stringify(res.shopifyStores || []));
+
                 // Clear fields
                 nameEl.value = '';
                 urlEl.value = '';
@@ -805,6 +809,10 @@
                 try {
                     const res = await window.API.deleteShopifyStore(id);
                     window.AppController.showToast('Shopify store deleted', 'success');
+                    
+                    // Back up to localStorage
+                    localStorage.setItem('fb_dashboard_shopify_stores', JSON.stringify(res.shopifyStores || []));
+
                     this.renderShopifyStores(res.shopifyStores || []);
                     
                     // Reload select dropdown
