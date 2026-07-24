@@ -11,10 +11,10 @@ const DEFAULT_EXCLUDED_LOCATIONS = [
     'Andhra Pradesh',
     'Arunachal Pradesh',
     'Assam',
-    'Bihar - India',
+    'Bihar',
     'Chhattisgarh',
     'Daman and Diu',
-    'Jammu and Kashmir - India',
+    'Jammu and Kashmir',
     'Jharkhand',
     'Manipur',
     'Meghalaya',
@@ -25,7 +25,7 @@ const DEFAULT_EXCLUDED_LOCATIONS = [
     'Telangana',
     'Tripura',
     'Uttar Pradesh',
-    'Pondicherry'
+    'Puducherry'
 ].map(name => ({ key: '', name, type: 'region' }));
 
 const DEFAULT_GEMINI_MODEL = 'gemini-1.5-flash';
