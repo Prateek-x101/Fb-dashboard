@@ -1359,6 +1359,16 @@
             
             const urlInput = document.getElementById('website-url');
             if (urlInput) urlInput.value = url;
+
+            // Set CBO/ABO settings based on campaignName suffix
+            const isABO = campaignName.endsWith('ABO');
+            const aboRadio = document.getElementById('budget-type-abo');
+            const cboRadio = document.getElementById('budget-type-cbo');
+            if (isABO && aboRadio) {
+                aboRadio.checked = true;
+            } else if (cboRadio) {
+                cboRadio.checked = true;
+            }
             
             this.updateStepUI();
             this.renderReviewSummary();

@@ -19,6 +19,37 @@ function saveStorage(data) {
     fs.writeFileSync(storagePath, JSON.stringify(data, null, 2), 'utf8');
 }
 
+function generateCleanHandle(title) {
+    if (!title) return '';
+    
+    // Remove all emojis and non-alphanumeric chars
+    let clean = title.replace(/[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDC00-\uDFFF]/g, '');
+    clean = clean.toLowerCase();
+    
+    // Remove common promotional keywords
+    const promoWords = [
+        'limited-time', 'limited time', 'sale', 'off', 'subsidy', 'discount', 'free shipping', 'shipping', 'new', 
+        'hot', 'deal', 'promo', 'exclusive', 'special', 'best', 'quality', 'price', 'low', 'cheap', 'click', 
+        'buy', 'shop', 'order', 'gift', 'coupon', 'code', 'save', 'saving', 'percent', 'percentage', 'original',
+        'luxury', 'premium', 'trending', 'viral', 'top', 'rated', 'review', 'guarantee', 'warranty', 'ship',
+        'subsidies', 'limited', 'time', 'heat', 'summer'
+    ];
+    
+    // Replace numbers followed by % off (e.g. 56% off, 50%off)
+    clean = clean.replace(/\d+\s*%?\s*off/g, '');
+    
+    let words = clean.split(/\s+/);
+    words = words.filter(w => {
+        const cleanW = w.replace(/[^a-z0-9]/g, '');
+        if (!cleanW) return false;
+        return !promoWords.includes(cleanW) && cleanW.length > 2;
+    });
+
+    // Keep 3 to 5 words for a concise, meaningful handle
+    const meaningfulWords = words.slice(0, 5).join('-');
+    return meaningfulWords.replace(/[^a-z0-9-]/g, '').replace(/-+/g, '-').replace(/^-|-$/g, '');
+}
+
 // 1. Get all shopify stores
 router.get('/stores', (req, res) => {
     try {
@@ -213,6 +244,27 @@ router.post('/import', async (req, res) => {
 
         console.log(`Starting Shopify product import to ${store.shopUrl} for "${product.title}"`);
 
+        // Fetch shop details early to get the primary custom domain (e.g. www.sassyclothes.co.in) and store name
+        let actualDomain = store.shopUrl;
+        let shopName = store.shopName || "Scraped Product";
+        try {
+            const shopUrl = `https://${store.shopUrl}/admin/api/2024-04/shop.json`;
+            const shopRes = await fetch(shopUrl, {
+                headers: {
+                    'X-Shopify-Access-Token': store.accessToken
+                }
+            });
+            if (shopRes.ok) {
+                const shopData = await shopRes.json();
+                if (shopData.shop) {
+                    if (shopData.shop.domain) actualDomain = shopData.shop.domain;
+                    if (shopData.shop.name) shopName = shopData.shop.name;
+                }
+            }
+        } catch (shopErr) {
+            console.error('Failed to fetch shop details from Shopify:', shopErr.message);
+        }
+
         // Formulate options
         const options = (product.options || []).map(opt => ({
             name: opt.name,
@@ -243,18 +295,19 @@ router.post('/import', async (req, res) => {
             return { src };
         });
 
-        // Create product payload
+        // Create product payload with clean handle and store vendor name
         const productPayload = {
             product: {
                 title: product.title,
                 body_html: product.description,
-                vendor: product.vendor || "Scraped Product",
+                vendor: shopName,
                 product_type: product.type || "",
                 tags: Array.isArray(product.tags) ? product.tags.join(",") : (product.tags || ""),
                 images: images,
                 variants: variants,
                 options: options,
-                status: "active"
+                status: "active",
+                handle: generateCleanHandle(product.title)
             }
         };
 
@@ -347,25 +400,6 @@ router.post('/import', async (req, res) => {
                     console.error(`Failed to associate product with collection ${collId}:`, collectErr.message);
                 }
             }
-        }
-
-        // Fetch shop details to get the primary custom domain (e.g. www.sassyclothes.co.in)
-        let actualDomain = store.shopUrl;
-        try {
-            const shopUrl = `https://${store.shopUrl}/admin/api/2024-04/shop.json`;
-            const shopRes = await fetch(shopUrl, {
-                headers: {
-                    'X-Shopify-Access-Token': store.accessToken
-                }
-            });
-            if (shopRes.ok) {
-                const shopData = await shopRes.json();
-                if (shopData.shop && shopData.shop.domain) {
-                    actualDomain = shopData.shop.domain;
-                }
-            }
-        } catch (shopErr) {
-            console.error('Failed to fetch shop domain from Shopify:', shopErr.message);
         }
 
         const productUrl = `https://${actualDomain}/products/${createdProduct.handle}`;

@@ -209,11 +209,37 @@
                     const btnCreateAd = document.getElementById('btn-modal-create-ad');
                     if (btnCreateAd) {
                         btnCreateAd.addEventListener('click', () => {
+                            // Ask user for Person Name and budget choice
+                            const defaultPerson = localStorage.getItem('last_person_name') || '';
+                            const personName = prompt("Enter Person Name for Campaign (e.g. Prateek):", defaultPerson);
+                            if (personName === null) return; // user cancelled
+                            
+                            const budgetChoice = prompt("Enter Budget Type (ABO or CBO):", "CBO");
+                            if (budgetChoice === null) return; // user cancelled
+                            const cleanBudget = budgetChoice.toUpperCase().trim() === 'ABO' ? 'ABO' : 'CBO';
+                            
+                            if (personName) {
+                                localStorage.setItem('last_person_name', personName);
+                            }
+                            
                             // Close modal
                             window.AppController.closeModal('modal-result');
                             
+                            // Extract 2-4 short words from the product title
+                            const shortName = ShopifyImporter.extractShortProductName(result.title);
+                            
+                            // Format current date as DD-MM-YYYY
+                            const now = new Date();
+                            const pad = n => String(n).padStart(2, '0');
+                            const dateStr = `${pad(now.getDate())}-${pad(now.getMonth()+1)}-${now.getFullYear()}`;
+                            
+                            // Get SKU prefix
+                            const skuPrefix = document.getElementById('shopify-sku-prefix')?.value?.trim() || 'GTS';
+                            
+                            // Format campaign name: Baseball Cap (GTS 24-07-2026-Prateek) ABO
+                            const campaignName = `${shortName} (${skuPrefix} ${dateStr}-${personName || 'User'}) ${cleanBudget}`;
+                            
                             // Initialize campaign wizard with data
-                            const campaignName = `Sales Campaign - ${result.title}`;
                             window.CampaignWizard.startCampaignWizardWithData(campaignName, result.productUrl);
                             
                             // Navigate to Create Campaign section
@@ -228,6 +254,36 @@
                 btnImport.disabled = false;
                 btnImport.textContent = '🚀 Start Auto-Import Listing';
             }
+        },
+
+        extractShortProductName: function(title) {
+            if (!title) return 'Product';
+            
+            // Remove all emojis and special characters
+            let clean = title.replace(/[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDC00-\uDFFF]/g, '');
+            clean = clean.replace(/[^a-zA-Z0-9\s]/g, ' ');
+            
+            // Common promotional and generic keywords to filter
+            const promoWords = [
+                'limited-time', 'limited time', 'sale', 'off', 'subsidy', 'discount', 'free shipping', 'shipping', 'new', 
+                'hot', 'deal', 'promo', 'exclusive', 'special', 'best', 'quality', 'price', 'low', 'cheap', 'click', 
+                'buy', 'shop', 'order', 'gift', 'coupon', 'code', 'save', 'saving', 'percent', 'percentage', 'original',
+                'luxury', 'premium', 'trending', 'viral', 'top', 'rated', 'review', 'guarantee', 'warranty', 'ship',
+                'subsidies', 'limited', 'time', 'heat', 'summer', 'rechargeable', 'led', 'glasses', 'solar', 'fan',
+                'with', 'and', 'the', 'for'
+            ];
+            
+            let words = clean.split(/\s+/).filter(Boolean);
+            let filtered = words.filter(w => {
+                const lower = w.toLowerCase();
+                return !promoWords.includes(lower) && !/^\d+%?$/.test(w) && lower.length > 2;
+            });
+            
+            // Fallback to original words if everything gets filtered
+            if (filtered.length === 0) filtered = words;
+            
+            // Pick 2 to 4 words
+            return filtered.slice(0, 3).join(' ');
         },
 
         escapeHtml: function(value) {
