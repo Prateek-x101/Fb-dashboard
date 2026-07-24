@@ -72,6 +72,7 @@
                 
                 if (token) {
                     clearInterval(pollInterval);
+                    if (localStorage.getItem('fb_auth_handled')) return;
                     localStorage.setItem('fb_auth_handled', 'true');
                     localStorage.removeItem('fb_auth_token');
                     setTimeout(() => localStorage.removeItem('fb_auth_handled'), 2000);
@@ -83,6 +84,7 @@
                     await this.loadAccountsForToken(token);
                 } else if (error) {
                     clearInterval(pollInterval);
+                    if (localStorage.getItem('fb_auth_handled')) return;
                     localStorage.setItem('fb_auth_handled', 'true');
                     localStorage.removeItem('fb_auth_error');
                     setTimeout(() => localStorage.removeItem('fb_auth_handled'), 2000);

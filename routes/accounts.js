@@ -284,7 +284,12 @@ router.get('/auth/facebook', (req, res) => {
             `);
         }
         
-        const redirectUri = `${req.protocol}://${req.get('host')}/api/accounts/auth/facebook/callback`;
+        let protocol = req.protocol;
+        const host = req.get('host') || '';
+        if (!host.includes('localhost') && !host.includes('127.0.0.1')) {
+            protocol = 'https';
+        }
+        const redirectUri = `${protocol}://${host}/api/accounts/auth/facebook/callback`;
         const authUrl = `https://www.facebook.com/v21.0/dialog/oauth?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=ads_management,ads_read,pages_read_engagement,pages_show_list,instagram_basic`;
         res.redirect(authUrl);
     } catch (error) {
@@ -350,7 +355,12 @@ router.get('/auth/facebook/callback', async (req, res) => {
             `);
         }
         
-        const redirectUri = `${req.protocol}://${req.get('host')}/api/accounts/auth/facebook/callback`;
+        let protocol = req.protocol;
+        const host = req.get('host') || '';
+        if (!host.includes('localhost') && !host.includes('127.0.0.1')) {
+            protocol = 'https';
+        }
+        const redirectUri = `${protocol}://${host}/api/accounts/auth/facebook/callback`;
         
         // Exchange code for short-lived token
         const shortLivedData = await facebookService.getAccessTokenFromCode(appId, appSecret, code, redirectUri);
