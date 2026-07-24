@@ -6,6 +6,7 @@ const { v4: uuidv4 } = require('uuid');
 const facebookService = require('../services/facebook');
 
 const { getStorage, saveStorage } = require('../services/storage');
+const oauthCache = new Map();
 
 router.get('/', (req, res) => {
     try {
@@ -362,13 +363,32 @@ router.get('/auth/facebook/callback', async (req, res) => {
         }
         const redirectUri = `${protocol}://${host}/api/accounts/auth/facebook/callback`;
         
-        // Exchange code for short-lived token
-        const shortLivedData = await facebookService.getAccessTokenFromCode(appId, appSecret, code, redirectUri);
-        const shortToken = shortLivedData.access_token;
+        // Exchange code for token with request deduplication to prevent double request failure
+        if (!oauthCache.has(code)) {
+            const exchangePromise = (async () => {
+                try {
+                    // Exchange code for short-lived token
+                    const shortLivedData = await facebookService.getAccessTokenFromCode(appId, appSecret, code, redirectUri);
+                    const shortToken = shortLivedData.access_token;
+                    
+                    // Exchange short-lived token for long-lived token
+                    const longLivedData = await facebookService.getLongLivedToken(appId, appSecret, shortToken);
+                    return { token: longLivedData.access_token };
+                } catch (err) {
+                    return { error: err.message };
+                }
+            })();
+            oauthCache.set(code, exchangePromise);
+            // Evict from cache after 2 minutes
+            setTimeout(() => oauthCache.delete(code), 120000);
+        }
+
+        const exchangeResult = await oauthCache.get(code);
+        if (exchangeResult.error) {
+            throw new Error(exchangeResult.error);
+        }
         
-        // Exchange short-lived token for long-lived token
-        const longLivedData = await facebookService.getLongLivedToken(appId, appSecret, shortToken);
-        const longToken = longLivedData.access_token;
+        const longToken = exchangeResult.token;
         
         res.send(`
             <html>
