@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const fs = require('fs');
 const path = require('path');
+const { v4: uuidv4 } = require('uuid');
 const geminiService = require('../services/gemini');
 
 const storagePath = path.join(__dirname, '..', 'config', 'storage.local.json');
@@ -28,8 +29,8 @@ const DEFAULT_EXCLUDED_LOCATIONS = [
     'Pondicherry'
 ].map(name => ({ key: '', name, type: 'region' }));
 
-const DEFAULT_GEMINI_MODEL = 'gemini-2.0-flash';
-const OBSOLETE_GEMINI_MODELS = new Set(['gemini-2.5-flash', 'gemini-2.5-pro']);
+const DEFAULT_GEMINI_MODEL = 'gemini-1.5-flash';
+const OBSOLETE_GEMINI_MODELS = new Set();
 
 function getStorage() {
     if (fs.existsSync(storagePath)) {
@@ -85,6 +86,54 @@ router.post('/test-gemini', async (req, res) => {
         res.json({ success: true, message: 'Connection successful' });
     } catch (error) {
         res.status(500).json({ error: 'Gemini test failed', details: error.message });
+    }
+});
+
+// Saved Audiences endpoints
+router.get('/saved-audiences', (req, res) => {
+    try {
+        const storage = getStorage();
+        res.json(storage.savedAudiences || []);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to read saved audiences', details: error.message });
+    }
+});
+
+router.post('/saved-audiences', (req, res) => {
+    try {
+        const { name, targeting } = req.body;
+        if (!name || !targeting) {
+            return res.status(400).json({ error: 'Name and targeting data are required' });
+        }
+        const storage = getStorage();
+        if (!storage.savedAudiences) storage.savedAudiences = [];
+        
+        // Remove duplicate name if exists
+        storage.savedAudiences = storage.savedAudiences.filter(a => a.name !== name);
+        
+        storage.savedAudiences.push({
+            id: uuidv4(),
+            name,
+            targeting,
+            createdAt: new Date().toISOString()
+        });
+        saveStorage(storage);
+        res.json({ success: true, savedAudiences: storage.savedAudiences });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to save audience', details: error.message });
+    }
+});
+
+router.delete('/saved-audiences/:id', (req, res) => {
+    try {
+        const { id } = req.params;
+        const storage = getStorage();
+        if (!storage.savedAudiences) storage.savedAudiences = [];
+        storage.savedAudiences = storage.savedAudiences.filter(a => a.id !== id && a.name !== id);
+        saveStorage(storage);
+        res.json({ success: true, savedAudiences: storage.savedAudiences });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to delete saved audience', details: error.message });
     }
 });
 

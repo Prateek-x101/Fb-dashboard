@@ -87,7 +87,19 @@
                 console.error('API Error on /api/media/upload:', error);
                 throw error;
             }
-        }
+        },
+        
+        // Saved Audiences
+        getSavedAudiences: () => API.request('/api/settings/saved-audiences'),
+        saveSavedAudience: (data) => API.request('/api/settings/saved-audiences', { method: 'POST', body: JSON.stringify(data) }),
+        deleteSavedAudience: (id) => API.request(`/api/settings/saved-audiences/${id}`, { method: 'DELETE' }),
+
+        // Shopify Importer
+        getShopifyStores: () => API.request('/api/shopify/stores'),
+        addShopifyStore: (data) => API.request('/api/shopify/stores', { method: 'POST', body: JSON.stringify(data) }),
+        deleteShopifyStore: (id) => API.request(`/api/shopify/stores/${id}`, { method: 'DELETE' }),
+        scrapeShopifyProduct: (url, storeId) => API.request(`/api/shopify/scrape?url=${encodeURIComponent(url)}&storeId=${storeId}`),
+        importShopifyProduct: (data) => API.request('/api/shopify/import', { method: 'POST', body: JSON.stringify(data) })
     };
 
     window.API = API;

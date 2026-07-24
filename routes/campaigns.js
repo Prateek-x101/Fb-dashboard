@@ -22,6 +22,56 @@ function saveStorage(data) {
     fs.writeFileSync(storagePath, JSON.stringify(data, null, 2), 'utf8');
 }
 
+function appendUtmParams(url) {
+    if (!url) return url;
+    const utmStr = 'utm_medium={{ad.name}}&utm_campaign={{campaign.name}}&utm_content={{adset.name}}';
+    if (url.includes('utm_medium=')) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}${utmStr}`;
+}
+
+function parseIsoDate(dateString) {
+    if (!dateString) return undefined;
+    if (dateString instanceof Date) return dateString.toISOString();
+    let str = String(dateString).trim();
+    if (!str) return undefined;
+
+    let d = new Date(str);
+    if (!isNaN(d.getTime())) {
+        return d.toISOString();
+    }
+
+    // Try converting 12-hour format "11:55 PM" or "2026-07-24 11:55 PM" or "2026-07-24T11:55 PM"
+    const regex12 = /^(\d{4}[-/]\d{1,2}[-/]\d{1,2})[\sT]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)$/i;
+    const match12 = str.match(regex12);
+    if (match12) {
+        let [_, datePart, hoursStr, minsStr, secsStr, ampm] = match12;
+        let hours = parseInt(hoursStr, 10);
+        const mins = parseInt(minsStr, 10);
+        const secs = secsStr ? parseInt(secsStr, 10) : 0;
+        if (ampm.toUpperCase() === 'PM' && hours < 12) hours += 12;
+        if (ampm.toUpperCase() === 'AM' && hours === 12) hours = 0;
+        const normalized = `${datePart.replace(/\//g, '-')}T${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+        d = new Date(normalized);
+        if (!isNaN(d.getTime())) return d.toISOString();
+    }
+
+    // Handle 24-hour format with space instead of T: "2026-07-24 23:55"
+    const regex24 = /^(\d{4}[-/]\d{1,2}[-/]\d{1,2})[\sT]+(\d{1,2}):(\d{2})(?::(\d{2}))?$/;
+    const match24 = str.match(regex24);
+    if (match24) {
+        let [_, datePart, hoursStr, minsStr, secsStr] = match24;
+        const hours = parseInt(hoursStr, 10);
+        const mins = parseInt(minsStr, 10);
+        const secs = secsStr ? parseInt(secsStr, 10) : 0;
+        const normalized = `${datePart.replace(/\//g, '-')}T${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+        d = new Date(normalized);
+        if (!isNaN(d.getTime())) return d.toISOString();
+    }
+
+    return undefined;
+}
+
 router.get('/locations', async (req, res) => {
     try {
         const { q } = req.query;
@@ -30,6 +80,7 @@ router.get('/locations', async (req, res) => {
             const storage = getStorage();
             const first = (storage.accounts || [])[0];
             if (first) token = first.accessToken;
+            if (!token && storage.settings?.facebookAccessToken) token = storage.settings.facebookAccessToken;
         }
         if (!q) return res.status(400).json({ error: 'Missing query' });
         if (!token) return res.status(400).json({ error: 'No account token available' });
@@ -48,6 +99,7 @@ router.get('/custom-audiences/:accountId', async (req, res) => {
             const storage = getStorage();
             const account = (storage.accounts || []).find(a => a.accountId === accountId);
             if (account) token = account.accessToken;
+            if (!token && storage.settings?.facebookAccessToken) token = storage.settings.facebookAccessToken;
         }
         if (!token) return res.status(400).json({ error: 'Missing token' });
         const result = await facebookService.getCustomAudiences(accountId, token);
@@ -67,6 +119,7 @@ router.get('/pixels/:accountId', async (req, res) => {
             const storage = getStorage();
             const account = (storage.accounts || []).find(a => a.accountId === accountId);
             if (account) token = account.accessToken;
+            if (!token && storage.settings?.facebookAccessToken) token = storage.settings.facebookAccessToken;
         }
 
         if (!token) return res.status(400).json({ error: 'Missing token' });
@@ -88,6 +141,7 @@ router.get('/interests', async (req, res) => {
             const storage = getStorage();
             const first = (storage.accounts || [])[0];
             if (first) token = first.accessToken;
+            if (!token && storage.settings?.facebookAccessToken) token = storage.settings.facebookAccessToken;
         }
 
         if (!q) return res.status(400).json({ error: 'Missing query' });
@@ -140,6 +194,54 @@ router.post('/ai-audiences', async (req, res) => {
             numAudiences || 3,
             alreadyUsed || []
         );
+
+        // Validate every Gemini-suggested interest against Facebook's ad interest search API
+        // Only keep interests that Facebook confirms as valid targeting options
+        const activeAccount = (storage.accounts || []).find(a => a.accountId) || {};
+        const token = activeAccount.accessToken || settings.facebookAccessToken;
+
+        if (token) {
+            for (const aud of audiences) {
+                if (!aud.interests || !Array.isArray(aud.interests)) continue;
+                const validatedInterests = [];
+                for (const interestName of aud.interests) {
+                    const name = typeof interestName === 'string' ? interestName : interestName.name;
+                    if (!name) continue;
+                    try {
+                        const searchUrl = `https://graph.facebook.com/v21.0/search?type=adinterest&q=${encodeURIComponent(name)}&access_token=${token}`;
+                        const searchRes = await fetchSafeExternal(searchUrl);
+                        if (searchRes.ok) {
+                            const searchData = await searchRes.json();
+                            if (searchData.data && searchData.data.length > 0) {
+                                // Pick exact match first, fallback to first result
+                                const match = searchData.data.find(d => d.name.toLowerCase() === name.toLowerCase()) || searchData.data[0];
+                                // Validate: try a lightweight targeting validation call
+                                const validateUrl = `https://graph.facebook.com/v21.0/act_${activeAccount.accountId}/targeting_validation?targeting_spec=${encodeURIComponent(JSON.stringify({ flexible_spec: [{ interests: [{ id: match.id, name: match.name }] }] }))}&access_token=${token}`;
+                                const valRes = await fetch(validateUrl);
+                                if (valRes.ok) {
+                                    const valData = await valRes.json();
+                                    // If validation returns success (no error), interest is usable
+                                    if (valData && !valData.error) {
+                                        validatedInterests.push({ id: match.id, name: match.name });
+                                    } else {
+                                        console.warn(`Interest "${name}" failed targeting validation, skipping`);
+                                    }
+                                } else {
+                                    // Validation endpoint failed — still include from search (safer to include than exclude)
+                                    validatedInterests.push({ id: match.id, name: match.name });
+                                }
+                            } else {
+                                console.warn(`Interest "${name}" not found in Facebook, skipping`);
+                            }
+                        }
+                    } catch (e) {
+                        console.warn(`Could not validate interest "${name}":`, e.message);
+                    }
+                }
+                aud.interests = validatedInterests;
+                console.log(`Audience "${aud.audienceName}": ${validatedInterests.length} valid interests out of original`);
+            }
+        }
 
         res.json({ audiences });
     } catch (error) {
@@ -219,7 +321,8 @@ router.post('/create', async (req, res) => {
         if (!accountRecord) return res.status(400).json({ error: 'Account not found. Please select a valid account.' });
 
         const accountId = accountRecord.accountId;
-        const token = accountRecord.accessToken;
+        let token = accountRecord.accessToken || storage.settings?.facebookAccessToken;
+        if (!token) return res.status(400).json({ error: 'Access token is required. Please set it in settings or select another account.' });
         const selectedPageId = step3.pageId || accountRecord.pageId || '';
         if (!selectedPageId) {
             return res.status(400).json({ error: 'Facebook Page is required.' });
@@ -239,6 +342,35 @@ router.post('/create', async (req, res) => {
             });
         }
 
+        // Auto-detect offline event dataset ID from recent ads of the ad account
+        let offlineDatasetId = null;
+        try {
+            const adsUrl = `https://graph.facebook.com/v21.0/act_${accountId}/ads?fields=tracking_specs&limit=10&access_token=${token}`;
+            const adsRes = await fetch(adsUrl);
+            const adsData = await adsRes.json();
+            if (adsData.data && adsData.data.length > 0) {
+                for (const adItem of adsData.data) {
+                    if (adItem.tracking_specs) {
+                        for (const spec of adItem.tracking_specs) {
+                            if (spec["action.type"] && spec["action.type"].includes("onsite_conversion") && spec.conversion_id) {
+                                const cid = spec.conversion_id[0];
+                                if (cid) {
+                                    offlineDatasetId = cid;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if (offlineDatasetId) break;
+                }
+            }
+        } catch (e) {
+            console.error("Failed to auto-detect offline dataset ID:", e.message);
+        }
+        if (offlineDatasetId) {
+            console.log(`Auto-detected offline event dataset ID: ${offlineDatasetId}`);
+        }
+
         const creativeAds = normalizeCreativeAds(step3);
         if (!creativeAds.length || creativeAds.some(ad => !ad.media)) {
             return res.status(400).json({ error: 'Every ad must have an uploaded media file.' });
@@ -255,7 +387,13 @@ router.post('/create', async (req, res) => {
                 (item.imageHash || item.videoId)
             );
             if (savedMedia) {
-                uploadedMedia.push({ ...ad, imageHash: savedMedia.imageHash || null, videoId: savedMedia.videoId || null });
+                uploadedMedia.push({ 
+                    ...ad, 
+                    imageHash: savedMedia.imageHash || null, 
+                    videoId: savedMedia.videoId || null,
+                    videoThumbnailUrl: savedMedia.videoThumbnailUrl || null,
+                    thumbnailHash: savedMedia.thumbnailHash || null
+                });
                 continue;
             }
 
@@ -264,11 +402,26 @@ router.post('/create', async (req, res) => {
             progress.requestParams = { name: ad.name, media: ad.media };
             let imageHash = null;
             let videoId = null;
+            let videoThumbnailUrl = null;
+            let thumbnailHash = null;
+
             const ext = path.extname(ad.media).toLowerCase();
             if (['.mp4', '.mov', '.avi', '.webm'].includes(ext)) {
                 const videoRes = await facebookService.uploadVideo(accountId, token, ad.media);
                 videoId = videoRes.id || null;
                 if (!videoId) throw new Error(`Facebook did not return a video ID for ${ad.name}.`);
+                videoThumbnailUrl = await facebookService.getVideoThumbnailWithRetry(videoId, token);
+                
+                // If a custom thumbnail file is provided, upload it to Meta
+                if (ad.thumbnail) {
+                    try {
+                        const thumbRes = await facebookService.uploadImage(accountId, token, ad.thumbnail);
+                        const firstKey = Object.keys(thumbRes.images || {})[0];
+                        thumbnailHash = firstKey ? thumbRes.images[firstKey].hash : null;
+                    } catch (thumbErr) {
+                        console.error('Failed to upload custom video thumbnail to FB:', thumbErr.message);
+                    }
+                }
             } else {
                 const imageRes = await facebookService.uploadImage(accountId, token, ad.media);
                 const firstKey = Object.keys(imageRes.images || {})[0];
@@ -276,22 +429,23 @@ router.post('/create', async (req, res) => {
                 if (!imageHash) throw new Error(`Facebook did not return an image hash for ${ad.name}.`);
             }
             checkpoint.uploadedMedia = checkpoint.uploadedMedia.filter(item => item.index !== adIndex);
-            checkpoint.uploadedMedia.push({ index: adIndex, name: ad.name, media: ad.media, imageHash, videoId });
+            checkpoint.uploadedMedia.push({ index: adIndex, name: ad.name, media: ad.media, imageHash, videoId, videoThumbnailUrl, thumbnail: ad.thumbnail || null, thumbnailHash });
             saveRetryCheckpoint(draftId, req.body.campaign, checkpoint, progress);
-            uploadedMedia.push({ ...ad, imageHash, videoId });
+            uploadedMedia.push({ ...ad, imageHash, videoId, videoThumbnailUrl, thumbnailHash });
         }
 
         const isCBO = campaign.budgetType === 'CBO';
         const campaignParams = {
             name: campaign.name,
             objective: campaign.objective || 'OUTCOME_SALES',
-            status: 'PAUSED',
-            is_adset_budget_sharing_enabled: false,
+            status: 'ACTIVE',
+            is_adset_budget_sharing_enabled: isCBO,
             special_ad_categories: campaign.specialAdCategory && campaign.specialAdCategory !== 'NONE'
                 ? [campaign.specialAdCategory] : []
         };
         if (isCBO) {
             campaignParams.daily_budget = Math.round(campaign.budgetAmount * 100); // cents
+            campaignParams.bid_strategy = 'LOWEST_COST_WITHOUT_CAP';
         }
 
         let campaignId = checkpoint.campaignId;
@@ -318,19 +472,60 @@ router.post('/create', async (req, res) => {
             const existingAdset = checkpoint.adsets.find(item => item.audienceIndex === audienceIndex);
             let adsetId = existingAdset?.id;
 
-            const geoLocations = buildGeoLocations(audience.locationsInclude || []);
-            const excludedGeo = buildGeoLocations(audience.locationsExclude || []);
+            // Resolve missing keys in locationsInclude
+            const includeToResolve = (audience.locationsInclude || []).filter(l => !l.key).map(l => l.name);
+            let resolvedInclude = (audience.locationsInclude || []).filter(l => l.key).map(l => ({ key: l.key, type: l.type || 'country', name: l.name }));
+            if (includeToResolve.length > 0) {
+                try {
+                    const resolved = await facebookService.resolveLocationNames(includeToResolve, token);
+                    resolvedInclude = [...resolvedInclude, ...resolved.map(r => ({ key: r.key, type: r.type, name: r.name }))];
+                } catch (resolveErr) {
+                    console.error('Failed to resolve include location names:', resolveErr.message);
+                }
+            }
+
+            // Resolve missing keys in locationsExclude
+            const excludeToResolve = (audience.locationsExclude || []).filter(l => !l.key).map(l => l.name);
+            let resolvedExclude = (audience.locationsExclude || []).filter(l => l.key).map(l => ({ key: l.key, type: l.type || 'country', name: l.name }));
+            if (excludeToResolve.length > 0) {
+                try {
+                    const resolved = await facebookService.resolveLocationNames(excludeToResolve, token);
+                    resolvedExclude = [...resolvedExclude, ...resolved.map(r => ({ key: r.key, type: r.type, name: r.name }))];
+                } catch (resolveErr) {
+                    console.error('Failed to resolve exclude location names:', resolveErr.message);
+                }
+            }
+
+            const geoLocations = buildGeoLocations(resolvedInclude);
+            const excludedGeo = buildGeoLocations(resolvedExclude);
             const genders = audience.gender === 'male' ? [1] : audience.gender === 'female' ? [2] : [];
             const targeting = {
                 age_min: audience.ageMin || 18,
                 age_max: audience.ageMax || 65,
-                geo_locations: Object.keys(geoLocations).length > 0 ? geoLocations : { countries: ['IN'] }
+                geo_locations: Object.keys(geoLocations).length > 0 ? geoLocations : { countries: ['IN'] },
+                targeting_automation: {
+                    advantage_audience: 0
+                }
             };
             if (genders.length) targeting.genders = genders;
             if (Object.keys(excludedGeo).length > 0) targeting.excluded_geo_locations = excludedGeo;
             if (audience.interests && audience.interests.length > 0) {
-                targeting.flexible_spec = [{ interests: audience.interests.map(i => ({ id: i.id, name: i.name })).filter(i => i.id) }];
-                if (!targeting.flexible_spec[0].interests.length) delete targeting.flexible_spec;
+                // If any interest is missing an ID, resolve it via search
+                const interestsToResolve = audience.interests.filter(i => !i.id).map(i => i.name);
+                let resolvedInterests = audience.interests.filter(i => i.id).map(i => ({ id: i.id, name: i.name }));
+                
+                if (interestsToResolve.length > 0) {
+                    try {
+                        const newlyResolved = await facebookService.resolveInterestNames(interestsToResolve, token);
+                        resolvedInterests = [...resolvedInterests, ...newlyResolved];
+                    } catch (resolveErr) {
+                        console.error('Failed to resolve interest names:', resolveErr.message);
+                    }
+                }
+                
+                if (resolvedInterests.length > 0) {
+                    targeting.flexible_spec = [{ interests: resolvedInterests }];
+                }
             }
             if (audience.customAudiencesInclude?.length) targeting.custom_audiences = audience.customAudiencesInclude.map(id => ({ id }));
             if (audience.customAudiencesExclude?.length) targeting.excluded_custom_audiences = audience.customAudiencesExclude.map(id => ({ id }));
@@ -341,34 +536,127 @@ router.post('/create', async (req, res) => {
                 targeting.excluded_custom_audiences = [...(targeting.excluded_custom_audiences || []), ...audience.lookalikeExclude.map(id => ({ id }))];
             }
 
+            // Validate custom audiences - remove any that don't belong to this ad account
+            const getAccountAudienceIds = async () => {
+                const audienceIds = new Set();
+                let url = `https://graph.facebook.com/v21.0/act_${accountId}/customaudiences?fields=id&limit=500&access_token=${token}`;
+                try {
+                    while (url) {
+                        const res = await fetch(url);
+                        if (!res.ok) break;
+                        const data = await res.json();
+                        (data.data || []).forEach(a => audienceIds.add(a.id));
+                        url = data.paging?.next || null;
+                    }
+                } catch (e) {
+                    console.warn('Failed to fetch account custom audiences:', e.message);
+                }
+                return audienceIds;
+            };
+
+            if (targeting.custom_audiences?.length || targeting.excluded_custom_audiences?.length) {
+                const validIds = await getAccountAudienceIds();
+                console.log(`Account ${accountId} has ${validIds.size} custom audiences`);
+
+                if (targeting.custom_audiences?.length) {
+                    const before = targeting.custom_audiences.length;
+                    targeting.custom_audiences = targeting.custom_audiences.filter(a => validIds.has(a.id));
+                    if (targeting.custom_audiences.length < before) {
+                        console.warn(`Removed ${before - targeting.custom_audiences.length} invalid include audiences`);
+                    }
+                    if (targeting.custom_audiences.length === 0) delete targeting.custom_audiences;
+                }
+                if (targeting.excluded_custom_audiences?.length) {
+                    const before = targeting.excluded_custom_audiences.length;
+                    targeting.excluded_custom_audiences = targeting.excluded_custom_audiences.filter(a => validIds.has(a.id));
+                    if (targeting.excluded_custom_audiences.length < before) {
+                        console.warn(`Removed ${before - targeting.excluded_custom_audiences.length} invalid exclude audiences`);
+                    }
+                    if (targeting.excluded_custom_audiences.length === 0) delete targeting.excluded_custom_audiences;
+                }
+            }
+
             const adsetParams = {
                 campaign_id: campaignId,
                 name: audience.name,
                 optimization_goal: step2.optimizationGoal || 'OFFSITE_CONVERSIONS',
                 billing_event: 'IMPRESSIONS',
-                status: 'PAUSED',
-                // Always make the ad-set bidding strategy explicit. Without
-                // this, Meta can inherit an account/campaign strategy that
-                // requires bid_amount and return error 1815857.
-                bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
+                status: 'ACTIVE',
                 targeting,
                 promoted_object: step2.pixel ? {
                     pixel_id: step2.pixel,
                     custom_event_type: step2.conversionEvent || 'PURCHASE'
                 } : undefined,
-                start_time: campaign.scheduleStart ? new Date(campaign.scheduleStart).toISOString() : undefined
+                start_time: campaign.scheduleStart ? parseIsoDate(campaign.scheduleStart) : undefined
             };
             if (!isCBO) {
                 adsetParams.daily_budget = Math.round(campaign.budgetAmount * 100);
+                adsetParams.bid_strategy = 'LOWEST_COST_WITHOUT_CAP';
             }
-            if (campaign.scheduleEnd) adsetParams.end_time = new Date(campaign.scheduleEnd).toISOString();
+            if (campaign.scheduleEnd) adsetParams.end_time = parseIsoDate(campaign.scheduleEnd);
 
             if (!adsetId) {
                 progress.failedStep = 'ad set';
                 progress.failedIndex = audienceIndex;
                 progress.requestParams = adsetParams;
-                const adsetResponse = await facebookService.createAdSet(accountId, token, adsetParams);
-                adsetId = adsetResponse.id;
+                try {
+                    const adsetResponse = await facebookService.createAdSet(accountId, token, adsetParams);
+                    adsetId = adsetResponse.id;
+                } catch (adsetErr) {
+                    // Handle error 1870247 — can be custom audiences OR deprecated interests
+                    if (adsetErr.errorSubcode === 1870247) {
+                        const errorMsg = adsetErr.details?.error?.error_user_msg || '';
+                        
+                        // Check if it's about deprecated interests
+                        const altMatch = errorMsg.match(/Relevant alternative options:\s*(\[.*\])/);
+                        if (altMatch) {
+                            try {
+                                const alternatives = JSON.parse(altMatch[1]);
+                                console.warn(`Ad set "${audience.name}": Replacing ${alternatives.length} deprecated interest(s):`);
+                                
+                                for (const alt of alternatives) {
+                                    console.warn(`  "${alt.deprecated_interest_name}" (${alt.deprecated_interest_id}) → "${alt.alternative_interest_name}" (${alt.alternative_interest_id})`);
+                                }
+                                
+                                // Replace deprecated interests with alternatives in flexible_spec
+                                if (adsetParams.targeting.flexible_spec) {
+                                    for (const spec of adsetParams.targeting.flexible_spec) {
+                                        if (spec.interests) {
+                                            for (const alt of alternatives) {
+                                                const idx = spec.interests.findIndex(i => i.id === alt.deprecated_interest_id);
+                                                if (idx !== -1) {
+                                                    spec.interests[idx] = { id: alt.alternative_interest_id, name: alt.alternative_interest_name };
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                progress.requestParams = adsetParams;
+                                const retryResponse = await facebookService.createAdSet(accountId, token, adsetParams);
+                                adsetId = retryResponse.id;
+                            } catch (parseErr) {
+                                // If parsing fails, try stripping custom audiences as fallback
+                                console.warn(`Ad set "${audience.name}": Could not parse alternatives, removing custom audiences`);
+                                delete adsetParams.targeting.excluded_custom_audiences;
+                                delete adsetParams.targeting.custom_audiences;
+                                progress.requestParams = adsetParams;
+                                const retryResponse = await facebookService.createAdSet(accountId, token, adsetParams);
+                                adsetId = retryResponse.id;
+                            }
+                        } else {
+                            // Not about interests — try removing custom audiences
+                            console.warn(`Ad set "${audience.name}": Custom audience error 1870247 — removing custom audiences and retrying`);
+                            delete adsetParams.targeting.excluded_custom_audiences;
+                            delete adsetParams.targeting.custom_audiences;
+                            progress.requestParams = adsetParams;
+                            const retryResponse = await facebookService.createAdSet(accountId, token, adsetParams);
+                            adsetId = retryResponse.id;
+                        }
+                    } else {
+                        throw adsetErr;
+                    }
+                }
                 if (!adsetId) throw new Error(`Facebook did not return an ad set ID for ${audience.name}.`);
                 checkpoint.adsets.push({ audienceIndex, id: adsetId });
                 saveRetryCheckpoint(draftId, campaign, checkpoint, progress);
@@ -381,31 +669,45 @@ router.post('/create', async (req, res) => {
                 let creativeId = checkpoint.creatives.find(item => item.key === creativeKey)?.id;
                 let adId = checkpoint.ads.find(item => item.key === creativeKey)?.id;
                 const textVariation = ad.primaryText || '';
+                const destinationUrl = appendUtmParams(step2.url);
                 const creativeParams = {
                     name: `${campaign.name} — ${audience.name} — ${ad.name}`,
+                    url_tags: 'utm_medium={{ad.name}}&utm_campaign={{campaign.name}}&utm_content={{adset.name}}',
+                    contextual_multi_ads: { enroll_status: 'OPT_OUT' },
                     object_story_spec: {
                         page_id: pageId,
                         link_data: {
                             message: textVariation,
-                            link: step2.url,
+                            link: destinationUrl,
                             name: step3.headline || '',
                             description: step3.description || '',
-                            call_to_action: { type: step3.cta || 'SHOP_NOW', value: { link: step2.url } }
+                            call_to_action: { type: step3.cta || 'SHOP_NOW', value: { link: destinationUrl } }
                         }
                     }
                 };
                 if (ad.imageHash) creativeParams.object_story_spec.link_data.image_hash = ad.imageHash;
                 if (ad.videoId) {
+                    const adMediaInfo = uploadedMedia.find(item => item.media === ad.media);
+                    let thumbnailUrl = adMediaInfo ? adMediaInfo.videoThumbnailUrl : null;
+                    if (!thumbnailUrl) {
+                        thumbnailUrl = await facebookService.getVideoThumbnailWithRetry(ad.videoId, token);
+                        if (adMediaInfo) adMediaInfo.videoThumbnailUrl = thumbnailUrl;
+                    }
                     creativeParams.object_story_spec.video_data = {
                         video_id: ad.videoId,
                         message: textVariation,
                         title: step3.headline || '',
                         link_description: step3.description || '',
-                        call_to_action: { type: step3.cta || 'SHOP_NOW', value: { link: step2.url } }
+                        call_to_action: { type: step3.cta || 'SHOP_NOW', value: { link: destinationUrl } }
                     };
+                    if (ad.thumbnailHash) {
+                        creativeParams.object_story_spec.video_data.image_hash = ad.thumbnailHash;
+                    } else if (thumbnailUrl) {
+                        creativeParams.object_story_spec.video_data.image_url = thumbnailUrl;
+                    }
                     delete creativeParams.object_story_spec.link_data;
                 }
-                if (linkedInstagramId) creativeParams.object_story_spec.instagram_actor_id = linkedInstagramId;
+                if (requestedInstagramId) creativeParams.object_story_spec.instagram_user_id = requestedInstagramId;
 
                 if (!creativeId) {
                     progress.failedStep = 'creative';
@@ -423,8 +725,20 @@ router.post('/create', async (req, res) => {
                         name: ad.name,
                         adset_id: adsetId,
                         creative: { creative_id: creativeId },
-                        status: 'PAUSED'
+                        status: 'ACTIVE',
+                        tracking_specs: [
+                            {
+                                "action.type": ["offsite_conversion"],
+                                "fb_pixel": [step2.pixel]
+                            }
+                        ]
                     };
+                    if (offlineDatasetId) {
+                        adParams.tracking_specs.push({
+                            "action.type": ["onsite_conversion"],
+                            "conversion_id": [offlineDatasetId]
+                        });
+                    }
                     progress.failedStep = 'ad';
                     progress.failedIndex = { audienceIndex, adIndex };
                     progress.requestParams = adParams;
@@ -514,7 +828,9 @@ function normalizeCreativeAds(step3 = {}) {
             name: total === 1 ? 'Single content-Reel' : `Content-${index + 1} Reel`,
             media: ad.media || null,
             primaryText: ad.primaryText || '',
-            mediaFile: ad.mediaFile || ''
+            mediaFile: ad.mediaFile || '',
+            thumbnail: ad.thumbnail || null,
+            thumbnailFile: ad.thumbnailFile || null
         }));
     }
 

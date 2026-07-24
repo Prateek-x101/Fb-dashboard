@@ -107,7 +107,7 @@ const facebookService = {
     },
 
     async getAdAccounts(token) {
-        const url = `${BASE_URL}/me/adaccounts?fields=name,account_id,account_status&access_token=${token}`;
+        const url = `${BASE_URL}/me/adaccounts?fields=name,account_id,account_status,currency&access_token=${token}`;
         const response = await fetch(url, { method: 'GET' });
         return handleResponse(response);
     },
@@ -165,8 +165,80 @@ const facebookService = {
         return resolved;
     },
 
+    async resolveInterestNames(names, token) {
+        const resolved = [];
+        for (const name of names) {
+            try {
+                const url = `${BASE_URL}/search?type=adinterest&q=${encodeURIComponent(name)}&access_token=${token}`;
+                const response = await fetch(url, { method: 'GET' });
+                const data = await response.json();
+                if (data.data && data.data.length > 0) {
+                    const match = data.data.find(d => d.name.toLowerCase() === name.toLowerCase()) || data.data[0];
+                    resolved.push({ id: match.id, name: match.name });
+                }
+            } catch (e) { /* skip if can't resolve */ }
+        }
+        return resolved;
+    },
+
+    async getVideoThumbnailWithRetry(videoId, token) {
+        // Step 1: Check picture field first (fastest, usually available immediately)
+        try {
+            const response = await fetch(`${BASE_URL}/${videoId}?fields=picture&access_token=${token}`);
+            if (response.ok) {
+                const data = await response.json();
+                if (data && data.picture) {
+                    return data.picture;
+                }
+            }
+        } catch (err) {
+            console.error('Fast fetch video picture failed:', err.message);
+        }
+
+        // Step 2: Fallback to thumbnails edge with retries
+        for (let attempt = 0; attempt < 8; attempt++) {
+            try {
+                const response = await fetch(`${BASE_URL}/${videoId}/thumbnails?access_token=${token}`);
+                const data = await response.json();
+                if (data && data.data && data.data.length > 0) {
+                    const preferred = data.data.find(t => t.is_preferred) || data.data[0];
+                    if (preferred.uri) {
+                        return preferred.uri;
+                    }
+                }
+            } catch (err) {
+                console.error(`Attempt ${attempt + 1} to fetch video thumbnail failed:`, err.message);
+            }
+            await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+
+        // Step 3: Final fallback try on picture field again
+        try {
+            const response = await fetch(`${BASE_URL}/${videoId}?fields=picture&access_token=${token}`);
+            const data = await response.json();
+            if (data && data.picture) {
+                return data.picture;
+            }
+        } catch (err) {
+            console.error('Final fallback fetch video picture failed:', err.message);
+        }
+        return null;
+    },
+
     async testConnection(accountId, token) {
         const url = `${BASE_URL}/act_${accountId}?access_token=${token}`;
+        const response = await fetch(url, { method: 'GET' });
+        return handleResponse(response);
+    },
+
+    async getAccessTokenFromCode(appId, appSecret, code, redirectUri) {
+        const url = `${BASE_URL}/oauth/access_token?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&client_secret=${appSecret}&code=${code}`;
+        const response = await fetch(url, { method: 'GET' });
+        return handleResponse(response);
+    },
+
+    async getLongLivedToken(appId, appSecret, shortLivedToken) {
+        const url = `${BASE_URL}/oauth/access_token?grant_type=fb_exchange_token&client_id=${appId}&client_secret=${appSecret}&fb_exchange_token=${shortLivedToken}`;
         const response = await fetch(url, { method: 'GET' });
         return handleResponse(response);
     }

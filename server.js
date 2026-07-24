@@ -6,9 +6,12 @@ const fs = require('fs');
 const accountRoutes = require('./routes/accounts');
 const campaignRoutes = require('./routes/campaigns');
 const settingRoutes = require('./routes/settings');
+const shopifyRoutes = require('./routes/shopify');
 
 const app = express();
 const port = process.env.PORT || 5000;
+
+app.set('trust proxy', true);
 
 // Setup multer for file uploads
 const uploadDir = path.join(__dirname, 'uploads');
@@ -34,6 +37,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use('/api/accounts', accountRoutes);
 app.use('/api/campaigns', campaignRoutes);
 app.use('/api/settings', settingRoutes);
+app.use('/api/shopify', shopifyRoutes);
 
 // Media upload endpoint
 app.post('/api/media/upload', upload.single('file'), (req, res) => {

@@ -1,8 +1,8 @@
 const fetch = require('node-fetch');
 
-const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
-const DEFAULT_MODEL = 'gemini-2.0-flash';
-const OBSOLETE_MODELS = new Set(['gemini-2.5-flash', 'gemini-2.5-pro']);
+const BASE_URL = 'https://generativelanguage.googleapis.com/v1';
+const DEFAULT_MODEL = 'gemini-1.5-flash';
+const OBSOLETE_MODELS = new Set();
 
 function normalizeModel(model) {
     return !model || OBSOLETE_MODELS.has(model) ? DEFAULT_MODEL : model;
@@ -11,8 +11,7 @@ function normalizeModel(model) {
 const geminiService = {
     async generateAdCopy(apiKey, model, websiteUrl, websiteContent, productName) {
         const url = `${BASE_URL}/models/${normalizeModel(model)}:generateContent?key=${apiKey}`;
-        const prompt = `You are an expert Facebook fashion ad copywriter.
-
+        const prompt = `You are an expert Facebook ad copywriter.
 Create one Facebook ad copy for this product.
 
 Product name: ${productName || 'the product'}
@@ -26,7 +25,7 @@ Return ONLY valid JSON in this exact shape:
 Primary text rules:
 - Start with a strong benefit-led hook mentioning the product.
 - Use this structure: an opening sentence, a short benefit paragraph, exactly 4 lines beginning with ✔️, a use-cases sentence, a short punchy closing line, and a final CTA sentence.
-- Keep the tone premium, clear, and suitable for Indian fashion ecommerce.
+- Keep the tone premium, clear.
 - Use a few relevant emojis, but do not overdo them.
 - Put the exact website URL as the final line by itself.
 - Do not use markdown headings, bullets other than the four ✔️ lines, or placeholder text.
@@ -50,9 +49,9 @@ Primary text rules:
             if (!result.primaryText) throw new Error('Primary text missing');
             validateAdCopy(result.primaryText, websiteUrl);
             return {
-                headline: String(result.headline || productName || '').trim(),
+                headline: String(productName || result.headline || '').trim(),
                 primaryText: String(result.primaryText).trim(),
-                description: String(result.description || '').trim()
+                description: ''
             };
         } catch (error) {
             throw new Error('Failed to parse Gemini ad copy response: ' + error.message);
@@ -63,15 +62,15 @@ Primary text rules:
         const url = `${BASE_URL}/models/${normalizeModel(model)}:generateContent?key=${apiKey}`;
         
         const prompt = `You are an expert Facebook ad copywriter. Create ${count} unique variations of the following ad primary text.
-
+ 
 Rules:
-- Keep ALL URLs exactly as they appear — do not modify, shorten, or remove any links
-- Keep ALL emojis, checkmarks (✔️), and special characters
-- Vary ONLY the hook (opening line), tone, and CTA (call-to-action) phrasing
-- Maintain the same product details, features, and value propositions
-- Each variation should feel fresh but carry the same message
-- Return ONLY the variations separated by "|||" with no numbering or extra text
-
+- Keep ALL URLs exactly as they appear — do not modify, shorten, or remove any links.
+- Keep the checkmarks (✔️) list structure for the benefits section.
+- Incorporate relevant emojis to make each variation visually distinct and engaging.
+- Vary the opening line (hook), the description style, and the closing call-to-action to give each variation a fresh and unique feel.
+- Maintain the core product details and specifications.
+- Return ONLY the variations, separated strictly by "|||". Do not include any numbering, intro, or outro text.
+ 
 Base text:
 ${baseText}`;
         

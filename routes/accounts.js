@@ -135,7 +135,8 @@ router.post('/bulk-add', async (req, res) => {
                     label: acc.name || `Account ${acc.account_id}`,
                     accountId: acc.account_id,
                     accessToken: accessToken,
-                    pageId: pageId || ''
+                    pageId: pageId || '',
+                    currency: acc.currency || 'INR'
                 };
                 storage.accounts.push(newAccount);
                 added.push(newAccount);
@@ -268,6 +269,110 @@ router.post('/test-connection', async (req, res) => {
         res.json({ success: true, result });
     } catch (error) {
         res.status(500).json({ error: 'Connection test failed', details: error.message });
+    }
+});
+
+// OAuth routes for Facebook login redirect flow
+router.get('/auth/facebook', (req, res) => {
+    try {
+        const storage = getStorage();
+        const appId = storage.settings?.facebookAppId;
+        
+        if (!appId) {
+            return res.send(`
+                <html>
+                <body>
+                    <script>
+                        window.opener.postMessage({ type: 'fb_auth_error', error: 'Facebook App ID not configured in Settings. Please go to Settings and enter your App ID and Secret.' }, window.location.origin);
+                        window.close();
+                    </script>
+                </body>
+                </html>
+            `);
+        }
+        
+        const redirectUri = `${req.protocol}://${req.get('host')}/api/accounts/auth/facebook/callback`;
+        const authUrl = `https://www.facebook.com/v21.0/dialog/oauth?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=ads_management,ads_read,pages_read_engagement,pages_show_list,instagram_basic`;
+        res.redirect(authUrl);
+    } catch (error) {
+        res.send(`
+            <html>
+            <body>
+                <script>
+                    window.opener.postMessage({ type: 'fb_auth_error', error: '${error.message.replace(/'/g, "\\'")}' }, window.location.origin);
+                    window.close();
+                </script>
+            </body>
+            </html>
+        `);
+    }
+});
+
+router.get('/auth/facebook/callback', async (req, res) => {
+    try {
+        const { code, error, error_description } = req.query;
+        
+        if (error || !code) {
+            return res.send(`
+                <html>
+                <body>
+                    <script>
+                        window.opener.postMessage({ type: 'fb_auth_error', error: '${error_description || error || 'Authorization failed'}' }, window.location.origin);
+                        window.close();
+                    </script>
+                </body>
+                </html>
+            `);
+        }
+        
+        const storage = getStorage();
+        const appId = storage.settings?.facebookAppId;
+        const appSecret = storage.settings?.facebookAppSecret;
+        
+        if (!appId || !appSecret) {
+            return res.send(`
+                <html>
+                <body>
+                    <script>
+                        window.opener.postMessage({ type: 'fb_auth_error', error: 'App ID or App Secret is missing in Settings.' }, window.location.origin);
+                        window.close();
+                    </script>
+                </body>
+                </html>
+            `);
+        }
+        
+        const redirectUri = `${req.protocol}://${req.get('host')}/api/accounts/auth/facebook/callback`;
+        
+        // Exchange code for short-lived token
+        const shortLivedData = await facebookService.getAccessTokenFromCode(appId, appSecret, code, redirectUri);
+        const shortToken = shortLivedData.access_token;
+        
+        // Exchange short-lived token for long-lived token
+        const longLivedData = await facebookService.getLongLivedToken(appId, appSecret, shortToken);
+        const longToken = longLivedData.access_token;
+        
+        res.send(`
+            <html>
+            <body>
+                <script>
+                    window.opener.postMessage({ type: 'fb_auth_success', token: '${longToken}' }, window.location.origin);
+                    window.close();
+                </script>
+            </body>
+            </html>
+        `);
+    } catch (error) {
+        res.send(`
+            <html>
+            <body>
+                <script>
+                    window.opener.postMessage({ type: 'fb_auth_error', error: '${error.message.replace(/'/g, "\\'")}' }, window.location.origin);
+                    window.close();
+                </script>
+            </body>
+            </html>
+        `);
     }
 });
 

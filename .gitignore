@@ -1,3 +1,5 @@
+node_modules
 config/storage.local.json
+config/storage.json
 uploads/*
 screenshots/*

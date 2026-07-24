@@ -18,6 +18,7 @@
         <ul class="nav-menu">
             <li><a href="#" class="nav-item active" data-section="section-dashboard"><span>📊</span> Dashboard</a></li>
             <li><a href="#" class="nav-item" data-section="section-campaign"><span>➕</span> Create Campaign</a></li>
+            <li><a href="#" class="nav-item" data-section="section-shopify"><span>🛍️</span> Shopify Importer</a></li>
             <li><a href="#" class="nav-item" data-section="section-accounts"><span>👥</span> Accounts</a></li>
             <li><a href="#" class="nav-item" data-section="section-settings"><span>⚙️</span> Settings</a></li>
         </ul>
@@ -142,8 +143,8 @@
 
                         <div class="grid-2">
                             <div class="form-group">
-                                <label>Daily Budget Amount ($) *</label>
-                                <input type="number" class="form-control" value="50.00" min="5" step="0.5" id="budget-amount">
+                                <label id="budget-amount-label">Daily Budget Amount (<span class="currency-symbol">₹</span>) *</label>
+                                <input type="number" class="form-control" value="500" min="1" step="1" id="budget-amount">
                             </div>
                             <div class="form-group">
                                 <label>Ad Account *</label>
@@ -153,15 +154,9 @@
                             </div>
                         </div>
 
-                        <div class="grid-2">
-                            <div class="form-group">
-                                <label>Start Date &amp; Time *</label>
-                                <input type="datetime-local" class="form-control" id="schedule-start">
-                            </div>
-                            <div class="form-group">
-                                <label>End Time (Optional)</label>
-                                <input type="time" class="form-control" id="schedule-end">
-                            </div>
+                        <div class="form-group">
+                            <label>Start Date &amp; Time *</label>
+                            <input type="datetime-local" class="form-control" id="schedule-start">
                         </div>
 
                         <div class="form-group">
@@ -180,7 +175,11 @@
                 <div class="wizard-step" id="step-2">
                     <div class="flex justify-between align-center mb-3">
                         <h3>🎯 Ad Set Configuration</h3>
-                        <div class="flex gap-2">
+                        <div class="flex gap-2 align-center">
+                            <select class="form-control" id="load-saved-audience-select" style="width:200px; padding:0.4rem; font-size:0.85rem; height: auto; margin-bottom: 0;">
+                                <option value="">📂 Load Saved Audience...</option>
+                            </select>
+                            <button class="btn btn-secondary btn-sm" id="btn-save-current-targeting" title="Save current global targeting + interests as a template">💾 Save Audience</button>
                             <button class="btn btn-gemini btn-sm" id="btn-ai-all-audiences">🤖 AI Generate All</button>
                             <button class="btn btn-secondary btn-sm" id="btn-add-adset"><span>➕</span> Add Audience</button>
                         </div>
@@ -448,7 +447,8 @@
         <section id="section-accounts" class="section">
             <div class="flex justify-between align-center mb-3">
                 <h2>Ad Accounts Management</h2>
-                <div class="flex gap-2">
+                <div class="flex gap-2" style="flex-wrap: wrap;">
+                    <button class="btn" id="btn-login-facebook" style="background: #1877f2; color: white; border: none; font-weight: 500;"><span>🔵</span> Login with Facebook</button>
                     <button class="btn btn-secondary" id="btn-connect-token"><span>🔗</span> Connect with Token</button>
                     <button class="btn btn-primary" id="btn-add-account"><span>➕</span> Add Account</button>
                 </div>
@@ -479,6 +479,11 @@
                         <input type="password" class="form-control" placeholder="Enter your app secret" id="setting-app-secret">
                         <button class="password-toggle" type="button">👁️</button>
                     </div>
+                    <div class="form-group password-input">
+                        <label>Facebook Access Token (General)</label>
+                        <input type="password" class="form-control" placeholder="EAAB..." id="setting-fb-token">
+                        <button class="password-toggle" type="button">👁️</button>
+                    </div>
                 </div>
 
                 <div class="glass-card">
@@ -491,10 +496,52 @@
                     <div class="form-group">
                         <label>Model</label>
                         <select class="form-control" id="setting-gemini-model">
-                            <option value="gemini-2.0-flash">Gemini 2.0 Flash (Fast)</option>
+                            <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash Lite (Best Free - 500 Req/Day)</option>
+                            <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite (Free - 500 Req/Day)</option>
+                            <option value="gemini-1.5-flash">Gemini 1.5 Flash (Free & Large)</option>
+                            <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                            <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash Lite</option>
+                            <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
                         </select>
                     </div>
                     <button class="btn btn-secondary" style="width:100%;" id="btn-test-gemini">🧪 Test Gemini Connection</button>
+                </div>
+            </div>
+            
+            <!-- Shopify Stores Configuration -->
+            <div class="glass-card mt-3">
+                <h3 class="mb-3">🛍️ Shopify Stores Configuration</h3>
+                <div class="grid-2 mb-2">
+                    <div class="form-group">
+                        <label>Store Name (e.g. Sassy Clothes)</label>
+                        <input type="text" class="form-control" placeholder="My Fashion Store" id="shopify-store-name">
+                    </div>
+                    <div class="form-group">
+                        <label>Shop URL (subdomain.myshopify.com)</label>
+                        <input type="text" class="form-control" placeholder="my-shop.myshopify.com" id="shopify-store-url">
+                    </div>
+                </div>
+                <div class="form-group password-input mb-3">
+                    <label>Admin API Access Token (shpat_...)</label>
+                    <input type="password" class="form-control" placeholder="shpat_xxxxxxxxxxxxxxxxxxxxxxxxxxxx" id="shopify-store-token">
+                    <button class="password-toggle" type="button">👁️</button>
+                </div>
+                <div class="flex gap-2">
+                    <button class="btn btn-secondary btn-sm" id="btn-add-shopify-store">💾 Save Store</button>
+                </div>
+                <div class="mt-3" style="max-height: 200px; overflow-y: auto;">
+                    <table class="form-control" style="width:100%; border:none; background:transparent; font-size:0.85rem;" id="shopify-stores-table">
+                        <thead>
+                            <tr style="border-bottom:1px solid var(--glass-border); color:var(--accent-cyan);">
+                                <th style="text-align:left; padding:8px 4px; border:none;">Name</th>
+                                <th style="text-align:left; padding:8px 4px; border:none;">Shop URL</th>
+                                <th style="text-align:right; padding:8px 4px; border:none;">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="shopify-stores-list">
+                            <!-- stores list rendered here -->
+                        </tbody>
+                    </table>
                 </div>
             </div>
             
@@ -520,16 +567,97 @@
             </div>
         </section>
 
+        <!-- SECTION 5: Shopify Importer -->
+        <section id="section-shopify" class="section">
+            <h2 class="mb-3">🛍️ Shopify Product Importer</h2>
+            
+            <div class="glass-card mb-3" style="border-color:rgba(0,245,212,0.25);">
+                <h3 class="mb-3" style="color:var(--accent-cyan);">📥 Scrape & Import Shopify Listings</h3>
+                
+                <div class="grid-2 mb-3">
+                    <div class="form-group">
+                        <label>Shopify Product URL</label>
+                        <input type="text" class="form-control" placeholder="https://target-store.com/products/women-s-fashion-earrings" id="shopify-scrape-url">
+                    </div>
+                    <div class="form-group">
+                        <label>Select Your Shopify Store</label>
+                        <select class="form-control" id="shopify-target-store-select">
+                            <option value="">-- Choose Store --</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="text-right">
+                    <button class="btn btn-primary" id="btn-shopify-scrape">🔍 Inspect Product Details</button>
+                </div>
+            </div>
+
+            <!-- Inspect Details Preview Block (Hidden initially) -->
+            <div class="glass-card" id="shopify-preview-container" style="display:none; margin-top:20px;">
+                <h3 class="mb-3" id="shopify-preview-title" style="color:var(--accent-blue);">Product Details Preview</h3>
+                
+                <div class="grid-2 mb-3">
+                    <div>
+                        <div class="form-group">
+                            <label>Product Title</label>
+                            <input type="text" class="form-control" id="shopify-import-title">
+                        </div>
+                        <div class="form-group">
+                            <label>Base SKU Prefix (e.g. MBD)</label>
+                            <input type="text" class="form-control" placeholder="Enter prefix (e.g. MBD)" id="shopify-import-sku-prefix">
+                        </div>
+                        <div class="grid-2">
+                            <div class="form-group">
+                                <label>Pricing (Optional - Leave blank to use original)</label>
+                                <input type="number" step="0.01" class="form-control" placeholder="New Price" id="shopify-import-price">
+                            </div>
+                            <div class="form-group">
+                                <label>Compare Price (Optional)</label>
+                                <input type="number" step="0.01" class="form-control" placeholder="Compare Price" id="shopify-import-compare-price">
+                            </div>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="form-group">
+                            <label>Product Description (HTML)</label>
+                            <textarea class="form-control" rows="8" id="shopify-import-description"></textarea>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Collection Suggestion Checkbox Checklist -->
+                <div class="form-group mb-3">
+                    <label>📁 Add to Collections (Gemini suggested match ticked ✨)</label>
+                    <div id="shopify-import-collections-checklist" class="form-control" style="height:auto; min-height:100px; max-height:200px; overflow-y:auto; display:flex; flex-direction:column; gap:8px; padding:10px; background:rgba(0,0,0,0.15);">
+                        <!-- collections checkboxes rendered here -->
+                    </div>
+                </div>
+
+                <!-- Scraped Images Carousel/Grid -->
+                <div class="form-group mb-3">
+                    <label>🖼️ Scraped Media/Images Preview</label>
+                    <div id="shopify-import-images-grid" style="display:flex; gap:10px; overflow-x:auto; padding:10px 0;">
+                        <!-- images rendered here -->
+                    </div>
+                </div>
+
+                <div class="text-right">
+                    <button class="btn btn-primary" id="btn-shopify-import-confirm">🚀 Start Auto-Import Listing</button>
+                </div>
+            </div>
+        </section>
+
     </main>
 
     <!-- Modal: Add Account -->
     <div class="modal-overlay" id="modal-add-account">
         <div class="glass-card modal-content">
             <div class="modal-header">
-                <h3>➕ Add Facebook Ad Account</h3>
+                <h3 id="modal-account-title">➕ Add Facebook Ad Account</h3>
                 <button class="modal-close" data-dismiss="modal">✖</button>
             </div>
             <form id="account-form">
+                <input type="hidden" id="edit-account-id-internal">
                 <div class="form-group">
                     <label>Account Label (Name) *</label>
                     <input type="text" class="form-control" placeholder="e.g. My Main Store" id="account-name">
@@ -621,5 +749,6 @@
     <script src="/js/app.js"></script>
     <script src="/js/campaign.js"></script>
     <script src="/js/settings.js"></script>
+    <script src="/js/shopify.js"></script>
 </body>
 </html>

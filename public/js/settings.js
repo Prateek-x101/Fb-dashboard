@@ -4,10 +4,39 @@
         init: function() {
             this.bindEvents();
             this.wireDefaultExcludeSearch();
+            this.bindPostMessageListener();
             document.addEventListener('appReady', () => {
                 this.loadSettings();
                 this.renderAccounts();
+                this.loadShopifyStores();
             });
+        },
+
+        bindPostMessageListener: function() {
+            window.addEventListener('message', async (event) => {
+                if (event.origin !== window.location.origin) return;
+                
+                const data = event.data;
+                if (data.type === 'fb_auth_success') {
+                    window.AppController.showToast('Facebook authorization successful! 🔵', 'success');
+                    window.AppController.openModal('modal-token-connect');
+                    await this.loadAccountsForToken(data.token);
+                } else if (data.type === 'fb_auth_error') {
+                    window.AppController.showToast('Facebook Login Failed: ' + data.error, 'error');
+                }
+            });
+        },
+
+        loginWithFacebookPopup: function() {
+            const width = 600;
+            const height = 650;
+            const left = (window.screen.width - width) / 2;
+            const top = (window.screen.height - height) / 2;
+            window.open(
+                '/api/accounts/auth/facebook',
+                'facebook_login',
+                `width=${width},height=${height},left=${left},top=${top},status=no,resizable=yes,scrollbars=yes`
+            );
         },
 
         bindEvents: function() {
@@ -22,12 +51,24 @@
                 btnTestGemini.addEventListener('click', () => this.testGemini());
             }
 
+            // Login with Facebook button
+            const btnLoginFb = document.getElementById('btn-login-facebook');
+            if (btnLoginFb) {
+                btnLoginFb.addEventListener('click', () => this.loginWithFacebookPopup());
+            }
+
             // Add Account button
             const btnAddAcc = document.getElementById('btn-add-account');
             if (btnAddAcc) {
                 btnAddAcc.addEventListener('click', () => {
                     const form = document.getElementById('account-form');
                     if (form) form.reset();
+                    const hiddenIdInput = document.getElementById('edit-account-id-internal');
+                    if (hiddenIdInput) hiddenIdInput.value = '';
+                    const titleEl = document.getElementById('modal-account-title');
+                    if (titleEl) titleEl.textContent = '➕ Add Facebook Ad Account';
+                    const idInput = document.getElementById('account-id');
+                    if (idInput) idInput.disabled = false;
                     window.AppController.openModal('modal-add-account');
                 });
             }
@@ -75,6 +116,12 @@
             const btnTestConn = document.getElementById('btn-test-account-connection');
             if (btnTestConn) {
                 btnTestConn.addEventListener('click', () => this.testNewAccountConnection());
+            }
+
+            // Save Shopify Store button
+            const btnAddShopify = document.getElementById('btn-add-shopify-store');
+            if (btnAddShopify) {
+                btnAddShopify.addEventListener('click', () => this.saveShopifyStore());
             }
         },
 
@@ -164,11 +211,13 @@
 
                 const appId = document.getElementById('setting-app-id');
                 const appSecret = document.getElementById('setting-app-secret');
+                const fbToken = document.getElementById('setting-fb-token');
                 const geminiKey = document.getElementById('setting-gemini-key');
                 const geminiModel = document.getElementById('setting-gemini-model');
 
                 if (appId && settings.facebookAppId) appId.value = settings.facebookAppId;
                 if (appSecret && settings.facebookAppSecret) appSecret.value = settings.facebookAppSecret;
+                if (fbToken && settings.facebookAccessToken) fbToken.value = settings.facebookAccessToken;
                 if (geminiKey && settings.geminiApiKey) geminiKey.value = settings.geminiApiKey;
                 if (geminiModel && settings.geminiModel) geminiModel.value = settings.geminiModel;
 
@@ -199,8 +248,9 @@
                 const data = {
                     facebookAppId: document.getElementById('setting-app-id')?.value || '',
                     facebookAppSecret: document.getElementById('setting-app-secret')?.value || '',
+                    facebookAccessToken: document.getElementById('setting-fb-token')?.value || '',
                     geminiApiKey: document.getElementById('setting-gemini-key')?.value || '',
-                    geminiModel: document.getElementById('setting-gemini-model')?.value || 'gemini-2.0-flash',
+                    geminiModel: document.getElementById('setting-gemini-model')?.value || 'gemini-1.5-flash',
                     defaultExcludedLocations
                 };
 
@@ -234,15 +284,16 @@
             }
         },
 
-        fetchAccountsFromToken: async function() {
-            const token = document.getElementById('token-input')?.value?.trim();
-            if (!token) {
-                window.AppController.showToast('Please enter an access token', 'warning');
-                return;
+        loadAccountsForToken: async function(token) {
+            const listEl = document.getElementById('fetched-accounts-list');
+            if (listEl) {
+                listEl.innerHTML = `
+                    <div style="text-align:center; padding:2rem;">
+                        <div class="loading-spinner" style="margin: 0 auto;"></div>
+                        <p style="color:var(--text-secondary); margin-top:1rem;">Fetching accounts from Facebook...</p>
+                    </div>
+                `;
             }
-
-            const btn = document.getElementById('btn-fetch-accounts');
-            if (btn) { btn.disabled = true; btn.textContent = '🔍 Fetching...'; }
 
             try {
                 const result = await window.API.fetchAccountsFromToken({ accessToken: token });
@@ -250,11 +301,11 @@
 
                 if (accounts.length === 0) {
                     window.AppController.showToast('No ad accounts found for this token', 'warning');
+                    if (listEl) listEl.innerHTML = '<p style="text-align:center; color:var(--text-secondary); padding:2rem;">No ad accounts found</p>';
                     return;
                 }
 
                 // Render account list with checkboxes
-                const listEl = document.getElementById('fetched-accounts-list');
                 const countEl = document.getElementById('fetched-count');
                 if (countEl) countEl.textContent = `${accounts.length} account(s) found`;
 
@@ -284,6 +335,22 @@
 
             } catch (error) {
                 window.AppController.showToast('Failed to fetch accounts: ' + error.message, 'error');
+                if (listEl) listEl.innerHTML = `<p style="text-align:center; color:var(--danger); padding:2rem;">Error: ${error.message}</p>`;
+            }
+        },
+
+        fetchAccountsFromToken: async function() {
+            const token = document.getElementById('token-input')?.value?.trim();
+            if (!token) {
+                window.AppController.showToast('Please enter an access token', 'warning');
+                return;
+            }
+
+            const btn = document.getElementById('btn-fetch-accounts');
+            if (btn) { btn.disabled = true; btn.textContent = '🔍 Fetching...'; }
+
+            try {
+                await this.loadAccountsForToken(token);
             } finally {
                 if (btn) { btn.disabled = false; btn.textContent = '🔍 Fetch Ad Accounts'; }
             }
@@ -365,7 +432,7 @@
                 const igBadge = acc.instagramUsername
                     ? `<span class="badge" style="background:linear-gradient(135deg,#833ab4,#fd1d1d,#fcb045); color:#fff;">📷 @${acc.instagramUsername}</span>`
                     : `<span class="badge" style="background:rgba(255,255,255,0.08); color:var(--text-secondary);">📷 No Instagram</span>`;
-
+ 
                 const card = document.createElement('div');
                 card.className = 'glass-card';
                 card.innerHTML = `
@@ -378,6 +445,7 @@
                     <p class="mb-2" style="font-size:0.8rem; color:var(--text-secondary);">Token: <span style="color:var(--success);">${this.maskToken(acc.accessToken || acc.token)}</span></p>
                     <div class="mb-3">${igBadge}</div>
                     <div class="flex gap-2" style="flex-wrap:wrap;">
+                        <button class="btn btn-secondary btn-sm" style="flex:1" onclick="window.SettingsManager.editAccount('${acc.id}')">✏️ Edit</button>
                         <button class="btn btn-secondary btn-sm" style="flex:1" onclick="window.SettingsManager.fetchInstagram('${acc.id}')">📷 Fetch Instagram</button>
                         <button class="btn btn-secondary btn-sm" style="flex:1" onclick="window.SettingsManager.testAccountById('${acc.id}')">🧪 Test</button>
                         <button class="btn btn-danger btn-sm" style="flex:1" onclick="window.SettingsManager.deleteAccount('${acc.id}')">🗑️ Delete</button>
@@ -416,6 +484,7 @@
             const idInput = document.getElementById('account-id');
             const tokenInput = document.getElementById('account-token');
             const pageIdInput = document.getElementById('account-page-id');
+            const editId = document.getElementById('edit-account-id-internal')?.value;
             
             const data = {
                 label: nameInput?.value?.trim() || '',
@@ -437,8 +506,13 @@
             if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
 
             try {
-                await window.API.addAccount(data);
-                window.AppController.showToast('Account added successfully! ✅', 'success');
+                if (editId) {
+                    await window.API.updateAccount(editId, data);
+                    window.AppController.showToast('Account updated successfully! ✅', 'success');
+                } else {
+                    await window.API.addAccount(data);
+                    window.AppController.showToast('Account added successfully! ✅', 'success');
+                }
                 window.AppController.closeModal('modal-add-account');
                 
                 // Refresh accounts
@@ -450,9 +524,9 @@
                 if (window.CampaignWizard) window.CampaignWizard.populateAccountSelect();
                 
             } catch (error) {
-                window.AppController.showToast('Failed to add account: ' + error.message, 'error');
+                window.AppController.showToast('Failed to save account: ' + error.message, 'error');
             } finally {
-                if (btn) { btn.disabled = false; btn.textContent = '💾 Save Account'; }
+                if (btn) { btn.disabled = false; btn.textContent = editId ? '💾 Update Account' : '💾 Save Account'; }
             }
         },
 
@@ -501,6 +575,38 @@
             }
         },
 
+        editAccount: function(id) {
+            const acc = (window.APP.accounts || []).find(a => a.id === id);
+            if (!acc) {
+                window.AppController.showToast('Account not found', 'error');
+                return;
+            }
+            
+            const titleEl = document.getElementById('modal-account-title');
+            if (titleEl) titleEl.textContent = '✏️ Edit Facebook Ad Account';
+            
+            const hiddenIdInput = document.getElementById('edit-account-id-internal');
+            if (hiddenIdInput) hiddenIdInput.value = acc.id;
+            
+            const nameInput = document.getElementById('account-name');
+            const idInput = document.getElementById('account-id');
+            const tokenInput = document.getElementById('account-token');
+            const pageIdInput = document.getElementById('account-page-id');
+            
+            if (nameInput) nameInput.value = acc.label || acc.name || '';
+            if (idInput) {
+                idInput.value = acc.accountId || '';
+                idInput.disabled = true; // Disable ID modification
+            }
+            if (pageIdInput) pageIdInput.value = acc.pageId || '';
+            if (tokenInput) tokenInput.value = acc.accessToken || '';
+            
+            const btnSave = document.getElementById('btn-save-account');
+            if (btnSave) btnSave.textContent = '💾 Update Account';
+            
+            window.AppController.openModal('modal-add-account');
+        },
+
         deleteAccount: async function(id) {
             if (confirm('Are you sure you want to delete this account?')) {
                 try {
@@ -518,6 +624,98 @@
                     window.AppController.showToast('Failed to delete account: ' + error.message, 'error');
                 }
             }
+        },
+
+        loadShopifyStores: async function() {
+            try {
+                const stores = await window.API.getShopifyStores();
+                this.renderShopifyStores(stores || []);
+            } catch (err) {
+                console.error("Failed to load shopify stores:", err.message);
+            }
+        },
+
+        renderShopifyStores: function(stores) {
+            const list = document.getElementById('shopify-stores-list');
+            if (!list) return;
+            list.innerHTML = '';
+            
+            if (!stores.length) {
+                list.innerHTML = `<tr><td colspan="3" style="text-align:center; padding:12px; color:var(--text-secondary);">No Shopify stores configured.</td></tr>`;
+                return;
+            }
+            
+            stores.forEach(s => {
+                const tr = document.createElement('tr');
+                tr.style.borderBottom = '1px solid rgba(255,255,255,0.03)';
+                tr.innerHTML = `
+                    <td style="padding:10px 4px; border:none; font-weight:600; color:white;">${this.escapeHtml(s.name)}</td>
+                    <td style="padding:10px 4px; border:none; color:var(--text-secondary);">${this.escapeHtml(s.shopUrl)}</td>
+                    <td style="padding:10px 4px; border:none; text-align:right;">
+                        <button class="btn btn-secondary btn-xs" onclick="window.SettingsManager.deleteShopifyStore('${s.id}')" style="background:rgba(239,71,111,0.15); color:var(--danger-color); border-color:rgba(239,71,111,0.25);">✖ Delete</button>
+                    </td>
+                `;
+                list.appendChild(tr);
+            });
+        },
+
+        saveShopifyStore: async function() {
+            const nameEl = document.getElementById('shopify-store-name');
+            const urlEl = document.getElementById('shopify-store-url');
+            const tokenEl = document.getElementById('shopify-store-token');
+            if (!nameEl || !urlEl || !tokenEl) return;
+            
+            const name = nameEl.value.trim();
+            const shopUrl = urlEl.value.trim();
+            const accessToken = tokenEl.value.trim();
+            
+            if (!name || !shopUrl || !accessToken) {
+                window.AppController.showToast('Please fill all Shopify store details.', 'warning');
+                return;
+            }
+            
+            try {
+                window.AppController.showToast('Saving Shopify store config...', 'info');
+                const res = await window.API.addShopifyStore({ name, shopUrl, accessToken });
+                window.AppController.showToast('Shopify store saved successfully! ✅', 'success');
+                
+                // Clear fields
+                nameEl.value = '';
+                urlEl.value = '';
+                tokenEl.value = '';
+                
+                this.renderShopifyStores(res.shopifyStores || []);
+                
+                // If there is a shopify target store selector on the import page, reload it!
+                if (window.ShopifyImporter && typeof window.ShopifyImporter.loadStoresSelect === 'function') {
+                    window.ShopifyImporter.loadStoresSelect();
+                }
+            } catch (error) {
+                window.AppController.showToast('Failed to save Shopify store config: ' + error.message, 'error');
+            }
+        },
+
+        deleteShopifyStore: async function(id) {
+            if (confirm('Are you sure you want to delete this Shopify store?')) {
+                try {
+                    const res = await window.API.deleteShopifyStore(id);
+                    window.AppController.showToast('Shopify store deleted', 'success');
+                    this.renderShopifyStores(res.shopifyStores || []);
+                    
+                    // Reload select dropdown
+                    if (window.ShopifyImporter && typeof window.ShopifyImporter.loadStoresSelect === 'function') {
+                        window.ShopifyImporter.loadStoresSelect();
+                    }
+                } catch (error) {
+                    window.AppController.showToast('Failed to delete store: ' + error.message, 'error');
+                }
+            }
+        },
+
+        escapeHtml: function(value) {
+            return String(value).replace(/[&<>"']/g, char => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
+            }[char]));
         }
     };
 

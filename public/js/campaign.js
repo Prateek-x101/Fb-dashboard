@@ -22,6 +22,7 @@
             document.addEventListener('appReady', () => {
                 this.populateAccountSelect();
                 this.updateAudienceCards();
+                this.loadSavedAudiencesDropdown();
             });
             document.addEventListener('accountChanged', (e) => {
                 this.handleAccountChange(e.detail);
@@ -33,7 +34,20 @@
             if (startInput && !startInput.value) {
                 const now = new Date();
                 const pad = n => String(n).padStart(2, '0');
-                startInput.value = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+                
+                let year = now.getFullYear();
+                let month = now.getMonth() + 1;
+                let date = now.getDate();
+                
+                if (now.getHours() > 23 || (now.getHours() === 23 && now.getMinutes() >= 55)) {
+                    const tomorrow = new Date(now);
+                    tomorrow.setDate(tomorrow.getDate() + 1);
+                    year = tomorrow.getFullYear();
+                    month = tomorrow.getMonth() + 1;
+                    date = tomorrow.getDate();
+                }
+                
+                startInput.value = `${year}-${pad(month)}-${pad(date)}T23:55`;
             }
         },
 
@@ -241,6 +255,18 @@
                     }
                 });
             }
+
+            // Save targeting template
+            const btnSaveTargeting = document.getElementById('btn-save-current-targeting');
+            if (btnSaveTargeting) {
+                btnSaveTargeting.addEventListener('click', () => this.saveCurrentTargeting());
+            }
+
+            // Load saved targeting template
+            const selectSavedAudience = document.getElementById('load-saved-audience-select');
+            if (selectSavedAudience) {
+                selectSavedAudience.addEventListener('change', (e) => this.loadTargetingTemplate(e.target.value));
+            }
         },
 
         // ── Step navigation ──────────────────────────────────────────────
@@ -296,6 +322,13 @@
             } else if (step === 2) {
                 const url = document.getElementById('website-url')?.value?.trim();
                 if (!url) { window.AppController.showToast('Please enter a Website URL', 'warning'); return false; }
+
+                const pixel = document.getElementById('pixel-select')?.value;
+                const optGoal = document.getElementById('optimization-goal')?.value || 'OFFSITE_CONVERSIONS';
+                if (optGoal === 'OFFSITE_CONVERSIONS' && !pixel) {
+                    window.AppController.showToast('Please select a Meta Pixel for Conversion tracking', 'warning');
+                    return false;
+                }
 
                 // Read Global settings — structured location tags
                 const readLocTags = (selector) => {
@@ -429,8 +462,31 @@
             }
         },
 
+        getCurrencySymbol: function(account) {
+            if (!account) return '₹';
+            const cur = (account.currency || '').toUpperCase();
+            if (cur === 'USD') return '$';
+            if (cur === 'EUR') return '€';
+            if (cur === 'GBP') return '£';
+            if (cur === 'INR') return '₹';
+            // Check account label for currency hint
+            const label = (account.label || '').toLowerCase();
+            if (label.includes('usd') || label.includes('$')) return '$';
+            return '₹'; // Default to INR
+        },
+
         handleAccountChange: async function(account) {
             if (!account) return;
+
+            // Update currency symbol display
+            const symbol = this.getCurrencySymbol(account);
+            document.querySelectorAll('.currency-symbol').forEach(el => { el.textContent = symbol; });
+            const budgetInput = document.getElementById('budget-amount');
+            if (budgetInput && symbol === '$' && parseFloat(budgetInput.value) > 100) {
+                budgetInput.value = '50';
+            } else if (budgetInput && symbol === '₹' && parseFloat(budgetInput.value) < 100) {
+                budgetInput.value = '500';
+            }
 
             // Fetch pixels
             const pixelSelect = document.getElementById('pixel-select');
@@ -718,7 +774,10 @@
                 media: media.media || '',
                 mediaFile: media.mediaFile || '',
                 previewUrl: media.previewUrl || '',
-                primaryText: media.primaryText || ''
+                primaryText: media.primaryText || '',
+                thumbnail: media.thumbnail || '',
+                thumbnailFile: media.thumbnailFile || '',
+                thumbnailPreviewUrl: media.thumbnailPreviewUrl || ''
             });
             if (rerender) this.renderCreativeAds();
         },
@@ -760,6 +819,27 @@
                 card.setAttribute('data-media', ad.media || '');
                 card.setAttribute('data-media-file', ad.mediaFile || '');
                 card.style.background = 'rgba(0,0,0,0.15)';
+                
+                const isVideo = /\.(mp4|mov|avi|webm)$/i.test(ad.mediaFile || '');
+                let thumbnailHtml = '';
+                if (isVideo) {
+                    thumbnailHtml = `
+                        <div class="creative-thumbnail-section mt-2 mb-2" style="border-top:1px solid rgba(255,255,255,0.1); padding-top:10px;">
+                            <div class="flex justify-between align-center mb-1">
+                                <span style="font-size:0.85rem; color:var(--text-secondary);">🖼️ Custom Video Thumbnail (Optional)</span>
+                                <label class="btn btn-secondary btn-xs" style="cursor:pointer; font-size:0.75rem; padding: 2px 6px;">
+                                    📁 Upload Thumbnail
+                                    <input type="file" class="creative-thumbnail-input" accept="image/*" style="display:none;">
+                                </label>
+                            </div>
+                            <div class="creative-thumbnail-preview flex align-center justify-between mt-1" style="${ad.thumbnailFile ? 'display:flex;' : 'display:none;'}">
+                                <span class="creative-thumbnail-filename" style="font-size:0.8rem; color:var(--accent-cyan);">📎 ${this.escapeHtml(ad.thumbnailFile || '')}</span>
+                                <button type="button" class="btn btn-link btn-xs creative-thumbnail-remove" style="color:var(--danger-color); padding:0; margin-left:10px; font-size:0.75rem; text-decoration:none;">Remove</button>
+                            </div>
+                        </div>
+                    `;
+                }
+
                 card.innerHTML = `
                     <div class="flex justify-between align-center mb-2">
                         <h4 class="creative-ad-name" style="color:var(--accent-cyan);">${total === 1 ? 'Single content-Reel' : `Content-${index + 1} Reel`}</h4>
@@ -773,6 +853,7 @@
                     <div class="creative-media-preview mb-2" style="min-height:${ad.mediaFile ? '0' : '30px'};">
                         ${ad.mediaFile ? `<span style="color:var(--text-secondary);">📎 ${this.escapeHtml(ad.mediaFile)}</span>` : '<span style="color:var(--text-secondary);">No media selected yet</span>'}
                     </div>
+                    ${thumbnailHtml}
                     <label>Primary Text *</label>
                     <textarea class="form-control creative-primary-text" rows="7" placeholder="Use Auto-fill from Website or write the primary text here...">${this.escapeHtml(ad.primaryText || '')}</textarea>
                 `;
@@ -786,6 +867,44 @@
                 card.querySelector('.creative-primary-text').addEventListener('input', e => {
                     this.campaignData.step3.ads[index].primaryText = e.target.value;
                 });
+                
+                if (isVideo) {
+                    const thumbInput = card.querySelector('.creative-thumbnail-input');
+                    const removeThumbBtn = card.querySelector('.creative-thumbnail-remove');
+                    
+                    if (thumbInput) {
+                        thumbInput.addEventListener('change', async e => {
+                            const file = e.target.files[0];
+                            if (file) {
+                                const formData = new FormData();
+                                formData.append('file', file);
+                                try {
+                                    window.AppController.showToast('Uploading custom thumbnail...', 'info');
+                                    const response = await window.API.uploadMedia(formData);
+                                    
+                                    this.campaignData.step3.ads[index].thumbnail = response.filePath;
+                                    this.campaignData.step3.ads[index].thumbnailFile = response.filename;
+                                    this.campaignData.step3.ads[index].thumbnailPreviewUrl = URL.createObjectURL(file);
+                                    
+                                    window.AppController.showToast('Custom thumbnail uploaded successfully! ✅', 'success');
+                                    this.renderCreativeAds();
+                                } catch (err) {
+                                    window.AppController.showToast(`Thumbnail upload failed: ${err.message}`, 'danger');
+                                }
+                            }
+                        });
+                    }
+                    
+                    if (removeThumbBtn) {
+                        removeThumbBtn.addEventListener('click', () => {
+                            this.campaignData.step3.ads[index].thumbnail = '';
+                            this.campaignData.step3.ads[index].thumbnailFile = '';
+                            this.campaignData.step3.ads[index].thumbnailPreviewUrl = '';
+                            window.AppController.showToast('Custom thumbnail removed', 'info');
+                            this.renderCreativeAds();
+                        });
+                    }
+                }
             });
         },
 
@@ -822,18 +941,30 @@
                     description.value = result.description || '';
                 }
 
-                this.campaignData.step3.ads.forEach(ad => {
-                    if (!ad.primaryText.trim() || ad.primaryText === this._autoFilledCopy.primaryText) {
-                        ad.primaryText = result.primaryText || '';
-                    }
-                });
-                this.renderCreativeAds();
                 this._copyAutoFilledForUrl = websiteUrl;
                 this._autoFilledCopy = {
                     headline: headline?.value || '',
                     description: description?.value || '',
                     primaryText: result.primaryText || ''
                 };
+
+                // Now generate unique variations for each ad (content card)
+                const totalAds = this.campaignData.step3.ads.length;
+                let variations = [];
+                if (totalAds > 1 && result.primaryText) {
+                    try {
+                        if (btn) btn.textContent = '⏳ Generating unique ad variations...';
+                        const varResult = await window.API.generateVariations({ baseText: result.primaryText, count: totalAds });
+                        variations = varResult.variations || [];
+                    } catch (e) {
+                        console.warn('Failed to generate variations, falling back to base copy:', e.message);
+                    }
+                }
+
+                this.campaignData.step3.ads.forEach((ad, index) => {
+                    ad.primaryText = (variations[index] || result.primaryText || '').trim();
+                });
+                this.renderCreativeAds();
                 if (!silent) window.AppController.showToast('Headline and primary text auto-filled ✨', 'success');
             } catch (error) {
                 if (!silent) window.AppController.showToast('Website/Gemini error: ' + error.message, 'error');
@@ -931,8 +1062,17 @@
                             <p class="mt-2" style="color:var(--text-secondary);">Campaign ID: ${result.results?.campaignId || 'Created'}</p>
                             <p style="color:var(--text-secondary);">Ad Sets: ${result.results?.adsets?.length || 0}</p>
                             <p style="color:var(--text-secondary);">Ads: ${result.results?.ads?.length || 'Created'}</p>
+                            <button id="btn-modal-create-another" class="btn btn-primary mt-3" style="width:100%;">➕ Create Another Campaign</button>
                         </div>
                     `;
+                    
+                    const btnCreateAnother = document.getElementById('btn-modal-create-another');
+                    if (btnCreateAnother) {
+                        btnCreateAnother.addEventListener('click', () => {
+                            window.AppController.closeModal('modal-result');
+                            this.resetWizard();
+                        });
+                    }
                 }
                 window.AppController.openModal('modal-result');
                 window.AppController.loadRecentCampaigns();
@@ -982,6 +1122,246 @@
                 '"': '&quot;',
                 "'": '&#039;'
             }[char]));
+        },
+
+        loadSavedAudiencesDropdown: async function() {
+            const select = document.getElementById('load-saved-audience-select');
+            if (!select) return;
+            try {
+                const list = await window.API.getSavedAudiences();
+                select.innerHTML = '<option value="">📂 Load Saved Audience...</option>';
+                if (Array.isArray(list)) {
+                    list.forEach(aud => {
+                        const opt = document.createElement('option');
+                        opt.value = aud.id;
+                        opt.textContent = aud.name;
+                        select.appendChild(opt);
+                    });
+                }
+            } catch (err) {
+                console.error('Failed to load saved audiences:', err);
+            }
+        },
+
+        saveCurrentTargeting: async function() {
+            const name = window.prompt("Enter name for this targeting template:");
+            if (!name || !name.trim()) return;
+
+            const readLocTags = (selector) => {
+                const items = [];
+                document.querySelectorAll(selector).forEach(tag => {
+                    items.push({
+                        key: tag.getAttribute('data-key') || '',
+                        name: tag.getAttribute('data-name') || tag.getAttribute('data-value') || '',
+                        type: tag.getAttribute('data-type') || 'country'
+                    });
+                });
+                return items;
+            };
+
+            const globalLocInclude = readLocTags('#location-include-tags .location-tag');
+            const globalLocExclude = readLocTags('#location-exclude-tags .location-tag');
+            const globalAgeMin = parseInt(document.getElementById('global-age-min')?.value) || 18;
+            const globalAgeMax = parseInt(document.getElementById('global-age-max')?.value) || 65;
+            const globalGender = document.querySelector('input[name="global-gender"]:checked')?.value || 'all';
+
+            const customInclude = [];
+            document.querySelectorAll('#custom-include-tags .audience-tag').forEach(t => customInclude.push(t.getAttribute('data-value')));
+            const customExclude = [];
+            document.querySelectorAll('#custom-exclude-tags .audience-tag').forEach(t => customExclude.push(t.getAttribute('data-value')));
+            const lookalikeInclude = [];
+            document.querySelectorAll('#lookalike-include-tags .audience-tag').forEach(t => lookalikeInclude.push(t.getAttribute('data-value')));
+            const lookalikeExclude = [];
+            document.querySelectorAll('#lookalike-exclude-tags .audience-tag').forEach(t => lookalikeExclude.push(t.getAttribute('data-value')));
+
+            const audienceCards = document.querySelectorAll('.audience-card');
+            const interestsSets = [];
+            audienceCards.forEach(card => {
+                const interests = [];
+                card.querySelectorAll('.interest-tag').forEach(tag => {
+                    interests.push({
+                        id: tag.getAttribute('data-id') || '',
+                        name: tag.getAttribute('data-value') || tag.textContent.replace('✖','').trim()
+                    });
+                });
+                interestsSets.push(interests);
+            });
+
+            const targeting = {
+                globalLocInclude,
+                globalLocExclude,
+                globalAgeMin,
+                globalAgeMax,
+                globalGender,
+                customInclude,
+                customExclude,
+                lookalikeInclude,
+                lookalikeExclude,
+                interestsSets
+            };
+
+            try {
+                await window.API.saveSavedAudience({ name, targeting });
+                window.AppController.showToast('Audience saved successfully! 💾', 'success');
+                this.loadSavedAudiencesDropdown();
+            } catch (err) {
+                window.AppController.showToast('Failed to save audience: ' + err.message, 'error');
+            }
+        },
+
+        loadTargetingTemplate: async function(id) {
+            if (!id) return;
+            try {
+                const list = await window.API.getSavedAudiences();
+                const selected = list.find(a => a.id === id);
+                if (!selected || !selected.targeting) return;
+
+                const t = selected.targeting;
+                
+                // 1. Populate global inputs
+                const ageMinInput = document.getElementById('global-age-min');
+                const ageMaxInput = document.getElementById('global-age-max');
+                if (ageMinInput && t.globalAgeMin) ageMinInput.value = t.globalAgeMin;
+                if (ageMaxInput && t.globalAgeMax) ageMaxInput.value = t.globalAgeMax;
+                
+                if (t.globalGender) {
+                    const genderRadio = document.querySelector(`input[name="global-gender"][value="${t.globalGender}"]`);
+                    if (genderRadio) genderRadio.checked = true;
+                }
+
+                // Locations include tags
+                const locIncludeTags = document.getElementById('location-include-tags');
+                const locIncludeSearch = document.getElementById('loc-include-search');
+                if (locIncludeTags && locIncludeSearch && Array.isArray(t.globalLocInclude)) {
+                    locIncludeTags.querySelectorAll('.location-tag').forEach(tag => tag.remove());
+                    t.globalLocInclude.forEach(loc => {
+                        const tag = document.createElement('span');
+                        tag.className = 'tag location-tag';
+                        tag.setAttribute('data-key', loc.key || '');
+                        tag.setAttribute('data-type', loc.type || 'country');
+                        tag.setAttribute('data-name', loc.name);
+                        tag.setAttribute('data-value', loc.name);
+                        const ico = { country: '🌍', region: '📍', city: '🏙️' }[loc.type] || '📍';
+                        tag.innerHTML = `${loc.name} ${ico} <span class="tag-remove" onclick="this.parentElement.remove()">✖</span>`;
+                        locIncludeTags.insertBefore(tag, locIncludeSearch);
+                    });
+                }
+
+                // Locations exclude tags
+                const locExcludeTags = document.getElementById('location-exclude-tags');
+                const locExcludeSearch = document.getElementById('loc-exclude-search');
+                if (locExcludeTags && locExcludeSearch && Array.isArray(t.globalLocExclude)) {
+                    locExcludeTags.querySelectorAll('.location-tag').forEach(tag => tag.remove());
+                    t.globalLocExclude.forEach(loc => {
+                        const tag = document.createElement('span');
+                        tag.className = 'tag location-tag';
+                        tag.setAttribute('data-key', loc.key || '');
+                        tag.setAttribute('data-type', loc.type || 'country');
+                        tag.setAttribute('data-name', loc.name);
+                        tag.setAttribute('data-value', loc.name);
+                        const ico = { country: '🌍', region: '📍', city: '🏙️' }[loc.type] || '📍';
+                        tag.innerHTML = `${loc.name} ${ico} <span class="tag-remove" onclick="this.parentElement.remove()">✖</span>`;
+                        locExcludeTags.insertBefore(tag, locExcludeSearch);
+                    });
+                }
+
+                // Custom Audiences Include/Exclude
+                const renderCustomAudienceTags = (containerId, searchId, list) => {
+                    const container = document.getElementById(containerId);
+                    const search = document.getElementById(searchId);
+                    if (container && search && Array.isArray(list)) {
+                        container.querySelectorAll('.audience-tag').forEach(tag => tag.remove());
+                        list.forEach(val => {
+                            const tag = document.createElement('span');
+                            tag.className = 'tag audience-tag';
+                            tag.setAttribute('data-value', val);
+                            tag.innerHTML = `${val} <span class="tag-remove" onclick="this.parentElement.remove()">✖</span>`;
+                            container.insertBefore(tag, search);
+                        });
+                    }
+                };
+
+                renderCustomAudienceTags('custom-include-tags', 'custom-include-search', t.customInclude);
+                renderCustomAudienceTags('custom-exclude-tags', 'custom-exclude-search', t.customExclude);
+                renderCustomAudienceTags('lookalike-include-tags', 'lookalike-include-search', t.lookalikeInclude);
+                renderCustomAudienceTags('lookalike-exclude-tags', 'lookalike-exclude-search', t.lookalikeExclude);
+
+                // 2. Populate interest cards
+                if (Array.isArray(t.interestsSets)) {
+                    const numInput = document.getElementById('num-adsets');
+                    if (numInput) numInput.value = t.interestsSets.length;
+                    
+                    this.updateAudienceCards();
+                    
+                    const cards = document.querySelectorAll('.audience-card');
+                    t.interestsSets.forEach((interests, idx) => {
+                        const card = cards[idx];
+                        if (card) {
+                            this._populateAudienceCard(card, idx, interests);
+                        }
+                    });
+                }
+
+                window.AppController.showToast('Targeting template loaded! 📂', 'success');
+            } catch (err) {
+                window.AppController.showToast('Failed to load targeting template: ' + err.message, 'error');
+            }
+        },
+
+        resetWizard: function() {
+            // Reset wizard step
+            this.currentStep = 1;
+            this.updateStepUI();
+
+            // Clear inputs
+            const nameInput = document.getElementById('campaign-name');
+            if (nameInput) nameInput.value = '';
+            
+            const budgetInput = document.getElementById('budget-amount');
+            if (budgetInput) {
+                const symbol = this.getCurrencySymbol(window.APP?.activeAccount);
+                budgetInput.value = symbol === '$' ? '50' : '500';
+            }
+
+            // Clear scheduling
+            this.setDefaultDateTime();
+            
+            // Clear URL
+            const urlInput = document.getElementById('website-url');
+            if (urlInput) urlInput.value = '';
+
+            // Reset campaignData state
+            this.campaignData = {
+                step1: {},
+                step2: { audiences: [] },
+                step3: { ads: [], headline: '', description: '', cta: 'SHOP_NOW', pageId: '', instagramId: '' }
+            };
+            this._retryState = null;
+            this._creationDraftId = '';
+            this._copyAutoFilledForUrl = '';
+            this._autoFilledCopy = { headline: '', description: '', primaryText: '' };
+            
+            // Re-render empty audience cards
+            const numInput = document.getElementById('num-adsets');
+            if (numInput) numInput.value = '3';
+            this.updateAudienceCards();
+
+            // Hide creation status
+            const statusDiv = document.getElementById('creation-status');
+            if (statusDiv) statusDiv.style.display = 'none';
+        },
+
+        startCampaignWizardWithData: function(campaignName, url) {
+            this.resetWizard();
+            
+            const nameInput = document.getElementById('campaign-name');
+            if (nameInput) nameInput.value = campaignName;
+            
+            const urlInput = document.getElementById('website-url');
+            if (urlInput) urlInput.value = url;
+            
+            this.updateStepUI();
+            this.renderReviewSummary();
         }
     };
 
