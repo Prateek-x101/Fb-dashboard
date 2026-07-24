@@ -22,6 +22,19 @@ function saveStorage(data) {
     fs.writeFileSync(storagePath, JSON.stringify(data, null, 2), 'utf8');
 }
 
+async function downloadUrlToTempFile(url) {
+    const os = require('os');
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Failed to fetch image from URL: ${url}`);
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    
+    const tempDir = os.tmpdir();
+    const tempFilePath = path.join(tempDir, `fb_thumb_${Date.now()}_${Math.random().toString(36).substring(7)}.jpg`);
+    fs.writeFileSync(tempFilePath, buffer);
+    return tempFilePath;
+}
+
 function appendUtmParams(url) {
     if (!url) return url;
     const utmStr = 'utm_medium={{ad.name}}&utm_campaign={{campaign.name}}&utm_content={{adset.name}}';
@@ -420,6 +433,19 @@ router.post('/create', async (req, res) => {
                         thumbnailHash = firstKey ? thumbRes.images[firstKey].hash : null;
                     } catch (thumbErr) {
                         console.error('Failed to upload custom video thumbnail to FB:', thumbErr.message);
+                    }
+                } else if (videoThumbnailUrl) {
+                    // Auto-extract thumbnail: download generated thumbnail from FB and upload to get an image_hash
+                    try {
+                        console.log(`Auto-extracting thumbnail from video: downloading ${videoThumbnailUrl}...`);
+                        const tempFilePath = await downloadUrlToTempFile(videoThumbnailUrl);
+                        const thumbRes = await facebookService.uploadImage(accountId, token, tempFilePath);
+                        const firstKey = Object.keys(thumbRes.images || {})[0];
+                        thumbnailHash = firstKey ? thumbRes.images[firstKey].hash : null;
+                        try { fs.unlinkSync(tempFilePath); } catch (e) {}
+                        console.log('Auto-extracted thumbnail uploaded successfully to FB! Hash:', thumbnailHash);
+                    } catch (thumbErr) {
+                        console.error('Failed to auto-extract and upload video thumbnail to FB:', thumbErr.message);
                     }
                 }
             } else {
