@@ -141,6 +141,20 @@ Rules:
         }
     },
 
+    async generateResponseText(apiKey, model, prompt) {
+        const url = `${BASE_URL}/models/${normalizeModel(model)}:generateContent?key=${apiKey}`;
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            throw new Error(data.error ? data.error.message : 'Unknown Gemini API Error');
+        }
+        return data.candidates[0].content.parts[0].text;
+    },
+
     async testConnection(apiKey, model) {
         const url = `${BASE_URL}/models/${normalizeModel(model)}:generateContent?key=${apiKey}`;
         const response = await fetch(url, {
