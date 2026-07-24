@@ -410,8 +410,12 @@
                 document.getElementById('token-step-2').style.display = 'block';
 
             } catch (error) {
-                window.AppController.showToast('Failed to fetch accounts: ' + error.message, 'error');
-                if (listEl) listEl.innerHTML = `<p style="text-align:center; color:var(--danger); padding:2rem;">Error: ${error.message}</p>`;
+                let friendlyMsg = error.message;
+                if (friendlyMsg.includes('#200') || friendlyMsg.toLowerCase().includes('permission')) {
+                    friendlyMsg = "Missing Permissions (#200). If your Facebook App is in Development Mode, make sure this FB Account is added as a 'Tester' or 'Developer' in your Meta Developer App Roles.";
+                }
+                window.AppController.showToast('Failed to fetch accounts: ' + friendlyMsg, 'error');
+                if (listEl) listEl.innerHTML = `<p style="text-align:center; color:var(--danger); padding:2rem;">Error: ${friendlyMsg}</p>`;
             }
         },
 
