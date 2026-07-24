@@ -283,7 +283,12 @@ router.get('/auth/facebook', (req, res) => {
                 <html>
                 <body>
                     <script>
-                        window.opener.postMessage({ type: 'fb_auth_error', error: 'Facebook App ID not configured in Settings. Please go to Settings and enter your App ID and Secret.' }, window.location.origin);
+                        try {
+                            localStorage.setItem('fb_auth_error', 'Facebook App ID not configured in Settings. Please go to Settings and enter your App ID and Secret.');
+                        } catch(e){}
+                        if (window.opener) {
+                            try { window.opener.postMessage({ type: 'fb_auth_error', error: 'Facebook App ID not configured in Settings. Please go to Settings and enter your App ID and Secret.' }, '*'); } catch(e){}
+                        }
                         window.close();
                     </script>
                 </body>
@@ -299,7 +304,12 @@ router.get('/auth/facebook', (req, res) => {
             <html>
             <body>
                 <script>
-                    window.opener.postMessage({ type: 'fb_auth_error', error: '${error.message.replace(/'/g, "\\'")}' }, window.location.origin);
+                    try {
+                        localStorage.setItem('fb_auth_error', '${error.message.replace(/'/g, "\\'")}');
+                    } catch(e){}
+                    if (window.opener) {
+                        try { window.opener.postMessage({ type: 'fb_auth_error', error: '${error.message.replace(/'/g, "\\'")}' }, '*'); } catch(e){}
+                    }
                     window.close();
                 </script>
             </body>
@@ -317,7 +327,12 @@ router.get('/auth/facebook/callback', async (req, res) => {
                 <html>
                 <body>
                     <script>
-                        window.opener.postMessage({ type: 'fb_auth_error', error: '${error_description || error || 'Authorization failed'}' }, window.location.origin);
+                        try {
+                            localStorage.setItem('fb_auth_error', '${(error_description || error || 'Authorization failed').replace(/'/g, "\\'")}');
+                        } catch(e){}
+                        if (window.opener) {
+                            try { window.opener.postMessage({ type: 'fb_auth_error', error: '${(error_description || error || 'Authorization failed').replace(/'/g, "\\'")}' }, '*'); } catch(e){}
+                        }
                         window.close();
                     </script>
                 </body>
@@ -334,7 +349,12 @@ router.get('/auth/facebook/callback', async (req, res) => {
                 <html>
                 <body>
                     <script>
-                        window.opener.postMessage({ type: 'fb_auth_error', error: 'App ID or App Secret is missing in Settings.' }, window.location.origin);
+                        try {
+                            localStorage.setItem('fb_auth_error', 'App ID or App Secret is missing in Settings.');
+                        } catch(e){}
+                        if (window.opener) {
+                            try { window.opener.postMessage({ type: 'fb_auth_error', error: 'App ID or App Secret is missing in Settings.' }, '*'); } catch(e){}
+                        }
                         window.close();
                     </script>
                 </body>
@@ -356,7 +376,12 @@ router.get('/auth/facebook/callback', async (req, res) => {
             <html>
             <body>
                 <script>
-                    window.opener.postMessage({ type: 'fb_auth_success', token: '${longToken}' }, window.location.origin);
+                    try {
+                        localStorage.setItem('fb_auth_token', '${longToken}');
+                    } catch(e){}
+                    if (window.opener) {
+                        try { window.opener.postMessage({ type: 'fb_auth_success', token: '${longToken}' }, '*'); } catch(e){}
+                    }
                     window.close();
                 </script>
             </body>
@@ -367,7 +392,12 @@ router.get('/auth/facebook/callback', async (req, res) => {
             <html>
             <body>
                 <script>
-                    window.opener.postMessage({ type: 'fb_auth_error', error: '${error.message.replace(/'/g, "\\'")}' }, window.location.origin);
+                    try {
+                        localStorage.setItem('fb_auth_error', '${error.message.replace(/'/g, "\\'")}');
+                    } catch(e){}
+                    if (window.opener) {
+                        try { window.opener.postMessage({ type: 'fb_auth_error', error: '${error.message.replace(/'/g, "\\'")}' }, '*'); } catch(e){}
+                    }
                     window.close();
                 </script>
             </body>

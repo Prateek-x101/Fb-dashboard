@@ -14,14 +14,24 @@
 
         bindPostMessageListener: function() {
             window.addEventListener('message', async (event) => {
-                if (event.origin !== window.location.origin) return;
+                // Support both exact matching and safe postMessage communication
+                if (event.origin !== window.location.origin && event.origin !== 'null' && event.origin !== '') return;
                 
                 const data = event.data;
-                if (data.type === 'fb_auth_success') {
+                if (data && data.type === 'fb_auth_success' && data.token) {
+                    // Prevent duplicate triggers if already handled by polling
+                    if (localStorage.getItem('fb_auth_handled')) return;
+                    localStorage.setItem('fb_auth_handled', 'true');
+                    setTimeout(() => localStorage.removeItem('fb_auth_handled'), 2000);
+
                     window.AppController.showToast('Facebook authorization successful! 🔵', 'success');
                     window.AppController.openModal('modal-token-connect');
                     await this.loadAccountsForToken(data.token);
-                } else if (data.type === 'fb_auth_error') {
+                } else if (data && data.type === 'fb_auth_error') {
+                    if (localStorage.getItem('fb_auth_handled')) return;
+                    localStorage.setItem('fb_auth_handled', 'true');
+                    setTimeout(() => localStorage.removeItem('fb_auth_handled'), 2000);
+
                     window.AppController.showToast('Facebook Login Failed: ' + data.error, 'error');
                 }
             });
@@ -32,11 +42,46 @@
             const height = 650;
             const left = (window.screen.width - width) / 2;
             const top = (window.screen.height - height) / 2;
-            window.open(
+            
+            // Clear old tokens and state
+            localStorage.removeItem('fb_auth_token');
+            localStorage.removeItem('fb_auth_error');
+            localStorage.removeItem('fb_auth_handled');
+
+            const popup = window.open(
                 '/api/accounts/auth/facebook',
                 'facebook_login',
                 `width=${width},height=${height},left=${left},top=${top},status=no,resizable=yes,scrollbars=yes`
             );
+
+            // Setup polling as a guaranteed fallback if postMessage/window.opener is blocked by browser COOP/incognito policies
+            const pollInterval = setInterval(async () => {
+                const token = localStorage.getItem('fb_auth_token');
+                const error = localStorage.getItem('fb_auth_error');
+                
+                if (token) {
+                    clearInterval(pollInterval);
+                    localStorage.setItem('fb_auth_handled', 'true');
+                    localStorage.removeItem('fb_auth_token');
+                    setTimeout(() => localStorage.removeItem('fb_auth_handled'), 2000);
+
+                    if (popup && !popup.closed) popup.close();
+                    
+                    window.AppController.showToast('Facebook authorization successful! 🔵', 'success');
+                    window.AppController.openModal('modal-token-connect');
+                    await this.loadAccountsForToken(token);
+                } else if (error) {
+                    clearInterval(pollInterval);
+                    localStorage.setItem('fb_auth_handled', 'true');
+                    localStorage.removeItem('fb_auth_error');
+                    setTimeout(() => localStorage.removeItem('fb_auth_handled'), 2000);
+
+                    if (popup && !popup.closed) popup.close();
+                    window.AppController.showToast('Facebook Login Failed: ' + error, 'error');
+                } else if (!popup || popup.closed) {
+                    clearInterval(pollInterval);
+                }
+            }, 500);
         },
 
         bindEvents: function() {
