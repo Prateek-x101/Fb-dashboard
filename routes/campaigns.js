@@ -119,16 +119,18 @@ router.get('/account-features/:accountId', async (req, res) => {
             advantageAudience:   true,   // universally available
             multiAdvertiser:     true,   // universally available
             autoCreative:        true,   // universally available (standard_enhancements)
-            inlineComment:       true,   // universally available
+            inlineComment:       false,  // legacy key is not in Meta's current enum
             textOptimizations:   !capSet.has('CANNOT_USE_CREATIVE_HUB'), // disabled for very restricted accounts
-            productTags:         hasCatalog,   // requires a connected product catalog
-            enhanceCta:          true    // universally available
+            // These legacy creative feature keys are rejected by the current
+            // Meta API even when the account has a catalog or CTA enabled.
+            productTags:         false,
+            enhanceCta:          false
         });
     } catch (error) {
         // On any error fall back to all enabled so campaign creation isn't blocked
         res.json({
             advantageAudience: true, multiAdvertiser: true, autoCreative: true,
-            inlineComment: true, textOptimizations: true, productTags: false, enhanceCta: true
+            inlineComment: false, textOptimizations: true, productTags: false, enhanceCta: false
         });
     }
 });
@@ -229,30 +231,17 @@ router.post('/ai-audiences', async (req, res) => {
         }
         await assertSafeExternalUrl(websiteUrl);
 
-        // Fetch website content so Gemini can understand the product
-        let websiteContent = `URL: ${websiteUrl}`;
-        try {
-            const response = await fetchSafeExternal(websiteUrl);
-            if (response.ok) {
-                const html = await response.text();
-                const text = html
-                    .replace(/<script[\s\S]*?<\/script>/gi, '')
-                    .replace(/<style[\s\S]*?<\/style>/gi, '')
-                    .replace(/<[^>]+>/g, ' ')
-                    .replace(/\s+/g, ' ')
-                    .trim()
-                    .slice(0, 3000);
-                websiteContent = `URL: ${websiteUrl}\n\nPage content:\n${text}`;
-            }
-        } catch (fetchErr) {
-            console.log('Could not fetch website content, using URL only:', fetchErr.message);
-        }
+        // Use the same product extractor as ad-copy generation. This gives
+        // Gemini structured product data and a long product-page description,
+        // instead of only a short generic HTML snippet.
+        const details = await fetchWebsiteDetails(websiteUrl);
+        const requestedCount = Math.max(3, Math.min(20, parseInt(numAudiences, 10) || 3));
 
         const audiences = await geminiService.generateAudiences(
             settings.geminiApiKey,
             settings.geminiModel,
-            websiteContent,
-            numAudiences || 3,
+            details.content,
+            requestedCount,
             alreadyUsed || []
         );
 
@@ -274,6 +263,12 @@ router.post('/ai-audiences', async (req, res) => {
 
                 const validatedItems = await facebookService.resolveAllTargeting(rawItems, token);
                 aud.targeting = validatedItems;
+                aud.unresolvedTargeting = rawItems
+                    .filter(item => !validatedItems.some(valid =>
+                        valid.type === (item.type || 'interest') &&
+                        String(valid.name || '').trim().toLowerCase() === String(item.name || '').trim().toLowerCase()
+                    ))
+                    .map(item => ({ name: item.name, type: item.type || 'interest' }));
                 delete aud.interests;
                 console.log(`Audience "${aud.audienceName}": ${validatedItems.length} validated targeting items`);
             }
@@ -753,11 +748,15 @@ router.post('/create', async (req, res) => {
                 const destinationUrl = appendUtmParams(step2.url);
                 // Build degrees_of_freedom_spec from selected enhancements
                 const dofFeatures = {};
-                if (enhancements.autoCreative)      dofFeatures.standard_enhancements = { enroll_status: 'OPT_IN' };
-                if (enhancements.inlineComment)     dofFeatures.inline_comment         = { enroll_status: 'OPT_IN' };
-                if (enhancements.textOptimizations) dofFeatures.text_optimizations     = { enroll_status: 'OPT_IN' };
-                if (enhancements.productTags)       dofFeatures.product_extensions     = { enroll_status: 'OPT_IN' };
-                if (enhancements.enhanceCta)        dofFeatures.cta_optimization       = { enroll_status: 'OPT_IN' };
+                // Only use keys from Meta's current creative_features_spec
+                // enum. Older keys such as cta_optimization, inline_comment,
+                // standard_enhancements and text_optimizations cause code 100.
+                if (enhancements.autoCreative) {
+                    dofFeatures.standard_enhancements_catalog = { enroll_status: 'OPT_IN' };
+                }
+                if (enhancements.textOptimizations) {
+                    dofFeatures.text_overlay_translation = { enroll_status: 'OPT_IN' };
+                }
 
                 const creativeParams = {
                     name: `${campaign.name} — ${audience.name} — ${ad.name}`,
@@ -984,15 +983,45 @@ async function fetchWebsiteDetails(websiteUrl) {
         firstMatch(/<h1[^>]*>([\s\S]*?)<\/h1>/i).replace(/<[^>]+>/g, '') ||
         firstMatch(/<title[^>]*>([\s\S]*?)<\/title>/i).replace(/<[^>]+>/g, '') ||
         'Product';
+    const metaDescription =
+        firstMatch(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i) ||
+        firstMatch(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i);
+    const structuredProducts = [];
+    for (const match of html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+        try {
+            const parsed = JSON.parse(match[1].trim());
+            const nodes = Array.isArray(parsed) ? parsed : [parsed];
+            nodes.forEach(node => {
+                const type = node && node['@type'];
+                if (node && (type === 'Product' || (Array.isArray(type) && type.includes('Product')))) {
+                    structuredProducts.push(node);
+                }
+            });
+        } catch {
+            // Keep using visible page text when one JSON-LD block is invalid.
+        }
+    }
     const content = html
         .replace(/<script[\s\S]*?<\/script>/gi, '')
         .replace(/<style[\s\S]*?<\/style>/gi, '')
         .replace(/<[^>]+>/g, ' ')
         .replace(/\s+/g, ' ')
         .trim()
-        .slice(0, 6000);
+        .slice(0, 12000);
+    const structuredDetails = structuredProducts.length
+        ? `\n\nStructured product data (JSON-LD):\n${JSON.stringify(structuredProducts.slice(0, 3), null, 2).slice(0, 12000)}`
+        : '';
 
-    return { productName, content: `URL: ${websiteUrl}\n\nPage content:\n${content}` };
+    return {
+        productName,
+        content: [
+            `URL: ${websiteUrl}`,
+            `Product name: ${productName}`,
+            metaDescription ? `Meta description: ${metaDescription}` : '',
+            structuredDetails,
+            `\nFull product page content:\n${content}`
+        ].filter(Boolean).join('\n')
+    };
 }
 
 function isPrivateIp(address) {

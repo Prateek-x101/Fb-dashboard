@@ -533,10 +533,10 @@ router.get('/:accountId/capabilities', async (req, res) => {
             multiAdvertiser:    true,
             autoCreative:       true,
             autoMusic:          true,
-            inlineComment:      true,
+            inlineComment:      false,          // legacy inline_comment key is rejected by Meta
             textOptimizations:  true,
-            productTags:        hasDynamicAds,   // catalog/dynamic ads only
-            enhanceCta:         true
+            productTags:        false,          // legacy product_extensions key is rejected by Meta
+            enhanceCta:         false           // legacy cta_optimization key is rejected by Meta
         };
 
         res.json({ capabilities: caps, available });

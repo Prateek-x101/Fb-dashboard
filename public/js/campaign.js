@@ -492,7 +492,8 @@
                         customAudiencesExclude: customExclude,
                         lookalikeInclude,
                         lookalikeExclude,
-                        interests
+                        interests,
+                        targeting: interests
                     });
                 });
 
@@ -544,11 +545,23 @@
         collectCreativeAdsFromDOM: function() {
             const container = document.getElementById('creative-ads-container');
             if (!container) return;
-            this.campaignData.step3.ads = Array.from(container.querySelectorAll('.creative-ad-card')).map(card => ({
-                media: card.getAttribute('data-media') || '',
-                mediaFile: card.getAttribute('data-media-file') || '',
-                primaryText: card.querySelector('.creative-primary-text')?.value?.trim() || ''
-            }));
+            const existingAds = this.campaignData.step3.ads || [];
+            this.campaignData.step3.ads = Array.from(container.querySelectorAll('.creative-ad-card')).map((card, index) => {
+                const existing = existingAds[index] || {};
+                const textField = card.querySelector('.creative-primary-text');
+                return {
+                    ...existing,
+                    media: card.getAttribute('data-media') || existing.media || '',
+                    mediaFile: card.getAttribute('data-media-file') || existing.mediaFile || '',
+                    // Keep the object-URL preview and uploaded thumbnail when
+                    // moving between steps or re-rendering after Gemini.
+                    previewUrl: existing.previewUrl || '',
+                    thumbnail: existing.thumbnail || '',
+                    thumbnailFile: existing.thumbnailFile || '',
+                    thumbnailPreviewUrl: existing.thumbnailPreviewUrl || '',
+                    primaryText: textField ? textField.value.trim() : (existing.primaryText || '')
+                };
+            });
         },
 
         nextStep: function() {
@@ -846,7 +859,10 @@
             if (btn) { btn.disabled = true; btn.textContent = '⏳…'; }
 
             try {
-                const result = await window.API.aiAudiences({ websiteUrl, numAudiences: 1, alreadyUsed });
+                // The backend always asks Gemini for at least three strategies.
+                // This card-level action uses the first unused strategy while
+                // keeping the same minimum-quality generation rules as AI All.
+                const result = await window.API.aiAudiences({ websiteUrl, numAudiences: 3, alreadyUsed });
                 const audiences = result.audiences || [];
                 if (audiences.length > 0) {
                     this._populateAudienceCard(
@@ -867,14 +883,31 @@
             const websiteUrl = document.getElementById('website-url')?.value?.trim();
             if (!websiteUrl) { window.AppController.showToast('Enter the Website URL in Campaign Settings first', 'warning'); return; }
 
-            const cards = document.querySelectorAll('.audience-card');
+            let cards = document.querySelectorAll('.audience-card');
             if (!cards.length) return;
+
+            // Always show at least three audience cards so the minimum
+            // generated strategies are visible and usable in the wizard.
+            if (cards.length < 3) {
+                const container = document.getElementById('audience-container');
+                const countInput = document.getElementById('num-adsets');
+                if (container) {
+                    if (countInput) countInput.value = '3';
+                    for (let i = cards.length; i < 3; i++) {
+                        this._createAudienceCard(container, i, 3);
+                    }
+                    cards = document.querySelectorAll('.audience-card');
+                }
+            }
 
             const btn = document.getElementById('btn-ai-all-audiences');
             if (btn) { btn.disabled = true; btn.textContent = '⏳ Generating…'; }
 
             try {
-                const result = await window.API.aiAudiences({ websiteUrl, numAudiences: cards.length, alreadyUsed: [] });
+                // Gemini must always produce at least three distinct audience
+                // strategies, even if the user reduced the card count.
+                const requestedCount = Math.max(3, cards.length);
+                const result = await window.API.aiAudiences({ websiteUrl, numAudiences: requestedCount, alreadyUsed: [] });
                 const audiences = result.audiences || [];
                 cards.forEach((card, idx) => {
                     const cardIdx = parseInt(card.getAttribute('data-index'));
@@ -886,7 +919,11 @@
                         );
                     }
                 });
-                window.AppController.showToast(`${audiences.length} unique audiences generated 🎯`, 'success');
+                const unresolved = audiences.reduce((sum, aud) => sum + (aud.unresolvedTargeting?.length || 0), 0);
+                window.AppController.showToast(
+                    `${Math.min(cards.length, audiences.length)} unique audiences generated${unresolved ? ` (${unresolved} unsupported items skipped)` : ''} 🎯`,
+                    'success'
+                );
             } catch (error) {
                 window.AppController.showToast('AI generation failed: ' + error.message, 'error');
             } finally {
