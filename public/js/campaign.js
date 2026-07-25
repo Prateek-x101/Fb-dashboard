@@ -8,7 +8,7 @@
         campaignData: {
             step1: {},
             step2: { audiences: [] },
-            step3: { ads: [], headline: '', description: '', cta: 'SHOP_NOW', pageId: '', instagramId: '' }
+            step3: { ads: [], headline: '', description: '', cta: 'SHOP_NOW', pageId: '', instagramId: '', enhancements: {} }
         },
         _copyAutoFilledForUrl: '',
         _autoFilledCopy: { headline: '', description: '', primaryText: '' },
@@ -279,6 +279,21 @@
                 }
             });
 
+            // ── Enhancement toggle buttons ────────────────────────────────
+            document.querySelectorAll('.enhancement-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    btn.classList.toggle('active');
+                    const activeKeys = Array.from(document.querySelectorAll('.enhancement-btn.active'))
+                        .map(b => b.getAttribute('data-key'));
+                    const hint = document.getElementById('enhancements-desc-hint');
+                    if (hint) {
+                        hint.textContent = activeKeys.length
+                            ? `${activeKeys.length} enhancement${activeKeys.length > 1 ? 's' : ''} enabled — will be applied to all ads.`
+                            : 'Select any enhancements to enable them on all ads.';
+                    }
+                });
+            });
+
             const btnAddAdset = document.getElementById('btn-add-adset');
             if (btnAddAdset) {
                 btnAddAdset.addEventListener('click', () => {
@@ -498,6 +513,14 @@
                 this.campaignData.step3.cta = document.getElementById('cta-select')?.value || 'SHOP_NOW';
                 this.campaignData.step3.pageId = document.getElementById('ad-page')?.value || '';
                 this.campaignData.step3.instagramId = document.getElementById('ad-instagram')?.value || '';
+
+                // Collect selected enhancements
+                const enhancements = {};
+                document.querySelectorAll('.enhancement-btn.active').forEach(btn => {
+                    const key = btn.getAttribute('data-key');
+                    if (key) enhancements[key] = true;
+                });
+                this.campaignData.step3.enhancements = enhancements;
                 return true;
             }
             return true;
@@ -1921,7 +1944,7 @@
             this.campaignData = {
                 step1: {},
                 step2: { audiences: [] },
-                step3: { ads: [], headline: '', description: '', cta: 'SHOP_NOW', pageId: '', instagramId: '' }
+                step3: { ads: [], headline: '', description: '', cta: 'SHOP_NOW', pageId: '', instagramId: '', enhancements: {} }
             };
             this._retryState = null;
             this._creationDraftId = '';

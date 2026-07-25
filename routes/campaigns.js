@@ -545,12 +545,13 @@ router.post('/create', async (req, res) => {
             const geoLocations = buildGeoLocations(resolvedInclude);
             const excludedGeo = buildGeoLocations(resolvedExclude);
             const genders = audience.gender === 'male' ? [1] : audience.gender === 'female' ? [2] : [];
+            const enhancements = step3.enhancements || {};
             const targeting = {
                 age_min: audience.ageMin || 18,
                 age_max: audience.ageMax || 65,
                 geo_locations: Object.keys(geoLocations).length > 0 ? geoLocations : { countries: ['IN'] },
                 targeting_automation: {
-                    advantage_audience: 0
+                    advantage_audience: enhancements.advantageAudience ? 1 : 0
                 }
             };
             if (genders.length) targeting.genders = genders;
@@ -716,10 +717,22 @@ router.post('/create', async (req, res) => {
                 let adId = checkpoint.ads.find(item => item.key === creativeKey)?.id;
                 const textVariation = ad.primaryText || '';
                 const destinationUrl = appendUtmParams(step2.url);
+                // Build degrees_of_freedom_spec from selected enhancements
+                const dofFeatures = {};
+                if (enhancements.autoCreative)      dofFeatures.standard_enhancements = { enroll_status: 'OPT_IN' };
+                if (enhancements.autoMusic)         dofFeatures.music                  = { enroll_status: 'OPT_IN' };
+                if (enhancements.inlineComment)     dofFeatures.inline_comment         = { enroll_status: 'OPT_IN' };
+                if (enhancements.textOptimizations) dofFeatures.text_optimizations     = { enroll_status: 'OPT_IN' };
+                if (enhancements.productTags)       dofFeatures.product_extensions     = { enroll_status: 'OPT_IN' };
+                if (enhancements.enhanceCta)        dofFeatures.cta_optimization       = { enroll_status: 'OPT_IN' };
+
                 const creativeParams = {
                     name: `${campaign.name} — ${audience.name} — ${ad.name}`,
                     url_tags: 'utm_medium={{ad.name}}&utm_campaign={{campaign.name}}&utm_content={{adset.name}}',
-                    contextual_multi_ads: { enroll_status: 'OPT_OUT' },
+                    contextual_multi_ads: { enroll_status: enhancements.multiAdvertiser ? 'OPT_IN' : 'OPT_OUT' },
+                    ...(Object.keys(dofFeatures).length > 0 && {
+                        degrees_of_freedom_spec: { creative_features_spec: dofFeatures }
+                    }),
                     object_story_spec: {
                         page_id: pageId,
                         link_data: {
