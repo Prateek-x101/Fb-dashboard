@@ -4,6 +4,32 @@ const fs = require('fs');
 
 const BASE_URL = 'https://graph.facebook.com/v25.0';
 
+const TARGETING_TYPES = new Set(['interest', 'behavior', 'demographic', 'life_event', 'job_title']);
+
+function normalizeTargetingName(value) {
+    return String(value || '')
+        .normalize('NFKC')
+        .toLowerCase()
+        .replace(/&/g, ' and ')
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim()
+        .replace(/\s+/g, ' ');
+}
+
+function normalizeTargetingType(value) {
+    const type = String(value || 'interest').trim().toLowerCase();
+    return TARGETING_TYPES.has(type) ? type : null;
+}
+
+function targetingSearchUrl(name, type, token) {
+    const q = encodeURIComponent(name);
+    if (type === 'behavior') return `${BASE_URL}/search?type=adTargetingCategory&class=behaviors&q=${q}&access_token=${token}`;
+    if (type === 'demographic') return `${BASE_URL}/search?type=adTargetingCategory&class=demographics&q=${q}&access_token=${token}`;
+    if (type === 'life_event') return `${BASE_URL}/search?type=adTargetingCategory&class=life_events&q=${q}&access_token=${token}`;
+    if (type === 'job_title') return `${BASE_URL}/search?type=adworkposition&q=${q}&access_token=${token}`;
+    return `${BASE_URL}/search?type=adinterest&q=${q}&access_token=${token}`;
+}
+
 async function handleResponse(response) {
     const data = await response.json();
     if (!response.ok) {
@@ -129,33 +155,52 @@ const facebookService = {
 
     // Resolve a mixed array of {id?, name, type} items to full {id, name, type} using the right FB endpoint per type
     async resolveAllTargeting(items, token) {
-        const resolved = items.filter(i => i.id).map(i => ({ id: i.id, name: i.name, type: i.type || 'interest' }));
-        const unresolved = items.filter(i => !i.id);
+        if (!Array.isArray(items) || !token) return [];
 
-        const typeToSearchUrl = (name, type) => {
-            const q = encodeURIComponent(name);
-            if (type === 'behavior')    return `${BASE_URL}/search?type=adTargetingCategory&class=behaviors&q=${q}&access_token=${token}`;
-            if (type === 'demographic') return `${BASE_URL}/search?type=adTargetingCategory&class=demographics&q=${q}&access_token=${token}`;
-            if (type === 'life_event')  return `${BASE_URL}/search?type=adTargetingCategory&class=life_events&q=${q}&access_token=${token}`;
-            if (type === 'job_title')   return `${BASE_URL}/search?type=adworkposition&q=${q}&access_token=${token}`;
-            return `${BASE_URL}/search?type=adinterest&q=${q}&access_token=${token}`;
-        };
-
-        const promises = unresolved.map(async item => {
+        // Do not trust IDs from saved audiences or old Gemini responses.
+        // Targeting IDs can become unavailable and an ID must be validated
+        // for the targeting type that will be used in flexible_spec.
+        const promises = items.map(async item => {
             try {
-                const url = typeToSearchUrl(item.name, item.type || 'interest');
-                const data = await fetch(url).then(r => r.json());
-                if (data.data && data.data.length > 0) {
-                    const match = data.data.find(d => d.name.toLowerCase() === item.name.toLowerCase()) || data.data[0];
-                    return { id: match.id, name: match.name, type: item.type || 'interest' };
+                if (!item || typeof item !== 'object') return null;
+                const type = normalizeTargetingType(item.type);
+                if (!type) return null;
+
+                const name = String(item.name || '').trim();
+                if (name) {
+                    const data = await fetch(targetingSearchUrl(name, type, token)).then(r => r.json());
+                    const candidates = Array.isArray(data.data) ? data.data : [];
+                    const normalizedName = normalizeTargetingName(name);
+                    const match = candidates.find(candidate =>
+                        normalizeTargetingName(candidate.name) === normalizedName
+                    );
+
+                    // A broad search's first result may be a different
+                    // interest. Drop unresolved items rather than sending a
+                    // wrong key and letting Meta reject the whole ad set.
+                    if (match?.id) {
+                        return { id: String(match.id), name: match.name, type };
+                    }
+                    return null;
                 }
+
+                // An ID without the original name cannot be safely checked
+                // against the requested targeting type. Drop it rather than
+                // risking a stale/cross-type key in flexible_spec.
             } catch (e) { /* skip */ }
             return null;
         });
-        const newlyResolved = (await Promise.allSettled(promises))
+
+        const resolved = (await Promise.allSettled(promises))
             .filter(r => r.status === 'fulfilled' && r.value)
             .map(r => r.value);
-        return [...resolved, ...newlyResolved];
+        const seen = new Set();
+        return resolved.filter(item => {
+            const key = `${item.type}:${item.id}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
     },
 
     async getAdAccounts(token) {
@@ -258,10 +303,9 @@ const facebookService = {
                 const response = await fetch(url, { method: 'GET' });
                 const data = await response.json();
                 if (data.data && data.data.length > 0) {
-                    // Prefer region matches over city matches for state/region exclusions
-                    const regionMatch = data.data.find(d => d.type === 'region' && d.name.toLowerCase().includes(cleanName.toLowerCase().split(',')[0]));
-                    const exactMatch = data.data.find(d => d.name.toLowerCase() === cleanName.toLowerCase());
-                    const match = regionMatch || exactMatch || data.data[0];
+                    const normalizedName = normalizeTargetingName(cleanName);
+                    const match = data.data.find(d => normalizeTargetingName(d.name) === normalizedName);
+                    if (!match?.key) return null;
                     return { key: match.key, name: match.name, type: match.type, countryCode: match.country_code };
                 }
             } catch (e) { /* skip if can't resolve */ }
@@ -272,21 +316,11 @@ const facebookService = {
     },
 
     async resolveInterestNames(names, token) {
-        // Resolve all interest names in PARALLEL for maximum speed
-        const promises = names.map(async (name) => {
-            try {
-                const url = `${BASE_URL}/search?type=adinterest&q=${encodeURIComponent(name)}&access_token=${token}`;
-                const response = await fetch(url, { method: 'GET' });
-                const data = await response.json();
-                if (data.data && data.data.length > 0) {
-                    const match = data.data.find(d => d.name.toLowerCase() === name.toLowerCase()) || data.data[0];
-                    return { id: match.id, name: match.name };
-                }
-            } catch (e) { /* skip if can't resolve */ }
-            return null;
-        });
-        const results = await Promise.allSettled(promises);
-        return results.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
+        const resolved = await this.resolveAllTargeting(
+            (names || []).map(name => ({ name, type: 'interest' })),
+            token
+        );
+        return resolved.map(({ id, name }) => ({ id, name }));
     },
 
     async getVideoThumbnailWithRetry(videoId, token) {

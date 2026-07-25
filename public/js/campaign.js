@@ -474,7 +474,11 @@
                 audienceCards.forEach((card, idx) => {
                     const interests = [];
                     card.querySelectorAll('.interest-tag').forEach(tag => {
-                        interests.push({ id: tag.getAttribute('data-id') || '', name: tag.getAttribute('data-value') || tag.textContent.replace('✖','').trim() });
+                        interests.push({
+                            id: tag.getAttribute('data-id') || '',
+                            name: tag.getAttribute('data-value') || tag.textContent.replace('✖','').trim(),
+                            type: tag.getAttribute('data-type') || 'interest'
+                        });
                     });
                     const adsetName = interests.slice(0, 3).map(i => i.name).join(', ') || `Audience ${idx + 1}`;
                     audiences.push({
@@ -845,7 +849,11 @@
                 const result = await window.API.aiAudiences({ websiteUrl, numAudiences: 1, alreadyUsed });
                 const audiences = result.audiences || [];
                 if (audiences.length > 0) {
-                    this._populateAudienceCard(targetCard, cardIndex, audiences[0].interests || []);
+                    this._populateAudienceCard(
+                        targetCard,
+                        cardIndex,
+                        audiences[0].targeting || audiences[0].interests || []
+                    );
                     window.AppController.showToast(`Audience ${cardIndex + 1} generated ✨`, 'success');
                 } else { window.AppController.showToast('No audience returned. Try again.', 'warning'); }
             } catch (error) {
@@ -870,7 +878,13 @@
                 const audiences = result.audiences || [];
                 cards.forEach((card, idx) => {
                     const cardIdx = parseInt(card.getAttribute('data-index'));
-                    if (audiences[idx]) this._populateAudienceCard(card, cardIdx, audiences[idx].interests || []);
+                    if (audiences[idx]) {
+                        this._populateAudienceCard(
+                            card,
+                            cardIdx,
+                            audiences[idx].targeting || audiences[idx].interests || []
+                        );
+                    }
                 });
                 window.AppController.showToast(`${audiences.length} unique audiences generated 🎯`, 'success');
             } catch (error) {
@@ -1835,7 +1849,8 @@
                 card.querySelectorAll('.interest-tag').forEach(tag => {
                     interests.push({
                         id: tag.getAttribute('data-id') || '',
-                        name: tag.getAttribute('data-value') || tag.textContent.replace('✖','').trim()
+                        name: tag.getAttribute('data-value') || tag.textContent.replace('✖','').trim(),
+                        type: tag.getAttribute('data-type') || 'interest'
                     });
                 });
                 interestsSets.push(interests);

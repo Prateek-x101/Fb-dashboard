@@ -262,44 +262,17 @@ router.post('/ai-audiences', async (req, res) => {
         const token = activeAccount.accessToken || settings.facebookAccessToken;
 
         if (token) {
-            const typeToSearchUrl = (name, type) => {
-                const q = encodeURIComponent(name);
-                if (type === 'behavior')    return `https://graph.facebook.com/v25.0/search?type=adTargetingCategory&class=behaviors&q=${q}&access_token=${token}`;
-                if (type === 'demographic') return `https://graph.facebook.com/v25.0/search?type=adTargetingCategory&class=demographics&q=${q}&access_token=${token}`;
-                if (type === 'life_event')  return `https://graph.facebook.com/v25.0/search?type=adTargetingCategory&class=life_events&q=${q}&access_token=${token}`;
-                if (type === 'job_title')   return `https://graph.facebook.com/v25.0/search?type=adworkposition&q=${q}&access_token=${token}`;
-                return `https://graph.facebook.com/v25.0/search?type=adinterest&q=${q}&access_token=${token}`;
-            };
-
             for (const aud of audiences) {
                 // Normalise: support new `targeting` array or legacy `interests` array from Gemini
                 const rawItems = Array.isArray(aud.targeting) && aud.targeting.length > 0
                     ? aud.targeting
-                    : (aud.interests || []).map(i => ({ name: typeof i === 'string' ? i : i.name, type: 'interest' }));
+                    : (aud.interests || []).map(i => typeof i === 'string'
+                        ? { name: i, type: 'interest' }
+                        : { ...i, type: i.type || 'interest' });
 
                 if (!rawItems.length) continue;
 
-                const validatedItems = [];
-                for (const item of rawItems) {
-                    const name = item.name;
-                    const type = item.type || 'interest';
-                    if (!name) continue;
-                    try {
-                        const searchUrl = typeToSearchUrl(name, type);
-                        const searchRes = await fetchSafeExternal(searchUrl);
-                        if (searchRes.ok) {
-                            const searchData = await searchRes.json();
-                            if (searchData.data && searchData.data.length > 0) {
-                                const match = searchData.data.find(d => d.name.toLowerCase() === name.toLowerCase()) || searchData.data[0];
-                                validatedItems.push({ id: match.id, name: match.name, type });
-                            } else {
-                                console.warn(`Targeting "${name}" (${type}) not found in Facebook, skipping`);
-                            }
-                        }
-                    } catch (e) {
-                        console.warn(`Could not validate targeting "${name}":`, e.message);
-                    }
-                }
+                const validatedItems = await facebookService.resolveAllTargeting(rawItems, token);
                 aud.targeting = validatedItems;
                 delete aud.interests;
                 console.log(`Audience "${aud.audienceName}": ${validatedItems.length} validated targeting items`);
@@ -543,7 +516,9 @@ router.post('/create', async (req, res) => {
             let resolvedInclude = [];
 
             (audience.locationsInclude || []).forEach(l => {
-                if (l.key) {
+                // A name is authoritative when present. Re-resolve it for the
+                // selected account instead of trusting a stale saved key.
+                if (!l.name && l.key) {
                     resolvedInclude.push({ key: l.key, type: l.type || 'country', name: l.name });
                 } else if (locationCache.has(l.name)) {
                     resolvedInclude.push(locationCache.get(l.name));
@@ -570,7 +545,7 @@ router.post('/create', async (req, res) => {
             let resolvedExclude = [];
 
             (audience.locationsExclude || []).forEach(l => {
-                if (l.key) {
+                if (!l.name && l.key) {
                     resolvedExclude.push({ key: l.key, type: l.type || 'country', name: l.name });
                 } else if (locationCache.has(l.name)) {
                     resolvedExclude.push(locationCache.get(l.name));
@@ -599,10 +574,7 @@ router.post('/create', async (req, res) => {
             const targeting = {
                 age_min: audience.ageMin || 18,
                 age_max: audience.ageMax || 65,
-                geo_locations: Object.keys(geoLocations).length > 0 ? geoLocations : { countries: ['IN'] },
-                targeting_automation: {
-                    advantage_audience: enhancements.advantageAudience ? 1 : 0
-                }
+                geo_locations: Object.keys(geoLocations).length > 0 ? geoLocations : { countries: ['IN'] }
             };
             if (genders.length) targeting.genders = genders;
             if (Object.keys(excludedGeo).length > 0) targeting.excluded_geo_locations = excludedGeo;
