@@ -168,49 +168,62 @@ const facebookService = {
 
                 const name = String(item.name || '').trim();
                 if (name) {
-                    const data = await fetch(targetingSearchUrl(name, type, token)).then(r => r.json());
-                    const candidates = Array.isArray(data.data) ? data.data : [];
                     const normalizedName = normalizeTargetingName(name);
+                    const sigWords = normalizedName.split(' ').filter(w => w.length > 2);
 
-                    // 1. Exact match (best)
-                    let match = candidates.find(c => normalizeTargetingName(c.name) === normalizedName);
-
-                    // 2. One contains the other (e.g. "international travelers" ↔ "International Travel")
-                    if (!match) {
-                        match = candidates.find(c => {
+                    // Helper: score a candidate pool against the target keyword
+                    function bestFromPool(pool) {
+                        // 1. Exact
+                        let m = pool.find(c => normalizeTargetingName(c.name) === normalizedName);
+                        if (m) return m;
+                        // 2. One string contains the other
+                        m = pool.find(c => {
                             const cn = normalizeTargetingName(c.name);
                             return cn.includes(normalizedName) || normalizedName.includes(cn);
                         });
-                    }
-
-                    // 3. All significant words from the keyword appear in the candidate
-                    if (!match) {
-                        const words = normalizedName.split(' ').filter(w => w.length > 2);
-                        if (words.length > 0) {
-                            match = candidates.find(c => {
+                        if (m) return m;
+                        // 3. All significant words present in candidate
+                        if (sigWords.length > 0) {
+                            m = pool.find(c => {
                                 const cn = normalizeTargetingName(c.name);
-                                return words.every(w => cn.includes(w));
+                                return sigWords.every(w => cn.includes(w));
                             });
+                            if (m) return m;
                         }
-                    }
-
-                    // 4. Majority of significant words match (≥ 60% overlap)
-                    if (!match) {
-                        const words = normalizedName.split(' ').filter(w => w.length > 2);
-                        if (words.length > 1) {
-                            match = candidates.reduce((best, c) => {
+                        // 4. Best word-overlap ≥ 60%
+                        if (sigWords.length > 1) {
+                            let best = null, bestScore = 0;
+                            for (const c of pool) {
                                 const cn = normalizeTargetingName(c.name);
-                                const hits = words.filter(w => cn.includes(w)).length;
-                                const score = hits / words.length;
-                                if (score >= 0.6 && (!best || score > best.score)) return { ...c, score };
-                                return best;
-                            }, null);
+                                const hits = sigWords.filter(w => cn.includes(w)).length;
+                                const score = hits / sigWords.length;
+                                if (score >= 0.6 && score > bestScore) { best = c; bestScore = score; }
+                            }
+                            if (best) return best;
                         }
+                        return null;
                     }
 
-                    // 5. Fallback: first result Facebook returns (already ranked by relevance)
-                    if (!match && candidates.length > 0) {
-                        match = candidates[0];
+                    // Primary search — full keyword
+                    const data = await fetch(targetingSearchUrl(name, type, token)).then(r => r.json());
+                    const primary = Array.isArray(data.data) ? data.data : [];
+                    let match = bestFromPool(primary);
+
+                    // Secondary search — use the most distinctive single word if multi-word and no match yet
+                    if (!match && sigWords.length > 1) {
+                        // Pick the longest word (usually most specific)
+                        const pivot = sigWords.reduce((a, b) => b.length > a.length ? b : a, sigWords[0]);
+                        const data2 = await fetch(targetingSearchUrl(pivot, type, token)).then(r => r.json());
+                        const secondary = Array.isArray(data2.data) ? data2.data : [];
+                        match = bestFromPool(secondary);
+                    }
+
+                    // Last resort: first result from primary pool only if it shares ≥1 significant word
+                    if (!match && primary.length > 0) {
+                        const firstCn = normalizeTargetingName(primary[0].name);
+                        if (sigWords.some(w => firstCn.includes(w))) {
+                            match = primary[0];
+                        }
                     }
 
                     if (match?.id) {
