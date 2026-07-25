@@ -85,6 +85,56 @@ function parseIsoDate(dateString) {
     return undefined;
 }
 
+// Returns which enhancements are supported for a given ad account
+router.get('/account-features/:accountId', async (req, res) => {
+    try {
+        const { accountId } = req.params;
+        const storage = getStorage();
+        const account = (storage.accounts || []).find(a => a.accountId === accountId);
+        let token = account?.accessToken || storage.settings?.facebookAccessToken;
+        if (!token) return res.status(400).json({ error: 'No token for this account' });
+
+        // Fetch account capabilities and check for product catalogs in parallel
+        const [capRes, catRes] = await Promise.all([
+            fetch(`https://graph.facebook.com/v25.0/act_${accountId}?fields=capabilities,disable_reason&access_token=${token}`),
+            fetch(`https://graph.facebook.com/v25.0/act_${accountId}/product_catalogs?fields=id&limit=1&access_token=${token}`)
+        ]);
+
+        let capabilities = [];
+        let hasCatalog = false;
+
+        if (capRes.ok) {
+            const capData = await capRes.json();
+            capabilities = capData.capabilities || [];
+        }
+        if (catRes.ok) {
+            const catData = await catRes.json();
+            hasCatalog = Array.isArray(catData.data) && catData.data.length > 0;
+        }
+
+        // Determine supported enhancements based on capabilities
+        const capSet = new Set(capabilities.map(c => String(c).toUpperCase()));
+
+        res.json({
+            advantageAudience:   true,   // universally available
+            multiAdvertiser:     true,   // universally available
+            autoCreative:        true,   // universally available (standard_enhancements)
+            inlineComment:       false,  // legacy key is not in Meta's current enum
+            textOptimizations:   !capSet.has('CANNOT_USE_CREATIVE_HUB'), // disabled for very restricted accounts
+            // These legacy creative feature keys are rejected by the current
+            // Meta API even when the account has a catalog or CTA enabled.
+            productTags:         false,
+            enhanceCta:          false
+        });
+    } catch (error) {
+        // On any error fall back to all enabled so campaign creation isn't blocked
+        res.json({
+            advantageAudience: true, multiAdvertiser: true, autoCreative: true,
+            inlineComment: false, textOptimizations: true, productTags: false, enhanceCta: false
+        });
+    }
+});
+
 router.get('/locations', async (req, res) => {
     try {
         const { q } = req.query;
@@ -149,7 +199,6 @@ router.get('/interests', async (req, res) => {
         const { q } = req.query;
         let token = req.query.token;
 
-        // Auto-lookup token from first available account
         if (!token) {
             const storage = getStorage();
             const first = (storage.accounts || [])[0];
@@ -160,10 +209,11 @@ router.get('/interests', async (req, res) => {
         if (!q) return res.status(400).json({ error: 'Missing query' });
         if (!token) return res.status(400).json({ error: 'No account token available' });
 
-        const result = await facebookService.searchInterests(q, token);
-        res.json(result.data || []);
+        // Search across interests, behaviors, demographics, life events and job titles
+        const results = await facebookService.searchAllTargeting(q, token);
+        res.json(results);
     } catch (error) {
-        res.status(500).json({ error: 'Failed to search interests', details: error.message });
+        res.status(500).json({ error: 'Failed to search targeting', details: error.message });
     }
 });
 
@@ -181,30 +231,17 @@ router.post('/ai-audiences', async (req, res) => {
         }
         await assertSafeExternalUrl(websiteUrl);
 
-        // Fetch website content so Gemini can understand the product
-        let websiteContent = `URL: ${websiteUrl}`;
-        try {
-            const response = await fetchSafeExternal(websiteUrl);
-            if (response.ok) {
-                const html = await response.text();
-                const text = html
-                    .replace(/<script[\s\S]*?<\/script>/gi, '')
-                    .replace(/<style[\s\S]*?<\/style>/gi, '')
-                    .replace(/<[^>]+>/g, ' ')
-                    .replace(/\s+/g, ' ')
-                    .trim()
-                    .slice(0, 3000);
-                websiteContent = `URL: ${websiteUrl}\n\nPage content:\n${text}`;
-            }
-        } catch (fetchErr) {
-            console.log('Could not fetch website content, using URL only:', fetchErr.message);
-        }
+        // Use the same product extractor as ad-copy generation. This gives
+        // Gemini structured product data and a long product-page description,
+        // instead of only a short generic HTML snippet.
+        const details = await fetchWebsiteDetails(websiteUrl);
+        const requestedCount = Math.max(3, Math.min(20, parseInt(numAudiences, 10) || 3));
 
         const audiences = await geminiService.generateAudiences(
             settings.geminiApiKey,
             settings.geminiModel,
-            websiteContent,
-            numAudiences || 3,
+            details.content,
+            requestedCount,
             alreadyUsed || []
         );
 
@@ -215,44 +252,25 @@ router.post('/ai-audiences', async (req, res) => {
 
         if (token) {
             for (const aud of audiences) {
-                if (!aud.interests || !Array.isArray(aud.interests)) continue;
-                const validatedInterests = [];
-                for (const interestName of aud.interests) {
-                    const name = typeof interestName === 'string' ? interestName : interestName.name;
-                    if (!name) continue;
-                    try {
-                        const searchUrl = `https://graph.facebook.com/v25.0/search?type=adinterest&q=${encodeURIComponent(name)}&access_token=${token}`;
-                        const searchRes = await fetchSafeExternal(searchUrl);
-                        if (searchRes.ok) {
-                            const searchData = await searchRes.json();
-                            if (searchData.data && searchData.data.length > 0) {
-                                // Pick exact match first, fallback to first result
-                                const match = searchData.data.find(d => d.name.toLowerCase() === name.toLowerCase()) || searchData.data[0];
-                                // Validate: try a lightweight targeting validation call
-                                const validateUrl = `https://graph.facebook.com/v25.0/act_${activeAccount.accountId}/targeting_validation?targeting_spec=${encodeURIComponent(JSON.stringify({ flexible_spec: [{ interests: [{ id: match.id, name: match.name }] }] }))}&access_token=${token}`;
-                                const valRes = await fetch(validateUrl);
-                                if (valRes.ok) {
-                                    const valData = await valRes.json();
-                                    // If validation returns success (no error), interest is usable
-                                    if (valData && !valData.error) {
-                                        validatedInterests.push({ id: match.id, name: match.name });
-                                    } else {
-                                        console.warn(`Interest "${name}" failed targeting validation, skipping`);
-                                    }
-                                } else {
-                                    // Validation endpoint failed — still include from search (safer to include than exclude)
-                                    validatedInterests.push({ id: match.id, name: match.name });
-                                }
-                            } else {
-                                console.warn(`Interest "${name}" not found in Facebook, skipping`);
-                            }
-                        }
-                    } catch (e) {
-                        console.warn(`Could not validate interest "${name}":`, e.message);
-                    }
-                }
-                aud.interests = validatedInterests;
-                console.log(`Audience "${aud.audienceName}": ${validatedInterests.length} valid interests out of original`);
+                // Normalise: support new `targeting` array or legacy `interests` array from Gemini
+                const rawItems = Array.isArray(aud.targeting) && aud.targeting.length > 0
+                    ? aud.targeting
+                    : (aud.interests || []).map(i => typeof i === 'string'
+                        ? { name: i, type: 'interest' }
+                        : { ...i, type: i.type || 'interest' });
+
+                if (!rawItems.length) continue;
+
+                const validatedItems = await facebookService.resolveAllTargeting(rawItems, token);
+                aud.targeting = validatedItems;
+                aud.unresolvedTargeting = rawItems
+                    .filter(item => !validatedItems.some(valid =>
+                        valid.type === (item.type || 'interest') &&
+                        String(valid.name || '').trim().toLowerCase() === String(item.name || '').trim().toLowerCase()
+                    ))
+                    .map(item => ({ name: item.name, type: item.type || 'interest' }));
+                delete aud.interests;
+                console.log(`Audience "${aud.audienceName}": ${validatedItems.length} validated targeting items`);
             }
         }
 
@@ -493,7 +511,9 @@ router.post('/create', async (req, res) => {
             let resolvedInclude = [];
 
             (audience.locationsInclude || []).forEach(l => {
-                if (l.key) {
+                // A name is authoritative when present. Re-resolve it for the
+                // selected account instead of trusting a stale saved key.
+                if (!l.name && l.key) {
                     resolvedInclude.push({ key: l.key, type: l.type || 'country', name: l.name });
                 } else if (locationCache.has(l.name)) {
                     resolvedInclude.push(locationCache.get(l.name));
@@ -520,7 +540,7 @@ router.post('/create', async (req, res) => {
             let resolvedExclude = [];
 
             (audience.locationsExclude || []).forEach(l => {
-                if (l.key) {
+                if (!l.name && l.key) {
                     resolvedExclude.push({ key: l.key, type: l.type || 'country', name: l.name });
                 } else if (locationCache.has(l.name)) {
                     resolvedExclude.push(locationCache.get(l.name));
@@ -545,32 +565,42 @@ router.post('/create', async (req, res) => {
             const geoLocations = buildGeoLocations(resolvedInclude);
             const excludedGeo = buildGeoLocations(resolvedExclude);
             const genders = audience.gender === 'male' ? [1] : audience.gender === 'female' ? [2] : [];
+            const enhancements = step3.enhancements || {};
             const targeting = {
                 age_min: audience.ageMin || 18,
                 age_max: audience.ageMax || 65,
-                geo_locations: Object.keys(geoLocations).length > 0 ? geoLocations : { countries: ['IN'] },
-                targeting_automation: {
-                    advantage_audience: 0
-                }
+                geo_locations: Object.keys(geoLocations).length > 0 ? geoLocations : { countries: ['IN'] }
             };
             if (genders.length) targeting.genders = genders;
             if (Object.keys(excludedGeo).length > 0) targeting.excluded_geo_locations = excludedGeo;
-            if (audience.interests && audience.interests.length > 0) {
-                // If any interest is missing an ID, resolve it via search
-                const interestsToResolve = audience.interests.filter(i => !i.id).map(i => i.name);
-                let resolvedInterests = audience.interests.filter(i => i.id).map(i => ({ id: i.id, name: i.name }));
-                
-                if (interestsToResolve.length > 0) {
-                    try {
-                        const newlyResolved = await facebookService.resolveInterestNames(interestsToResolve, token);
-                        resolvedInterests = [...resolvedInterests, ...newlyResolved];
-                    } catch (resolveErr) {
-                        console.error('Failed to resolve interest names:', resolveErr.message);
-                    }
-                }
-                
-                if (resolvedInterests.length > 0) {
-                    targeting.flexible_spec = [{ interests: resolvedInterests }];
+            // Support new `targeting` array (mixed types) and legacy `interests` array
+            const rawTargeting = Array.isArray(audience.targeting) && audience.targeting.length > 0
+                ? audience.targeting
+                : (audience.interests || []).map(i => ({ ...i, type: 'interest' }));
+
+            if (rawTargeting.length > 0) {
+                try {
+                    const resolvedTargeting = await facebookService.resolveAllTargeting(rawTargeting, token);
+
+                    // Map each item to the correct Facebook flexible_spec field name
+                    const typeToField = {
+                        interest:    'interests',
+                        behavior:    'behaviors',
+                        demographic: 'demographics',
+                        life_event:  'life_events',
+                        job_title:   'work_positions',
+                        employer:    'work_employers',
+                        education_major: 'education_majors'
+                    };
+                    const flexSpec = {};
+                    resolvedTargeting.forEach(item => {
+                        const field = typeToField[item.type] || 'interests';
+                        if (!flexSpec[field]) flexSpec[field] = [];
+                        flexSpec[field].push({ id: item.id, name: item.name });
+                    });
+                    if (Object.keys(flexSpec).length > 0) targeting.flexible_spec = [flexSpec];
+                } catch (resolveErr) {
+                    console.error('Failed to resolve targeting items:', resolveErr.message);
                 }
             }
             if (audience.customAudiencesInclude?.length) targeting.custom_audiences = audience.customAudiencesInclude.map(id => ({ id }));
@@ -716,10 +746,25 @@ router.post('/create', async (req, res) => {
                 let adId = checkpoint.ads.find(item => item.key === creativeKey)?.id;
                 const textVariation = ad.primaryText || '';
                 const destinationUrl = appendUtmParams(step2.url);
+                // Build degrees_of_freedom_spec from selected enhancements
+                const dofFeatures = {};
+                // Only use keys from Meta's current creative_features_spec
+                // enum. Older keys such as cta_optimization, inline_comment,
+                // standard_enhancements and text_optimizations cause code 100.
+                if (enhancements.autoCreative) {
+                    dofFeatures.standard_enhancements_catalog = { enroll_status: 'OPT_IN' };
+                }
+                if (enhancements.textOptimizations) {
+                    dofFeatures.text_overlay_translation = { enroll_status: 'OPT_IN' };
+                }
+
                 const creativeParams = {
                     name: `${campaign.name} — ${audience.name} — ${ad.name}`,
                     url_tags: 'utm_medium={{ad.name}}&utm_campaign={{campaign.name}}&utm_content={{adset.name}}',
-                    contextual_multi_ads: { enroll_status: 'OPT_OUT' },
+                    contextual_multi_ads: { enroll_status: enhancements.multiAdvertiser ? 'OPT_IN' : 'OPT_OUT' },
+                    ...(Object.keys(dofFeatures).length > 0 && {
+                        degrees_of_freedom_spec: { creative_features_spec: dofFeatures }
+                    }),
                     object_story_spec: {
                         page_id: pageId,
                         link_data: {
@@ -800,6 +845,7 @@ router.post('/create', async (req, res) => {
             id: uuidv4(),
             draftId,
             campaignId,
+            accountId: campaign.accountId || null,
             name: campaign.name,
             createdAt: new Date().toISOString(),
             status: 'success',
@@ -826,6 +872,7 @@ router.post('/create', async (req, res) => {
             id: `retry-${draftId}`,
             draftId,
             campaignId: checkpoint.campaignId || null,
+            accountId: req.body.campaign?.accountId || null,
             name: req.body.campaign?.name || 'Unnamed campaign',
             createdAt: new Date().toISOString(),
             status: 'failed',
@@ -936,15 +983,45 @@ async function fetchWebsiteDetails(websiteUrl) {
         firstMatch(/<h1[^>]*>([\s\S]*?)<\/h1>/i).replace(/<[^>]+>/g, '') ||
         firstMatch(/<title[^>]*>([\s\S]*?)<\/title>/i).replace(/<[^>]+>/g, '') ||
         'Product';
+    const metaDescription =
+        firstMatch(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i) ||
+        firstMatch(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i);
+    const structuredProducts = [];
+    for (const match of html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+        try {
+            const parsed = JSON.parse(match[1].trim());
+            const nodes = Array.isArray(parsed) ? parsed : [parsed];
+            nodes.forEach(node => {
+                const type = node && node['@type'];
+                if (node && (type === 'Product' || (Array.isArray(type) && type.includes('Product')))) {
+                    structuredProducts.push(node);
+                }
+            });
+        } catch {
+            // Keep using visible page text when one JSON-LD block is invalid.
+        }
+    }
     const content = html
         .replace(/<script[\s\S]*?<\/script>/gi, '')
         .replace(/<style[\s\S]*?<\/style>/gi, '')
         .replace(/<[^>]+>/g, ' ')
         .replace(/\s+/g, ' ')
         .trim()
-        .slice(0, 6000);
+        .slice(0, 12000);
+    const structuredDetails = structuredProducts.length
+        ? `\n\nStructured product data (JSON-LD):\n${JSON.stringify(structuredProducts.slice(0, 3), null, 2).slice(0, 12000)}`
+        : '';
 
-    return { productName, content: `URL: ${websiteUrl}\n\nPage content:\n${content}` };
+    return {
+        productName,
+        content: [
+            `URL: ${websiteUrl}`,
+            `Product name: ${productName}`,
+            metaDescription ? `Meta description: ${metaDescription}` : '',
+            structuredDetails,
+            `\nFull product page content:\n${content}`
+        ].filter(Boolean).join('\n')
+    };
 }
 
 function isPrivateIp(address) {
@@ -1033,7 +1110,12 @@ function buildGeoLocations(locations) {
 router.get('/recent', (req, res) => {
     try {
         const storage = getStorage();
-        res.json(storage.recentCampaigns || []);
+        let campaigns = storage.recentCampaigns || [];
+        const { accountId } = req.query;
+        if (accountId) {
+            campaigns = campaigns.filter(c => c.accountId === accountId);
+        }
+        res.json(campaigns);
     } catch (error) {
         res.status(500).json({ error: 'Failed to fetch recent campaigns', details: error.message });
     }

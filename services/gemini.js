@@ -98,24 +98,32 @@ ${baseText}`;
 
     async generateAudiences(apiKey, model, websiteContent, numAudiences, alreadyUsedKeywords) {
         const url = `${BASE_URL}/models/${normalizeModel(model)}:generateContent?key=${apiKey}`;
+        const audienceCount = Math.max(3, Number.parseInt(numAudiences, 10) || 3);
 
         const usedList = alreadyUsedKeywords && alreadyUsedKeywords.length > 0
             ? `\nKeywords already used in other audiences — DO NOT repeat any of these: ${alreadyUsedKeywords.join(', ')}`
             : '';
 
-        const prompt = `You are a Facebook Ads targeting expert. Analyze the product/service from the website information below and generate ${numAudiences} DISTINCT Facebook interest-based audience segments.
+        const prompt = `You are a Facebook Ads targeting expert. Analyze the complete product information below and generate ${audienceCount} DISTINCT, product-relevant audience segments using Facebook's full targeting options.
 
-Website info:
+Complete product information:
 ${websiteContent}
 ${usedList}
 
 Rules:
-- Generate exactly ${numAudiences} audience objects
-- Each audience targets a clearly different interest/lifestyle group relevant to this product
-- Each audience must contain 5 to 8 Facebook interest keywords (real targeting categories)
-- NO keyword should appear in more than one audience — every keyword must be unique across ALL ${numAudiences} audiences
-- Return ONLY valid JSON — no extra text, no markdown code fences
-- Format: [{"audienceName":"Short label","interests":["keyword1","keyword2",...]},...]`;
+- Generate exactly ${audienceCount} audience objects. Never return fewer than 3.
+- Each audience targets a clearly different customer profile relevant to this product
+- Each audience must contain 5 to 8 highly relevant targeting items drawn from multiple types:
+  • "interest" — hobbies, pages, topics (e.g. "Online shopping", "Yoga", "Luxury goods")
+  • "behavior" — purchase habits, device use, travel patterns (e.g. "Online shoppers", "Frequent travelers", "Small business owners")
+  • "demographic" — life stage, education, relationship status (e.g. "Parents", "College graduates", "New homeowners", "Newly engaged")
+  • "job_title" — profession or job role (e.g. "Software Engineer", "Fashion designer", "Marketing Manager")
+- Mix types within each audience — do NOT use only interests
+- Do not invent generic audiences unrelated to the product. Derive targeting from the product's category, materials/features, use cases, price/positioning, and likely buyer intent.
+- NO targeting item should appear in more than one audience — every item must be unique across ALL ${audienceCount} audiences
+- Use real Facebook Ads Manager targeting keywords that actually exist
+- Return ONLY valid JSON — no markdown, no extra text
+- Format: [{"audienceName":"Short label","targeting":[{"type":"interest|behavior|demographic|job_title","name":"keyword"},...]},...]`;
 
         const response = await fetch(url, {
             method: 'POST',
@@ -135,7 +143,10 @@ Rules:
             const jsonMatch = rawText.match(/\[[\s\S]*\]/);
             if (!jsonMatch) throw new Error('No JSON array in response');
             const audiences = JSON.parse(jsonMatch[0]);
-            return audiences.slice(0, numAudiences);
+            if (!Array.isArray(audiences) || audiences.length < 3) {
+                throw new Error(`Gemini returned ${audiences?.length || 0} audiences; at least 3 are required.`);
+            }
+            return audiences.slice(0, audienceCount);
         } catch (error) {
             throw new Error('Failed to parse Gemini audience response: ' + error.message);
         }

@@ -47,6 +47,7 @@
         getAllPages: () => API.request('/api/accounts/pages'),
         getPages: (id) => API.request(`/api/accounts/${id}/pages`),
         getAccountBilling: (id) => API.request(`/api/accounts/${id}/billing`),
+        getAccountCapabilities: (id) => API.request(`/api/accounts/${id}/capabilities`),
         aiAudiences: (data) => API.request('/api/campaigns/ai-audiences', { method: 'POST', body: JSON.stringify(data) }),
 
         // Settings
@@ -62,7 +63,8 @@
         createCampaign: (data) => API.request('/api/campaigns/create', { method: 'POST', body: JSON.stringify(data) }),
         generateVariations: (data) => API.request('/api/campaigns/generate-variations', { method: 'POST', body: JSON.stringify(data) }),
         generateAdCopy: (data) => API.request('/api/campaigns/generate-ad-copy', { method: 'POST', body: JSON.stringify(data) }),
-        getRecentCampaigns: () => API.request('/api/campaigns/recent'),
+        getRecentCampaigns: (accountId) => API.request('/api/campaigns/recent' + (accountId ? `?accountId=${encodeURIComponent(accountId)}` : '')),
+        getAccountFeatures: (accountId) => API.request(`/api/campaigns/account-features/${encodeURIComponent(accountId)}`),
 
         // Media
         uploadMedia: async (formData) => {

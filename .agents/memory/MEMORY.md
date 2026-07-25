@@ -1,3 +1,4 @@
 - [Runtime credentials](runtime-credentials.md) — keep API tokens and account credentials in ignored local runtime storage, never tracked project config.
 - [Facebook page access](facebook-page-access.md) — page dropdowns can only show pages returned by each token’s `/me/accounts` permission scope.
 - [Meta campaign budget flag](meta-campaign-budget-flag.md) — new ad accounts require an explicit budget-sharing boolean when creating campaigns.
+- [Meta targeting resolution](meta-targeting-resolution.md) — re-resolve targeting names/types for the selected account; never trust stale IDs or broad first results.

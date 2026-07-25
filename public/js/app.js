@@ -270,7 +270,7 @@
                     }
                 }
 
-                // Load recent campaigns
+                // Load recent campaigns for active account
                 await this.loadRecentCampaigns();
             } catch (error) {
                 console.error('Initial data load error:', error.message);
@@ -287,6 +287,7 @@
                         window.APP.activeAccount = account;
                         this.showToast(`Switched to ${account.name || account.label || selectedId}`, 'info');
                         document.dispatchEvent(new CustomEvent('accountChanged', { detail: account }));
+                        this.loadRecentCampaigns();
                     }
                 });
             }
@@ -316,7 +317,8 @@
 
         loadRecentCampaigns: async function() {
             try {
-                const campaigns = await API.getRecentCampaigns();
+                const activeAccountId = window.APP.activeAccount?.accountId || null;
+                const campaigns = await API.getRecentCampaigns(activeAccountId);
                 const table = document.getElementById('recent-campaigns-table');
                 if (!table) return;
 

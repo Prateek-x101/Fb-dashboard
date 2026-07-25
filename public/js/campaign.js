@@ -8,12 +8,23 @@
         campaignData: {
             step1: {},
             step2: { audiences: [] },
-            step3: { ads: [], headline: '', description: '', cta: 'SHOP_NOW', pageId: '', instagramId: '' }
+            step3: { ads: [], headline: '', description: '', cta: 'SHOP_NOW', pageId: '', instagramId: '', enhancements: {} }
         },
         _copyAutoFilledForUrl: '',
         _autoFilledCopy: { headline: '', description: '', primaryText: '' },
         _creationDraftId: '',
         _retryState: null,
+        _accountEnhancements: {},   // { [accountId]: { key: bool, ... } }
+        _currentAccountId: null,    // track which account is active
+
+        // Colour/label metadata for each targeting type
+        TYPE_META: {
+            interest:    { label: 'Interest',    color: '#4361ee' },
+            behavior:    { label: 'Behavior',    color: '#f77f00' },
+            demographic: { label: 'Demographic', color: '#2d9e5f' },
+            life_event:  { label: 'Life Event',  color: '#9b5de5' },
+            job_title:   { label: 'Job Title',   color: '#e63946' }
+        },
 
         init: function() {
             this.bindEvents();
@@ -279,6 +290,21 @@
                 }
             });
 
+            // ── Enhancement toggle buttons ────────────────────────────────
+            document.querySelectorAll('.enhancement-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    btn.classList.toggle('active');
+                    const activeKeys = Array.from(document.querySelectorAll('.enhancement-btn.active'))
+                        .map(b => b.getAttribute('data-key'));
+                    const hint = document.getElementById('enhancements-desc-hint');
+                    if (hint) {
+                        hint.textContent = activeKeys.length
+                            ? `${activeKeys.length} enhancement${activeKeys.length > 1 ? 's' : ''} enabled — will be applied to all ads.`
+                            : 'Select any enhancements to enable them on all ads.';
+                    }
+                });
+            });
+
             const btnAddAdset = document.getElementById('btn-add-adset');
             if (btnAddAdset) {
                 btnAddAdset.addEventListener('click', () => {
@@ -448,7 +474,11 @@
                 audienceCards.forEach((card, idx) => {
                     const interests = [];
                     card.querySelectorAll('.interest-tag').forEach(tag => {
-                        interests.push({ id: tag.getAttribute('data-id') || '', name: tag.getAttribute('data-value') || tag.textContent.replace('✖','').trim() });
+                        interests.push({
+                            id: tag.getAttribute('data-id') || '',
+                            name: tag.getAttribute('data-value') || tag.textContent.replace('✖','').trim(),
+                            type: tag.getAttribute('data-type') || 'interest'
+                        });
                     });
                     const adsetName = interests.slice(0, 3).map(i => i.name).join(', ') || `Audience ${idx + 1}`;
                     audiences.push({
@@ -462,7 +492,8 @@
                         customAudiencesExclude: customExclude,
                         lookalikeInclude,
                         lookalikeExclude,
-                        interests
+                        interests,
+                        targeting: interests
                     });
                 });
 
@@ -498,6 +529,14 @@
                 this.campaignData.step3.cta = document.getElementById('cta-select')?.value || 'SHOP_NOW';
                 this.campaignData.step3.pageId = document.getElementById('ad-page')?.value || '';
                 this.campaignData.step3.instagramId = document.getElementById('ad-instagram')?.value || '';
+
+                // Collect selected enhancements
+                const enhancements = {};
+                document.querySelectorAll('.enhancement-btn.active').forEach(btn => {
+                    const key = btn.getAttribute('data-key');
+                    if (key) enhancements[key] = true;
+                });
+                this.campaignData.step3.enhancements = enhancements;
                 return true;
             }
             return true;
@@ -506,11 +545,23 @@
         collectCreativeAdsFromDOM: function() {
             const container = document.getElementById('creative-ads-container');
             if (!container) return;
-            this.campaignData.step3.ads = Array.from(container.querySelectorAll('.creative-ad-card')).map(card => ({
-                media: card.getAttribute('data-media') || '',
-                mediaFile: card.getAttribute('data-media-file') || '',
-                primaryText: card.querySelector('.creative-primary-text')?.value?.trim() || ''
-            }));
+            const existingAds = this.campaignData.step3.ads || [];
+            this.campaignData.step3.ads = Array.from(container.querySelectorAll('.creative-ad-card')).map((card, index) => {
+                const existing = existingAds[index] || {};
+                const textField = card.querySelector('.creative-primary-text');
+                return {
+                    ...existing,
+                    media: card.getAttribute('data-media') || existing.media || '',
+                    mediaFile: card.getAttribute('data-media-file') || existing.mediaFile || '',
+                    // Keep the object-URL preview and uploaded thumbnail when
+                    // moving between steps or re-rendering after Gemini.
+                    previewUrl: existing.previewUrl || '',
+                    thumbnail: existing.thumbnail || '',
+                    thumbnailFile: existing.thumbnailFile || '',
+                    thumbnailPreviewUrl: existing.thumbnailPreviewUrl || '',
+                    primaryText: textField ? textField.value.trim() : (existing.primaryText || '')
+                };
+            });
         },
 
         nextStep: function() {
@@ -560,8 +611,41 @@
             return '₹'; // Default to INR
         },
 
+        applyEnhancements: function(features) {
+            // features = { advantageAudience: bool, multiAdvertiser: bool, ... }
+            document.querySelectorAll('.enhancement-btn').forEach(btn => {
+                const key = btn.getAttribute('data-key');
+                if (!key || key === 'autoMusic') return; // autoMusic is always hidden
+                const supported = features[key] !== false; // default to true if key not in response
+                btn.style.display = supported ? '' : 'none';
+                // Deactivate hidden buttons so they don't get submitted
+                if (!supported) btn.classList.remove('active');
+            });
+            // Refresh hint text
+            const activeKeys = Array.from(document.querySelectorAll('.enhancement-btn.active'))
+                .map(b => b.getAttribute('data-key'));
+            const hint = document.getElementById('enhancements-desc-hint');
+            if (hint) {
+                hint.textContent = activeKeys.length
+                    ? `${activeKeys.length} enhancement${activeKeys.length > 1 ? 's' : ''} enabled — will be applied to all ads.`
+                    : 'Select any enhancements to enable them on all ads.';
+            }
+        },
+
         handleAccountChange: async function(account) {
             if (!account) return;
+
+            // Fetch supported enhancements for this account and update the UI
+            const accountId = account.accountId || account.id;
+            if (accountId) {
+                try {
+                    const features = await window.API.getAccountFeatures(accountId);
+                    this._accountEnhancements[accountId] = features;
+                    this.applyEnhancements(features);
+                } catch (e) {
+                    console.warn('Could not load account features:', e.message);
+                }
+            }
 
             // Update timezone label near datetime input
             const tzLabel = document.getElementById('schedule-timezone-label');
@@ -700,13 +784,15 @@
                             dropdown.innerHTML = '';
                             if (Array.isArray(results) && results.length > 0) {
                                 results.forEach(r => {
+                                    const type = r.type || 'interest';
+                                    const meta = this.TYPE_META[type] || this.TYPE_META.interest;
                                     const item = document.createElement('div');
-                                    item.style.cssText = 'padding:0.65rem 1rem; cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.05);';
-                                    item.textContent = r.name || r;
+                                    item.style.cssText = 'padding:0.55rem 1rem; cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.05); display:flex; align-items:center; gap:0.5rem;';
+                                    item.innerHTML = `<span style="font-size:0.6rem;padding:1px 6px;border-radius:4px;background:${meta.color}25;color:${meta.color};white-space:nowrap;flex-shrink:0;">${meta.label}</span><span style="font-size:0.85rem;">${r.name || r}</span>`;
                                     item.addEventListener('mouseenter', () => item.style.background = 'rgba(67,97,238,0.2)');
                                     item.addEventListener('mouseleave', () => item.style.background = 'transparent');
                                     item.addEventListener('click', () => {
-                                        this._addInterestTag(card, idx, r.id || '', r.name || r);
+                                        this._addInterestTag(card, idx, r.id || '', r.name || r, type);
                                         dropdown.style.display = 'none';
                                         e.target.value = '';
                                     });
@@ -725,32 +811,30 @@
             });
         },
 
-        _addInterestTag: function(card, idx, id, name) {
+        _addInterestTag: function(card, idx, id, name, type = 'interest') {
             const tc = card.querySelector(`.interests-tags-${idx}`);
             const input = tc?.querySelector('.interest-search');
             if (!tc || !input) return;
+            const meta = this.TYPE_META[type] || this.TYPE_META.interest;
             const tag = document.createElement('span');
             tag.className = 'tag interest-tag';
             tag.setAttribute('data-id', id);
             tag.setAttribute('data-value', name);
-            tag.innerHTML = `${name} <span class="tag-remove" onclick="this.parentElement.remove()">✖</span>`;
+            tag.setAttribute('data-type', type);
+            tag.innerHTML = `<span style="font-size:0.58rem;padding:1px 5px;border-radius:3px;background:${meta.color}25;color:${meta.color};margin-right:3px;">${meta.label}</span>${name} <span class="tag-remove" onclick="this.parentElement.remove()">✖</span>`;
             tc.insertBefore(tag, input);
         },
 
-        _populateAudienceCard: function(card, idx, interests) {
+        _populateAudienceCard: function(card, idx, items) {
             const tc = card.querySelector(`.interests-tags-${idx}`);
             if (!tc) return;
             tc.querySelectorAll('.interest-tag').forEach(t => t.remove());
             const input = tc.querySelector('.interest-search');
-            interests.forEach(kw => {
-                const name = typeof kw === 'string' ? kw : (kw.name || kw);
-                const id = typeof kw === 'object' ? (kw.id || '') : '';
-                const tag = document.createElement('span');
-                tag.className = 'tag interest-tag';
-                tag.setAttribute('data-id', id);
-                tag.setAttribute('data-value', name);
-                tag.innerHTML = `${name} <span class="tag-remove" onclick="this.parentElement.remove()">✖</span>`;
-                tc.insertBefore(tag, input);
+            items.forEach(item => {
+                const name = typeof item === 'string' ? item : (item.name || item);
+                const id   = typeof item === 'object' ? (item.id   || '') : '';
+                const type = typeof item === 'object' ? (item.type || 'interest') : 'interest';
+                this._addInterestTag({ querySelector: sel => tc.closest('.audience-card')?.querySelector(sel) ?? tc.parentElement?.querySelector(sel) }, idx, id, name, type);
             });
         },
 
@@ -775,10 +859,17 @@
             if (btn) { btn.disabled = true; btn.textContent = '⏳…'; }
 
             try {
-                const result = await window.API.aiAudiences({ websiteUrl, numAudiences: 1, alreadyUsed });
+                // The backend always asks Gemini for at least three strategies.
+                // This card-level action uses the first unused strategy while
+                // keeping the same minimum-quality generation rules as AI All.
+                const result = await window.API.aiAudiences({ websiteUrl, numAudiences: 3, alreadyUsed });
                 const audiences = result.audiences || [];
                 if (audiences.length > 0) {
-                    this._populateAudienceCard(targetCard, cardIndex, audiences[0].interests || []);
+                    this._populateAudienceCard(
+                        targetCard,
+                        cardIndex,
+                        audiences[0].targeting || audiences[0].interests || []
+                    );
                     window.AppController.showToast(`Audience ${cardIndex + 1} generated ✨`, 'success');
                 } else { window.AppController.showToast('No audience returned. Try again.', 'warning'); }
             } catch (error) {
@@ -792,20 +883,47 @@
             const websiteUrl = document.getElementById('website-url')?.value?.trim();
             if (!websiteUrl) { window.AppController.showToast('Enter the Website URL in Campaign Settings first', 'warning'); return; }
 
-            const cards = document.querySelectorAll('.audience-card');
+            let cards = document.querySelectorAll('.audience-card');
             if (!cards.length) return;
+
+            // Always show at least three audience cards so the minimum
+            // generated strategies are visible and usable in the wizard.
+            if (cards.length < 3) {
+                const container = document.getElementById('audience-container');
+                const countInput = document.getElementById('num-adsets');
+                if (container) {
+                    if (countInput) countInput.value = '3';
+                    for (let i = cards.length; i < 3; i++) {
+                        this._createAudienceCard(container, i, 3);
+                    }
+                    cards = document.querySelectorAll('.audience-card');
+                }
+            }
 
             const btn = document.getElementById('btn-ai-all-audiences');
             if (btn) { btn.disabled = true; btn.textContent = '⏳ Generating…'; }
 
             try {
-                const result = await window.API.aiAudiences({ websiteUrl, numAudiences: cards.length, alreadyUsed: [] });
+                // Gemini must always produce at least three distinct audience
+                // strategies, even if the user reduced the card count.
+                const requestedCount = Math.max(3, cards.length);
+                const result = await window.API.aiAudiences({ websiteUrl, numAudiences: requestedCount, alreadyUsed: [] });
                 const audiences = result.audiences || [];
                 cards.forEach((card, idx) => {
                     const cardIdx = parseInt(card.getAttribute('data-index'));
-                    if (audiences[idx]) this._populateAudienceCard(card, cardIdx, audiences[idx].interests || []);
+                    if (audiences[idx]) {
+                        this._populateAudienceCard(
+                            card,
+                            cardIdx,
+                            audiences[idx].targeting || audiences[idx].interests || []
+                        );
+                    }
                 });
-                window.AppController.showToast(`${audiences.length} unique audiences generated 🎯`, 'success');
+                const unresolved = audiences.reduce((sum, aud) => sum + (aud.unresolvedTargeting?.length || 0), 0);
+                window.AppController.showToast(
+                    `${Math.min(cards.length, audiences.length)} unique audiences generated${unresolved ? ` (${unresolved} unsupported items skipped)` : ''} 🎯`,
+                    'success'
+                );
             } catch (error) {
                 window.AppController.showToast('AI generation failed: ' + error.message, 'error');
             } finally {
@@ -914,61 +1032,6 @@
             });
         },
 
-        extractMultipleVideoFrames: function(fileOrUrl, count = 6) {
-            return new Promise((resolve) => {
-                const video = document.createElement('video');
-                video.preload = 'metadata';
-                video.muted = true;
-                video.playsInline = true;
-                
-                let blobUrl = null;
-                if (fileOrUrl instanceof File) {
-                    blobUrl = URL.createObjectURL(fileOrUrl);
-                    video.src = blobUrl;
-                } else {
-                    video.src = fileOrUrl.startsWith('/') ? fileOrUrl : '/uploads/' + fileOrUrl;
-                }
-
-                const cleanup = () => { if (blobUrl) URL.revokeObjectURL(blobUrl); };
-
-                video.addEventListener('loadedmetadata', async () => {
-                    const duration = video.duration || 10;
-                    const frames = [];
-                    for (let i = 0; i < count; i++) {
-                        const ratio = (i + 0.5) / count;
-                        const time = duration * ratio;
-                        
-                        const frameBlob = await new Promise((fResolve) => {
-                            const onSeeked = () => {
-                                try {
-                                    const canvas = document.createElement('canvas');
-                                    canvas.width = video.videoWidth || 640;
-                                    canvas.height = video.videoHeight || 360;
-                                    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-                                    canvas.toBlob(blob => fResolve(blob), 'image/jpeg', 0.82);
-                                    video.removeEventListener('seeked', onSeeked);
-                                } catch(err) { fResolve(null); }
-                            };
-                            video.addEventListener('seeked', onSeeked);
-                            video.currentTime = time;
-                        });
-                        if (frameBlob) {
-                            frames.push({
-                                time: time.toFixed(1),
-                                blob: frameBlob,
-                                previewUrl: URL.createObjectURL(frameBlob)
-                            });
-                        }
-                    }
-                    cleanup();
-                    resolve(frames);
-                });
-
-                video.addEventListener('error', () => { cleanup(); resolve([]); });
-                setTimeout(() => { cleanup(); resolve([]); }, 20000);
-            });
-        },
-
         handleMediaUpload: async function(files, card = null) {
             const selectedFiles = Array.isArray(files) ? files : [files];
             if (!selectedFiles.length) return;
@@ -981,9 +1044,7 @@
                     previewUrl: URL.createObjectURL(file),
                     thumbnail: '',
                     thumbnailFile: '',
-                    thumbnailPreviewUrl: '',
-                    extractedThumbnails: null,
-                    selectedThumbnailIdx: 0
+                    thumbnailPreviewUrl: ''
                 };
                 try {
                     const formData = new FormData();
@@ -994,25 +1055,21 @@
                     item.media = file.name;
                 }
 
-                // Auto-extract thumbnail frames from video
+                // Auto-extract thumbnail from video frame
                 if (isVid) {
                     try {
-                        window.AppController.showToast('Extracting video thumbnails...', 'info');
-                        const frames = await this.extractMultipleVideoFrames(file, 6);
-                        item.extractedThumbnails = frames;
-                        if (frames && frames.length > 0) {
-                            const firstFrame = frames[0];
+                        const frameBlob = await this.extractVideoFrame(file);
+                        if (frameBlob) {
                             const thumbName = file.name.replace(/\.[^/.]+$/, '_thumb.jpg');
                             const thumbForm = new FormData();
-                            thumbForm.append('file', new File([firstFrame.blob], thumbName, { type: 'image/jpeg' }));
+                            thumbForm.append('file', new File([frameBlob], thumbName, { type: 'image/jpeg' }));
                             const thumbResp = await window.API.uploadMedia(thumbForm);
                             item.thumbnail = thumbResp.filePath || thumbResp.filename;
                             item.thumbnailFile = thumbResp.filename || thumbName;
-                            item.thumbnailPreviewUrl = firstFrame.previewUrl;
-                            item.selectedThumbnailIdx = 0;
+                            item.thumbnailPreviewUrl = URL.createObjectURL(frameBlob);
                         }
                     } catch(e) {
-                        console.log('Auto thumbnails skipped:', e.message);
+                        console.log('Auto thumbnail skipped:', e.message);
                     }
                 }
 
@@ -1032,9 +1089,7 @@
                         previewUrl: uploaded[0].previewUrl,
                         thumbnail: uploaded[0].thumbnail || '',
                         thumbnailFile: uploaded[0].thumbnailFile || '',
-                        thumbnailPreviewUrl: uploaded[0].thumbnailPreviewUrl || '',
-                        extractedThumbnails: uploaded[0].extractedThumbnails || null,
-                        selectedThumbnailIdx: uploaded[0].selectedThumbnailIdx !== undefined ? uploaded[0].selectedThumbnailIdx : 0
+                        thumbnailPreviewUrl: uploaded[0].thumbnailPreviewUrl || ''
                     });
                 }
                 if (uploaded[0].thumbnailFile) {
@@ -1053,9 +1108,7 @@
                             previewUrl: item.previewUrl,
                             thumbnail: item.thumbnail || '',
                             thumbnailFile: item.thumbnailFile || '',
-                            thumbnailPreviewUrl: item.thumbnailPreviewUrl || '',
-                            extractedThumbnails: item.extractedThumbnails || null,
-                            selectedThumbnailIdx: item.selectedThumbnailIdx !== undefined ? item.selectedThumbnailIdx : 0
+                            thumbnailPreviewUrl: item.thumbnailPreviewUrl || ''
                         };
                     } else {
                         this.addCreativeAd(item, false);
@@ -1075,9 +1128,7 @@
                 primaryText: media.primaryText || '',
                 thumbnail: media.thumbnail || '',
                 thumbnailFile: media.thumbnailFile || '',
-                thumbnailPreviewUrl: media.thumbnailPreviewUrl || '',
-                extractedThumbnails: media.extractedThumbnails || null,
-                selectedThumbnailIdx: media.selectedThumbnailIdx !== undefined ? media.selectedThumbnailIdx : 0
+                thumbnailPreviewUrl: media.thumbnailPreviewUrl || ''
             });
             if (rerender) this.renderCreativeAds();
         },
@@ -1101,9 +1152,32 @@
             const preview = card.querySelector('.creative-media-preview');
             if (!preview || !item.previewUrl) return;
             const isVideo = /\.(mp4|mov|avi|webm)$/i.test(item.mediaFile || '');
-            preview.innerHTML = isVideo
-                ? `<video src="${item.previewUrl}" controls style="max-width:100%;max-height:160px;border-radius:8px;"></video>`
-                : `<img src="${item.previewUrl}" alt="${this.escapeHtml(item.mediaFile || 'Ad media')}" style="max-width:100%;max-height:160px;border-radius:8px;">`;
+            const controlsBar = card.querySelector('.creative-video-controls');
+
+            if (isVideo) {
+                preview.innerHTML = `<video src="${item.previewUrl}" muted playsinline style="position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;display:block;border-radius:0;"></video>`;
+                if (controlsBar) controlsBar.style.display = 'flex';
+
+                const video = preview.querySelector('video');
+                const playBtn = controlsBar?.querySelector('.ctrl-play-pause');
+                const muteBtn = controlsBar?.querySelector('.ctrl-mute');
+
+                if (playBtn && video) {
+                    playBtn.addEventListener('click', () => {
+                        if (video.paused) { video.play(); playBtn.textContent = '⏸'; }
+                        else { video.pause(); playBtn.textContent = '▶'; }
+                    });
+                }
+                if (muteBtn && video) {
+                    muteBtn.addEventListener('click', () => {
+                        video.muted = !video.muted;
+                        muteBtn.textContent = video.muted ? '🔇' : '🔊';
+                    });
+                }
+            } else {
+                preview.innerHTML = `<img src="${item.previewUrl}" alt="${this.escapeHtml(item.mediaFile || 'Ad media')}" style="position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;display:block;border-radius:0;">`;
+                if (controlsBar) controlsBar.style.display = 'none';
+            }
         },
 
         renderCreativeAds: function() {
@@ -1119,103 +1193,76 @@
                 card.setAttribute('data-media', ad.media || '');
                 card.setAttribute('data-media-file', ad.mediaFile || '');
                 card.style.background = 'rgba(0,0,0,0.15)';
-                
-                const isVideo = /\.(mp4|mov|avi|webm)$/i.test(ad.mediaFile || ad.media || '');
-                
-                // Auto-trigger frames extraction in background if not present yet
-                if (isVideo && !ad.extractedThumbnails && !ad.isExtractingThumbnails) {
-                    ad.isExtractingThumbnails = true;
-                    this.extractMultipleVideoFrames(ad.mediaFile || ad.media, 6).then(async (frames) => {
-                        ad.extractedThumbnails = frames || [];
-                        ad.isExtractingThumbnails = false;
-                        
-                        // If no thumbnail is set yet, default to the first frame
-                        if (!ad.thumbnail && frames && frames.length > 0) {
-                            const firstFrame = frames[0];
-                            const thumbName = (ad.mediaFile || 'video.mp4').replace(/\.[^/.]+$/, '_thumb.jpg');
-                            const thumbForm = new FormData();
-                            thumbForm.append('file', new File([firstFrame.blob], thumbName, { type: 'image/jpeg' }));
-                            try {
-                                const thumbResp = await window.API.uploadMedia(thumbForm);
-                                ad.thumbnail = thumbResp.filePath || thumbResp.filename;
-                                ad.thumbnailFile = thumbResp.filename || thumbName;
-                                ad.thumbnailPreviewUrl = firstFrame.previewUrl;
-                                ad.selectedThumbnailIdx = 0;
-                            } catch (err) {
-                                console.error('Auto upload of default first frame failed:', err.message);
-                            }
-                        }
-                        this.renderCreativeAds();
-                    });
-                }
 
-                let thumbnailHtml = '';
-                if (isVideo) {
-                    let sliderHtml = '';
-                    if (ad.isExtractingThumbnails) {
-                        sliderHtml = `<div style="padding:15px; text-align:center; color:var(--text-secondary); font-size:0.8rem;">
-                            <span class="cm2-spinner" style="display:inline-block; vertical-align:middle; margin-right:6px;"></span> Extracting video frames...
-                        </div>`;
-                    } else if (ad.extractedThumbnails && ad.extractedThumbnails.length > 0) {
-                        const slides = ad.extractedThumbnails.map((frame, fIdx) => {
-                            const isSelected = ad.selectedThumbnailIdx === fIdx;
-                            return `
-                                <div class="thumbnail-slide-item${isSelected ? ' selected' : ''}" data-idx="${fIdx}">
-                                    <img src="${frame.previewUrl}">
-                                    ${isSelected ? '<div class="thumbnail-slide-item-check">✓</div>' : ''}
-                                </div>
-                            `;
-                        }).join('');
-                        
-                        sliderHtml = `
-                            <div class="thumbnail-slider-wrapper">
-                                <button type="button" class="btn btn-secondary btn-xs btn-scroll-left" style="padding:4px 6px; font-size:0.7rem; border-radius:4px; cursor:pointer;">◀</button>
-                                <div class="thumbnail-slider" style="margin: 0 4px;">
-                                    ${slides}
-                                </div>
-                                <button type="button" class="btn btn-secondary btn-xs btn-scroll-right" style="padding:4px 6px; font-size:0.7rem; border-radius:4px; cursor:pointer;">▶</button>
-                            </div>
-                        `;
-                    } else {
-                        sliderHtml = `<div style="padding:10px; text-align:center; color:var(--text-secondary); font-size:0.8rem;">Could not extract suggested frames. Upload a custom thumbnail instead.</div>`;
-                    }
+                const isVideo = /\.(mp4|mov|avi|webm)$/i.test(ad.mediaFile || '');
 
-                    thumbnailHtml = `
-                        <div class="choose-thumbnail-container">
-                            <div class="choose-thumbnail-header">
-                                <div class="thumbnail-tabs">
-                                    <button type="button" class="thumbnail-tab-btn active">Choose suggested</button>
-                                    <label class="thumbnail-tab-btn" style="cursor:pointer; margin:0;">
-                                        Upload image
-                                        <input type="file" class="creative-thumbnail-input" accept="image/*" style="display:none;">
-                                    </label>
-                                </div>
-                                ${ad.thumbnailFile ? `<span style="font-size:0.72rem; color:var(--accent-cyan); font-weight:500; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right;">📎 ${this.escapeHtml(ad.thumbnailFile)}</span>` : ''}
-                            </div>
-                            <div class="thumbnail-tab-content">
-                                ${sliderHtml}
+                // Build filmstrip-style thumbnail section for videos
+                const filmstripRemoveBtn = (ad.thumbnailFile || ad.thumbnailPreviewUrl)
+                    ? `<button type="button" class="filmstrip-remove-thumb">✖ Remove thumbnail</button>`
+                    : '';
+
+                const filmstripStatusText = ad.thumbnailFile
+                    ? `✔ Thumbnail set — drag selector to change`
+                    : `Drag the frame-box to pick a thumbnail`;
+
+                const thumbnailHtml = isVideo ? `
+                    <div class="creative-thumbnail-section">
+                        <div class="filmstrip-upload-row">
+                            <span style="font-size:0.82rem;color:var(--text-secondary);">🖼️ Thumbnail</span>
+                            <div style="display:flex;gap:6px;align-items:center;">
+                                ${filmstripRemoveBtn}
+                                <label class="btn btn-secondary btn-xs" style="cursor:pointer;margin:0;">
+                                    📁 Upload image
+                                    <input type="file" class="creative-thumbnail-input" accept="image/*" style="display:none;">
+                                </label>
                             </div>
                         </div>
-                    `;
-                }
+                        <div class="filmstrip-wrap" data-ad-index="${index}">
+                            <div class="filmstrip-status busy">${filmstripStatusText}</div>
+                            <div class="filmstrip-row">
+                                <button type="button" class="filmstrip-scroll-btn" data-dir="-1">&#8249;</button>
+                                <div class="filmstrip-viewport">
+                                    <div class="filmstrip-track"></div>
+                                    <div class="filmstrip-selector"></div>
+                                </div>
+                                <button type="button" class="filmstrip-scroll-btn" data-dir="1">&#8250;</button>
+                            </div>
+                        </div>
+                    </div>
+                ` : '';
 
                 card.innerHTML = `
                     <div class="flex justify-between align-center mb-2">
                         <h4 class="creative-ad-name" style="color:var(--accent-cyan);">${total === 1 ? 'Single content-Reel' : `Content-${index + 1} Reel`}</h4>
                         <div class="flex gap-2">
                             <label class="btn btn-secondary btn-sm" style="cursor:pointer;">📁 Change Media
-                                  <input type="file" class="creative-media-input" accept="image/*,video/*" style="display:none;">
+                                <input type="file" class="creative-media-input" accept="image/*,video/*" style="display:none;">
                             </label>
                             <button type="button" class="remove-card-btn creative-remove-ad"><span>✖</span></button>
                         </div>
                     </div>
-                    <div class="creative-media-preview mb-2" style="min-height:${ad.mediaFile ? '0' : '30px'};">
-                        ${ad.mediaFile ? `<span style="color:var(--text-secondary);">📎 ${this.escapeHtml(ad.mediaFile)}</span>` : '<span style="color:var(--text-secondary);">No media selected yet</span>'}
+                    <div class="creative-card-body">
+                        <div class="creative-left-panel">
+                            ${thumbnailHtml}
+                            <div style="display:flex;flex-direction:column;flex:1;">
+                                <label>Primary Text *</label>
+                                <textarea class="form-control creative-primary-text" rows="10" placeholder="Use Auto-fill from Website or write the primary text here...">${this.escapeHtml(ad.primaryText || '')}</textarea>
+                            </div>
+                        </div>
+                        <div class="creative-preview-panel">
+                            <div class="creative-media-preview">
+                                ${ad.mediaFile
+                                    ? ''
+                                    : '<div class="no-media-msg"><span>📁</span><p>No media selected</p></div>'}
+                            </div>
+                            <div class="creative-video-controls" style="display:none;">
+                                <button type="button" class="ctrl-btn ctrl-play-pause" title="Play / Pause">▶</button>
+                                <button type="button" class="ctrl-btn ctrl-mute" title="Mute / Unmute">🔇</button>
+                            </div>
+                        </div>
                     </div>
-                    ${thumbnailHtml}
-                    <label>Primary Text *</label>
-                    <textarea class="form-control creative-primary-text" rows="7" placeholder="Use Auto-fill from Website or write the primary text here...">${this.escapeHtml(ad.primaryText || '')}</textarea>
                 `;
+
                 container.appendChild(card);
                 if (ad.previewUrl) this.setCreativePreview(card, ad);
 
@@ -1226,69 +1273,277 @@
                 card.querySelector('.creative-primary-text').addEventListener('input', e => {
                     this.campaignData.step3.ads[index].primaryText = e.target.value;
                 });
-                
+
                 if (isVideo) {
-                    const slider = card.querySelector('.thumbnail-slider');
-                    const btnLeft = card.querySelector('.btn-scroll-left');
-                    const btnRight = card.querySelector('.btn-scroll-right');
-                    if (slider) {
-                        if (btnLeft) btnLeft.addEventListener('click', () => { slider.scrollLeft -= 120; });
-                        if (btnRight) btnRight.addEventListener('click', () => { slider.scrollLeft += 120; });
-                    }
-
-                    const slideItems = card.querySelectorAll('.thumbnail-slide-item');
-                    slideItems.forEach(itemEl => {
-                        itemEl.addEventListener('click', async () => {
-                            const fIdx = parseInt(itemEl.getAttribute('data-idx'), 10);
-                            if (ad.selectedThumbnailIdx === fIdx) return;
-                            
-                            ad.selectedThumbnailIdx = fIdx;
-                            const frame = ad.extractedThumbnails[fIdx];
-                            if (frame) {
-                                window.AppController.showToast('Uploading selected thumbnail frame...', 'info');
-                                const thumbName = (ad.mediaFile || 'video.mp4').replace(/\.[^/.]+$/, `_thumb_${fIdx}.jpg`);
-                                const thumbForm = new FormData();
-                                thumbForm.append('file', new File([frame.blob], thumbName, { type: 'image/jpeg' }));
-                                try {
-                                    const thumbResp = await window.API.uploadMedia(thumbForm);
-                                    ad.thumbnail = thumbResp.filePath || thumbResp.filename;
-                                    ad.thumbnailFile = thumbResp.filename || thumbName;
-                                    ad.thumbnailPreviewUrl = frame.previewUrl;
-                                    window.AppController.showToast('Thumbnail frame updated! ✅', 'success');
-                                    this.renderCreativeAds();
-                                } catch (err) {
-                                    window.AppController.showToast(`Failed to set thumbnail: ${err.message}`, 'error');
-                                }
-                            }
-                        });
-                    });
-
+                    // Upload image manually as thumbnail
                     const thumbInput = card.querySelector('.creative-thumbnail-input');
                     if (thumbInput) {
                         thumbInput.addEventListener('change', async e => {
                             const file = e.target.files[0];
-                            if (file) {
-                                const formData = new FormData();
-                                formData.append('file', file);
-                                try {
-                                    window.AppController.showToast('Uploading custom thumbnail...', 'info');
-                                    const response = await window.API.uploadMedia(formData);
-                                    
-                                    ad.thumbnail = response.filePath;
-                                    ad.thumbnailFile = response.filename;
-                                    ad.thumbnailPreviewUrl = URL.createObjectURL(file);
-                                    ad.selectedThumbnailIdx = null; // Deselect suggested frame
-                                    
-                                    window.AppController.showToast('Custom thumbnail uploaded successfully! ✅', 'success');
-                                    this.renderCreativeAds();
-                                } catch (err) {
-                                    window.AppController.showToast(`Thumbnail upload failed: ${err.message}`, 'error');
-                                }
+                            if (!file) return;
+                            const formData = new FormData();
+                            formData.append('file', file);
+                            try {
+                                const response = await window.API.uploadMedia(formData);
+                                this.campaignData.step3.ads[index].thumbnail = response.filePath;
+                                this.campaignData.step3.ads[index].thumbnailFile = response.filename;
+                                this.campaignData.step3.ads[index].thumbnailPreviewUrl = URL.createObjectURL(file);
+                                this.renderCreativeAds();
+                            } catch (err) {
+                                window.AppController.showToast(`Thumbnail upload failed: ${err.message}`, 'danger');
                             }
                         });
                     }
+
+                    // Remove thumbnail button
+                    const removeThumbBtn = card.querySelector('.filmstrip-remove-thumb');
+                    if (removeThumbBtn) {
+                        removeThumbBtn.addEventListener('click', () => {
+                            this.campaignData.step3.ads[index].thumbnail = '';
+                            this.campaignData.step3.ads[index].thumbnailFile = '';
+                            this.campaignData.step3.ads[index].thumbnailPreviewUrl = '';
+                            this.renderCreativeAds();
+                        });
+                    }
+
+                    // Init Canva-style filmstrip scrubber
+                    this.initFilmstrip(card, ad, index);
                 }
             });
+        },
+
+        initFilmstrip: function(card, ad, index) {
+            const wrap = card.querySelector('.filmstrip-wrap');
+            if (!wrap || !ad.previewUrl) return;
+
+            const track      = wrap.querySelector('.filmstrip-track');
+            const viewport   = wrap.querySelector('.filmstrip-viewport');
+            const selector   = wrap.querySelector('.filmstrip-selector');
+            const statusEl   = wrap.querySelector('.filmstrip-status');
+            const btnLeft    = wrap.querySelector('.filmstrip-scroll-btn[data-dir="-1"]');
+            const btnRight   = wrap.querySelector('.filmstrip-scroll-btn[data-dir="1"]');
+
+            const FRAME_W    = 64;   // px — matches CSS
+            const NUM_FRAMES = 20;   // total frames extracted
+
+            let videoDuration = 0;
+            let frameDataUrls = [];  // dataURL per frame index
+            let frameBlobs    = [];  // blob per frame index
+            let selectedIdx   = 0;  // currently selected frame index
+            let trackOffset   = 0;  // how many px the track is shifted left (scroll)
+            let isDragging    = false;
+            let dragStartX    = 0;
+            let selectorLeft  = 0;  // selector position in px relative to viewport left
+
+            // ── Hidden video for frame extraction ──────────────────────────
+            const video = document.createElement('video');
+            video.src        = ad.previewUrl;
+            video.preload    = 'metadata';
+            video.muted      = true;
+            video.playsInline = true;
+
+            const captureCurrentFrame = () => new Promise(resolve => {
+                try {
+                    const canvas = document.createElement('canvas');
+                    canvas.width  = video.videoWidth  || 1280;
+                    canvas.height = video.videoHeight || 720;
+                    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+                    canvas.toBlob(blob => {
+                        resolve({ blob, dataUrl: canvas.toDataURL('image/jpeg', 0.85) });
+                    }, 'image/jpeg', 0.85);
+                } catch(e) { resolve({ blob: null, dataUrl: '' }); }
+            });
+
+            const seekTo = (time) => new Promise(resolve => {
+                video.addEventListener('seeked', resolve, { once: true });
+                video.currentTime = time;
+            });
+
+            // ── Build the strip ────────────────────────────────────────────
+            const buildStrip = async () => {
+                videoDuration = video.duration || 0;
+                if (!videoDuration) return;
+
+                const interval = videoDuration / NUM_FRAMES;
+                track.innerHTML = '';
+
+                // Add placeholder cells first so layout appears immediately
+                for (let i = 0; i < NUM_FRAMES; i++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'filmstrip-loading-cell';
+                    cell.innerHTML = '<span style="font-size:9px;color:rgba(255,255,255,0.2);">…</span>';
+                    track.appendChild(cell);
+                }
+
+                // Extract frames one by one, replacing placeholders
+                for (let i = 0; i < NUM_FRAMES; i++) {
+                    if (!document.contains(wrap)) break; // card was removed, stop
+                    const time = i * interval + 0.02;
+                    await seekTo(time);
+                    const { blob, dataUrl } = await captureCurrentFrame();
+                    frameDataUrls[i] = dataUrl;
+                    frameBlobs[i]    = blob;
+
+                    const img = document.createElement('img');
+                    img.src       = dataUrl;
+                    img.className = 'filmstrip-frame-img';
+                    track.children[i].replaceWith(img);
+                }
+
+                // Position selector on frame 0 (or restore saved position)
+                placeSelector(0);
+                setStatus('Drag the frame-box left/right to pick thumbnail', false);
+            };
+
+            // ── Selector positioning ───────────────────────────────────────
+            // viewportWidth is constant; total track width = NUM_FRAMES * FRAME_W
+            const viewportW = () => viewport.clientWidth || 300;
+
+            // Convert frame index → pixel left inside viewport (accounting for scroll)
+            const frameToViewportLeft = (idx) => idx * FRAME_W - trackOffset;
+
+            // Convert viewport-relative px → nearest frame index (clamped)
+            const viewportPxToFrameIdx = (px) => {
+                const trackPx = px + trackOffset;
+                return Math.max(0, Math.min(NUM_FRAMES - 1, Math.round(trackPx / FRAME_W)));
+            };
+
+            const placeSelector = (idx) => {
+                selectedIdx = idx;
+                const left  = frameToViewportLeft(idx);
+                // Clamp so selector stays within viewport visually
+                selector.style.left = `${Math.max(0, Math.min(viewportW() - FRAME_W, left))}px`;
+            };
+
+            // Scroll the track by delta px, update selector, clamp
+            const scrollTrack = (delta) => {
+                const maxOffset = Math.max(0, NUM_FRAMES * FRAME_W - viewportW());
+                trackOffset = Math.max(0, Math.min(maxOffset, trackOffset + delta));
+                track.style.transform = `translateX(-${trackOffset}px)`;
+                // Re-place selector so it follows the selected frame
+                placeSelector(selectedIdx);
+                updateScrollBtns();
+            };
+
+            const updateScrollBtns = () => {
+                const maxOffset = Math.max(0, NUM_FRAMES * FRAME_W - viewportW());
+                btnLeft.disabled  = trackOffset <= 0;
+                btnRight.disabled = trackOffset >= maxOffset;
+            };
+
+            const setStatus = (msg, busy = true) => {
+                if (!statusEl) return;
+                statusEl.textContent = msg;
+                statusEl.className   = 'filmstrip-status ' + (busy ? 'busy' : 'ok');
+            };
+
+            // ── Save selected frame as thumbnail ───────────────────────────
+            const saveFrame = async (idx) => {
+                const blob = frameBlobs[idx];
+                if (!blob) return;
+                setStatus('⏳ Saving thumbnail…', true);
+                try {
+                    const fname    = (ad.mediaFile || 'video').replace(/\.[^/.]+$/, '') + '_thumb.jpg';
+                    const formData = new FormData();
+                    formData.append('file', new File([blob], fname, { type: 'image/jpeg' }));
+                    const resp = await window.API.uploadMedia(formData);
+
+                    this.campaignData.step3.ads[index].thumbnail          = resp.filePath || resp.filename;
+                    this.campaignData.step3.ads[index].thumbnailFile      = resp.filename || fname;
+                    this.campaignData.step3.ads[index].thumbnailPreviewUrl = URL.createObjectURL(blob);
+
+                    setStatus('✔ Thumbnail set', false);
+                    window.AppController.showToast('Thumbnail set ✔', 'success');
+
+                    // Update remove button visibility without full re-render
+                    const uploadRow = wrap.closest('.creative-thumbnail-section')?.querySelector('.filmstrip-upload-row');
+                    if (uploadRow && !uploadRow.querySelector('.filmstrip-remove-thumb')) {
+                        const btn = document.createElement('button');
+                        btn.type = 'button';
+                        btn.className = 'filmstrip-remove-thumb';
+                        btn.textContent = '✖ Remove thumbnail';
+                        btn.addEventListener('click', () => {
+                            this.campaignData.step3.ads[index].thumbnail = '';
+                            this.campaignData.step3.ads[index].thumbnailFile = '';
+                            this.campaignData.step3.ads[index].thumbnailPreviewUrl = '';
+                            this.renderCreativeAds();
+                        });
+                        uploadRow.querySelector('div').prepend(btn);
+                    }
+                } catch(err) {
+                    setStatus('⚠ Save failed — try again', true);
+                }
+            };
+
+            // ── Drag on viewport ───────────────────────────────────────────
+            let dragSaveTimer = null;
+
+            const getClientX = (e) => e.touches ? e.touches[0].clientX : e.clientX;
+
+            viewport.addEventListener('mousedown', (e) => {
+                isDragging = true;
+                dragStartX = getClientX(e) - frameToViewportLeft(selectedIdx);
+                e.preventDefault();
+            });
+            viewport.addEventListener('touchstart', (e) => {
+                isDragging = true;
+                dragStartX = getClientX(e) - frameToViewportLeft(selectedIdx);
+            }, { passive: true });
+
+            // Click to jump selector to clicked frame
+            viewport.addEventListener('click', (e) => {
+                if (Math.abs(getClientX(e) - (dragStartX + frameToViewportLeft(selectedIdx))) > 4) return;
+                const rect  = viewport.getBoundingClientRect();
+                const newIdx = viewportPxToFrameIdx(getClientX(e) - rect.left);
+                if (newIdx !== selectedIdx) {
+                    placeSelector(newIdx);
+                    clearTimeout(dragSaveTimer);
+                    dragSaveTimer = setTimeout(() => saveFrame(newIdx), 300);
+                }
+            });
+
+            const onMove = (e) => {
+                if (!isDragging) return;
+                const rect     = viewport.getBoundingClientRect();
+                const relX     = getClientX(e) - rect.left;  // px inside viewport
+                const newIdx   = viewportPxToFrameIdx(relX);
+                if (newIdx !== selectedIdx) {
+                    placeSelector(newIdx);
+                    // Debounce save — upload only after dragging stops briefly
+                    clearTimeout(dragSaveTimer);
+                    dragSaveTimer = setTimeout(() => saveFrame(newIdx), 500);
+                }
+            };
+            const onUp = () => { isDragging = false; };
+
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('touchmove', onMove, { passive: true });
+            document.addEventListener('mouseup',   onUp);
+            document.addEventListener('touchend',  onUp);
+
+            // ── Scroll buttons ─────────────────────────────────────────────
+            btnLeft.addEventListener('click',  () => scrollTrack(-FRAME_W * 3));
+            btnRight.addEventListener('click', () => scrollTrack(FRAME_W * 3));
+
+            // ── Cleanup when card is removed ───────────────────────────────
+            const observer = new MutationObserver(() => {
+                if (!document.contains(wrap)) {
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('touchmove', onMove);
+                    document.removeEventListener('mouseup',   onUp);
+                    document.removeEventListener('touchend',  onUp);
+                    clearTimeout(dragSaveTimer);
+                    observer.disconnect();
+                }
+            });
+            observer.observe(document.body, { childList: true, subtree: true });
+
+            // ── Start ──────────────────────────────────────────────────────
+            setStatus('⏳ Loading frames…', true);
+            updateScrollBtns();
+            video.addEventListener('loadeddata', buildStrip, { once: true });
+            video.addEventListener('error', () => setStatus('⚠ Could not load video', true), { once: true });
+            video.load();
         },
 
         escapeHtml: function(value) {
@@ -1631,7 +1886,8 @@
                 card.querySelectorAll('.interest-tag').forEach(tag => {
                     interests.push({
                         id: tag.getAttribute('data-id') || '',
-                        name: tag.getAttribute('data-value') || tag.textContent.replace('✖','').trim()
+                        name: tag.getAttribute('data-value') || tag.textContent.replace('✖','').trim(),
+                        type: tag.getAttribute('data-type') || 'interest'
                     });
                 });
                 interestsSets.push(interests);
@@ -1784,7 +2040,7 @@
             this.campaignData = {
                 step1: {},
                 step2: { audiences: [] },
-                step3: { ads: [], headline: '', description: '', cta: 'SHOP_NOW', pageId: '', instagramId: '' }
+                step3: { ads: [], headline: '', description: '', cta: 'SHOP_NOW', pageId: '', instagramId: '', enhancements: {} }
             };
             this._retryState = null;
             this._creationDraftId = '';
