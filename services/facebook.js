@@ -171,13 +171,48 @@ const facebookService = {
                     const data = await fetch(targetingSearchUrl(name, type, token)).then(r => r.json());
                     const candidates = Array.isArray(data.data) ? data.data : [];
                     const normalizedName = normalizeTargetingName(name);
-                    const match = candidates.find(candidate =>
-                        normalizeTargetingName(candidate.name) === normalizedName
-                    );
 
-                    // A broad search's first result may be a different
-                    // interest. Drop unresolved items rather than sending a
-                    // wrong key and letting Meta reject the whole ad set.
+                    // 1. Exact match (best)
+                    let match = candidates.find(c => normalizeTargetingName(c.name) === normalizedName);
+
+                    // 2. One contains the other (e.g. "international travelers" ↔ "International Travel")
+                    if (!match) {
+                        match = candidates.find(c => {
+                            const cn = normalizeTargetingName(c.name);
+                            return cn.includes(normalizedName) || normalizedName.includes(cn);
+                        });
+                    }
+
+                    // 3. All significant words from the keyword appear in the candidate
+                    if (!match) {
+                        const words = normalizedName.split(' ').filter(w => w.length > 2);
+                        if (words.length > 0) {
+                            match = candidates.find(c => {
+                                const cn = normalizeTargetingName(c.name);
+                                return words.every(w => cn.includes(w));
+                            });
+                        }
+                    }
+
+                    // 4. Majority of significant words match (≥ 60% overlap)
+                    if (!match) {
+                        const words = normalizedName.split(' ').filter(w => w.length > 2);
+                        if (words.length > 1) {
+                            match = candidates.reduce((best, c) => {
+                                const cn = normalizeTargetingName(c.name);
+                                const hits = words.filter(w => cn.includes(w)).length;
+                                const score = hits / words.length;
+                                if (score >= 0.6 && (!best || score > best.score)) return { ...c, score };
+                                return best;
+                            }, null);
+                        }
+                    }
+
+                    // 5. Fallback: first result Facebook returns (already ranked by relevance)
+                    if (!match && candidates.length > 0) {
+                        match = candidates[0];
+                    }
+
                     if (match?.id) {
                         return { id: String(match.id), name: match.name, type };
                     }

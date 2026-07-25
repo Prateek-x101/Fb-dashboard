@@ -418,13 +418,27 @@
                 if (!start) { window.AppController.showToast('Please set a start date', 'warning'); return false; }
                 if (!account) { window.AppController.showToast('Please select an ad account', 'warning'); return false; }
 
+                // Convert "YYYY-MM-DD HH:mm" local time to UTC ISO string so the
+                // backend receives an unambiguous timestamp regardless of server timezone.
+                function localDateStrToUtcIso(str) {
+                    if (!str) return '';
+                    // Already a full ISO string with timezone — pass through
+                    if (/[Zz]|[+-]\d{2}:?\d{2}$/.test(str)) return str;
+                    // "YYYY-MM-DD HH:mm" or "YYYY-MM-DDTHH:mm"
+                    const m = str.match(/^(\d{4})-(\d{2})-(\d{2})[\sT](\d{2}):(\d{2})(?::(\d{2}))?/);
+                    if (!m) return str;
+                    const [, yr, mo, dy, hr, mn, sc] = m;
+                    const d = new Date(+yr, +mo - 1, +dy, +hr, +mn, +(sc || 0));
+                    return isNaN(d.getTime()) ? str : d.toISOString();
+                }
+                const endRaw = document.getElementById('schedule-end')?.value || '';
                 this.campaignData.step1 = {
                     name,
                     objective: document.getElementById('campaign-objective')?.value,
                     budgetType: document.getElementById('budget-type-cbo')?.checked ? 'CBO' : 'ABO',
                     budgetAmount: parseFloat(budgetAmount),
-                    scheduleStart: start,
-                    scheduleEnd: document.getElementById('schedule-end')?.value || '',
+                    scheduleStart: localDateStrToUtcIso(start),
+                    scheduleEnd: localDateStrToUtcIso(endRaw),
                     accountId: account,
                     specialAdCategory: document.getElementById('camp-special')?.value || 'NONE'
                 };
