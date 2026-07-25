@@ -189,12 +189,16 @@
                     });
                 }
 
-                // Render Variants Pricing Grid if multiple variants exist
+                // Render Variants Pricing Grid if multiple variants exist AND they have different prices
                 const variantsContainer = document.getElementById('shopify-import-variants-container');
                 const variantsTbody = document.getElementById('shopify-import-variants-tbody');
                 const variants = this.scrapedProduct.variants || [];
 
-                if (variants.length > 1) {
+                const uniquePrices = new Set(variants.map(v => v.price));
+                const uniqueComparePrices = new Set(variants.map(v => v.compare_at_price));
+                const hasPriceVariations = uniquePrices.size > 1 || uniqueComparePrices.size > 1;
+
+                if (variants.length > 1 && hasPriceVariations) {
                     variantsContainer.style.display = 'block';
                     variantsTbody.innerHTML = '';
                     variants.forEach((v, idx) => {
