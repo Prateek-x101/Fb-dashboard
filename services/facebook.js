@@ -119,21 +119,69 @@ const facebookService = {
     },
 
     async getConnectedInstagram(token) {
-        // Get every Page linked to this token, not only the first Graph API page. Includes Page access_token.
+        // Get every Page linked to this token (including Business Portfolio pages). Includes Page access_token.
         const fields = encodeURIComponent('id,name,access_token,instagram_business_account{id,name,username}');
-        let nextUrl = `${BASE_URL}/me/accounts?fields=${fields}&limit=100&access_token=${token}`;
-        const pages = [];
-        let paging = null;
+        const pagesMap = new Map();
 
-        for (let requestCount = 0; nextUrl && requestCount < 20; requestCount++) {
-            const response = await fetch(nextUrl, { method: 'GET' });
-            const result = await handleResponse(response);
-            pages.push(...(result.data || []));
-            paging = result.paging || null;
-            nextUrl = paging && paging.next ? paging.next : null;
+        // 1. Fetch direct user accounts (Pages)
+        let nextUrl = `${BASE_URL}/me/accounts?fields=${fields}&limit=100&access_token=${token}`;
+        try {
+            for (let requestCount = 0; nextUrl && requestCount < 20; requestCount++) {
+                const response = await fetch(nextUrl, { method: 'GET' });
+                const result = await handleResponse(response);
+                (result.data || []).forEach(page => {
+                    if (page.id) pagesMap.set(page.id, page);
+                });
+                const paging = result.paging || null;
+                nextUrl = paging && paging.next ? paging.next : null;
+            }
+        } catch (err) {
+            console.error("Failed to fetch user accounts directly:", err.message);
         }
 
-        return { data: pages, paging };
+        // 2. Fetch Business Portfolios and scan their client/owned pages in parallel
+        try {
+            const bizUrl = `${BASE_URL}/me/businesses?fields=id,name&limit=100&access_token=${token}`;
+            const bizResp = await fetch(bizUrl, { method: 'GET' });
+            if (bizResp.ok) {
+                const bizData = await bizResp.json();
+                const businesses = bizData.data || [];
+                
+                await Promise.all(businesses.map(async (biz) => {
+                    try {
+                        // Query owned pages
+                        const ownedUrl = `${BASE_URL}/${biz.id}/owned_pages?fields=${fields}&limit=100&access_token=${token}`;
+                        const ownedResp = await fetch(ownedUrl, { method: 'GET' });
+                        if (ownedResp.ok) {
+                            const ownedData = await ownedResp.json();
+                            (ownedData.data || []).forEach(page => {
+                                if (page.id && !pagesMap.has(page.id)) {
+                                    pagesMap.set(page.id, page);
+                                }
+                            });
+                        }
+
+                        // Query client pages
+                        const clientUrl = `${BASE_URL}/${biz.id}/client_pages?fields=${fields}&limit=100&access_token=${token}`;
+                        const clientResp = await fetch(clientUrl, { method: 'GET' });
+                        if (clientResp.ok) {
+                            const clientData = await clientResp.json();
+                            (clientData.data || []).forEach(page => {
+                                if (page.id && !pagesMap.has(page.id)) {
+                                    pagesMap.set(page.id, page);
+                                }
+                            });
+                        }
+                    } catch (bizPagesErr) {
+                        console.warn(`Failed to fetch pages for business ${biz.id}:`, bizPagesErr.message);
+                    }
+                }));
+            }
+        } catch (err) {
+            console.log("Failed to fetch business portfolios (normal if no permission):", err.message);
+        }
+
+        return { data: Array.from(pagesMap.values()) };
     },
 
     async searchLocations(query, token) {
