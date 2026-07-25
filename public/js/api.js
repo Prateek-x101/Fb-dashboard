@@ -100,9 +100,10 @@
         saveSavedAudience: (data) => API.request('/api/settings/saved-audiences', { method: 'POST', body: JSON.stringify(data) }),
         deleteSavedAudience: (id) => API.request(`/api/settings/saved-audiences/${id}`, { method: 'DELETE' }),
 
-        // Comments
-        getCommentsFeed: (filter) => API.request(`/api/comments/feed?filter=${filter || 'all'}`),
-        getCommentsThread: (type, postId, accountId) => API.request(`/api/comments/thread?type=${type}&postId=${postId}&accountId=${accountId}`),
+        // Inbox (Messages + Comments)
+        getInbox: (type) => API.request(`/api/comments/inbox?type=${type || 'all'}`),
+        getConversation: (type, id, accountId) => API.request(`/api/comments/conversation?type=${type}&id=${id}&accountId=${accountId}`),
+        sendMessage: (data) => API.request('/api/comments/send', { method: 'POST', body: JSON.stringify(data) }),
         replyToComment: (data) => API.request('/api/comments/reply', { method: 'POST', body: JSON.stringify(data) }),
         likeComment: (data) => API.request('/api/comments/like', { method: 'POST', body: JSON.stringify(data) }),
         deleteComment: (commentId, accountId) => API.request(`/api/comments/${commentId}?accountId=${accountId}`, { method: 'DELETE' }),
