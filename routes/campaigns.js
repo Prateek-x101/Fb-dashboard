@@ -493,30 +493,63 @@ router.post('/create', async (req, res) => {
         };
         const pageId = selectedPageId;
 
+        // Cache for resolved location names → keys (avoids re-resolving same locations for each audience)
+        const locationCache = new Map();
+
         for (let audienceIndex = 0; audienceIndex < (step2.audiences || []).length; audienceIndex++) {
             const audience = step2.audiences[audienceIndex];
             const existingAdset = checkpoint.adsets.find(item => item.audienceIndex === audienceIndex);
             let adsetId = existingAdset?.id;
 
             // Resolve missing keys in locationsInclude
-            const includeToResolve = (audience.locationsInclude || []).filter(l => !l.key).map(l => l.name);
-            let resolvedInclude = (audience.locationsInclude || []).filter(l => l.key).map(l => ({ key: l.key, type: l.type || 'country', name: l.name }));
+            const includeToResolve = [];
+            let resolvedInclude = [];
+
+            (audience.locationsInclude || []).forEach(l => {
+                if (l.key) {
+                    resolvedInclude.push({ key: l.key, type: l.type || 'country', name: l.name });
+                } else if (locationCache.has(l.name)) {
+                    resolvedInclude.push(locationCache.get(l.name));
+                } else {
+                    includeToResolve.push(l.name);
+                }
+            });
+
             if (includeToResolve.length > 0) {
                 try {
                     const resolved = await facebookService.resolveLocationNames(includeToResolve, token);
-                    resolvedInclude = [...resolvedInclude, ...resolved.map(r => ({ key: r.key, type: r.type, name: r.name }))];
+                    resolved.forEach(r => {
+                        const item = { key: r.key, type: r.type, name: r.name };
+                        resolvedInclude.push(item);
+                        locationCache.set(r.name, item);
+                    });
                 } catch (resolveErr) {
                     console.error('Failed to resolve include location names:', resolveErr.message);
                 }
             }
 
             // Resolve missing keys in locationsExclude
-            const excludeToResolve = (audience.locationsExclude || []).filter(l => !l.key).map(l => l.name);
-            let resolvedExclude = (audience.locationsExclude || []).filter(l => l.key).map(l => ({ key: l.key, type: l.type || 'country', name: l.name }));
+            const excludeToResolve = [];
+            let resolvedExclude = [];
+
+            (audience.locationsExclude || []).forEach(l => {
+                if (l.key) {
+                    resolvedExclude.push({ key: l.key, type: l.type || 'country', name: l.name });
+                } else if (locationCache.has(l.name)) {
+                    resolvedExclude.push(locationCache.get(l.name));
+                } else {
+                    excludeToResolve.push(l.name);
+                }
+            });
+
             if (excludeToResolve.length > 0) {
                 try {
                     const resolved = await facebookService.resolveLocationNames(excludeToResolve, token);
-                    resolvedExclude = [...resolvedExclude, ...resolved.map(r => ({ key: r.key, type: r.type, name: r.name }))];
+                    resolved.forEach(r => {
+                        const item = { key: r.key, type: r.type, name: r.name };
+                        resolvedExclude.push(item);
+                        locationCache.set(r.name, item);
+                    });
                 } catch (resolveErr) {
                     console.error('Failed to resolve exclude location names:', resolveErr.message);
                 }

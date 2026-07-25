@@ -149,9 +149,8 @@ const facebookService = {
     },
 
     async resolveLocationNames(names, token) {
-        // Resolve a list of location names to their FB keys via search
-        const resolved = [];
-        for (let name of names) {
+        // Resolve all location names in PARALLEL for maximum speed
+        const promises = names.map(async (name) => {
             try {
                 // Strip common suffixes like " - India" that cause incorrect city matches
                 const cleanName = name.replace(/\s*-\s*India$/i, '').trim();
@@ -163,27 +162,31 @@ const facebookService = {
                     const regionMatch = data.data.find(d => d.type === 'region' && d.name.toLowerCase().includes(cleanName.toLowerCase().split(',')[0]));
                     const exactMatch = data.data.find(d => d.name.toLowerCase() === cleanName.toLowerCase());
                     const match = regionMatch || exactMatch || data.data[0];
-                    resolved.push({ key: match.key, name: match.name, type: match.type, countryCode: match.country_code });
+                    return { key: match.key, name: match.name, type: match.type, countryCode: match.country_code };
                 }
             } catch (e) { /* skip if can't resolve */ }
-        }
-        return resolved;
+            return null;
+        });
+        const results = await Promise.allSettled(promises);
+        return results.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
     },
 
     async resolveInterestNames(names, token) {
-        const resolved = [];
-        for (const name of names) {
+        // Resolve all interest names in PARALLEL for maximum speed
+        const promises = names.map(async (name) => {
             try {
                 const url = `${BASE_URL}/search?type=adinterest&q=${encodeURIComponent(name)}&access_token=${token}`;
                 const response = await fetch(url, { method: 'GET' });
                 const data = await response.json();
                 if (data.data && data.data.length > 0) {
                     const match = data.data.find(d => d.name.toLowerCase() === name.toLowerCase()) || data.data[0];
-                    resolved.push({ id: match.id, name: match.name });
+                    return { id: match.id, name: match.name };
                 }
             } catch (e) { /* skip if can't resolve */ }
-        }
-        return resolved;
+            return null;
+        });
+        const results = await Promise.allSettled(promises);
+        return results.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
     },
 
     async getVideoThumbnailWithRetry(videoId, token) {
