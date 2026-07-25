@@ -109,7 +109,7 @@ router.get('/inbox', async (req, res) => {
         }
 
         // ── Facebook page comments ────────────────────────────────────────────
-        if ((type === 'fb-comments') && acc.pageId) {
+        if ((type === 'all' || type === 'fb-comments') && acc.pageId) {
             try {
                 const pageToken = await getPageToken(acc.pageId, token);
                 const fields = 'id,message,story,full_picture,created_time,comments.summary(true).limit(3){id,message,from,created_time}';
@@ -145,7 +145,7 @@ router.get('/inbox', async (req, res) => {
         }
 
         // ── Instagram post comments ───────────────────────────────────────────
-        if ((type === 'ig-comments') && acc.instagramAccountId) {
+        if ((type === 'all' || type === 'ig-comments') && acc.instagramAccountId) {
             try {
                 const fields = 'id,caption,media_type,thumbnail_url,media_url,timestamp,comments_count';
                 const url = `${BASE}/${acc.instagramAccountId}/media?fields=${fields}&limit=25&access_token=${token}`;
