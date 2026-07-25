@@ -63,7 +63,7 @@
         createCampaign: (data) => API.request('/api/campaigns/create', { method: 'POST', body: JSON.stringify(data) }),
         generateVariations: (data) => API.request('/api/campaigns/generate-variations', { method: 'POST', body: JSON.stringify(data) }),
         generateAdCopy: (data) => API.request('/api/campaigns/generate-ad-copy', { method: 'POST', body: JSON.stringify(data) }),
-        getRecentCampaigns: () => API.request('/api/campaigns/recent'),
+        getRecentCampaigns: (accountId) => API.request('/api/campaigns/recent' + (accountId ? `?accountId=${encodeURIComponent(accountId)}` : '')),
 
         // Media
         uploadMedia: async (formData) => {

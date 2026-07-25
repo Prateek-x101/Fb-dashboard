@@ -720,7 +720,6 @@ router.post('/create', async (req, res) => {
                 // Build degrees_of_freedom_spec from selected enhancements
                 const dofFeatures = {};
                 if (enhancements.autoCreative)      dofFeatures.standard_enhancements = { enroll_status: 'OPT_IN' };
-                if (enhancements.autoMusic)         dofFeatures.music                  = { enroll_status: 'OPT_IN' };
                 if (enhancements.inlineComment)     dofFeatures.inline_comment         = { enroll_status: 'OPT_IN' };
                 if (enhancements.textOptimizations) dofFeatures.text_optimizations     = { enroll_status: 'OPT_IN' };
                 if (enhancements.productTags)       dofFeatures.product_extensions     = { enroll_status: 'OPT_IN' };
@@ -813,6 +812,7 @@ router.post('/create', async (req, res) => {
             id: uuidv4(),
             draftId,
             campaignId,
+            accountId: campaign.accountId || null,
             name: campaign.name,
             createdAt: new Date().toISOString(),
             status: 'success',
@@ -839,6 +839,7 @@ router.post('/create', async (req, res) => {
             id: `retry-${draftId}`,
             draftId,
             campaignId: checkpoint.campaignId || null,
+            accountId: req.body.campaign?.accountId || null,
             name: req.body.campaign?.name || 'Unnamed campaign',
             createdAt: new Date().toISOString(),
             status: 'failed',
@@ -1046,7 +1047,12 @@ function buildGeoLocations(locations) {
 router.get('/recent', (req, res) => {
     try {
         const storage = getStorage();
-        res.json(storage.recentCampaigns || []);
+        let campaigns = storage.recentCampaigns || [];
+        const { accountId } = req.query;
+        if (accountId) {
+            campaigns = campaigns.filter(c => c.accountId === accountId);
+        }
+        res.json(campaigns);
     } catch (error) {
         res.status(500).json({ error: 'Failed to fetch recent campaigns', details: error.message });
     }
