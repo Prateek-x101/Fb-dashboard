@@ -77,6 +77,20 @@
                 });
             }
 
+            // Organic Publish settings toggle in Shopify
+            const shopifyPublishToggle = document.getElementById('shopify-organic-publish-toggle');
+            const shopifyPublishSettings = document.getElementById('shopify-organic-publish-settings');
+            
+            if (shopifyPublishToggle && shopifyPublishSettings) {
+                shopifyPublishToggle.addEventListener('change', () => {
+                    const isChecked = shopifyPublishToggle.checked;
+                    shopifyPublishSettings.style.display = isChecked ? 'block' : 'none';
+                    if (isChecked) {
+                        this.loadPublishDestinations();
+                    }
+                });
+            }
+
             // Video URL Download
             const btnUrlDownload = document.getElementById('btn-shopify-import-video-url-download');
             if (btnUrlDownload && urlListContainer) {
@@ -415,6 +429,22 @@
                 return;
             }
 
+            // Organic Publish Validation
+            const organicChecked = document.getElementById('shopify-organic-publish-toggle')?.checked;
+            const selectedPages = Array.from(document.querySelectorAll('.shopify-publish-page-checkbox:checked')).map(cb => cb.value);
+            const selectedIgs = Array.from(document.querySelectorAll('.shopify-publish-ig-checkbox:checked')).map(cb => cb.value);
+
+            if (organicChecked) {
+                if (!selectedPages.length && !selectedIgs.length) {
+                    window.AppController.showToast('Please select at least one organic page or Instagram destination.', 'warning');
+                    return;
+                }
+                if (!this.floatingVideos.length) {
+                    window.AppController.showToast('Please prepare at least one video (download or upload) to publish organically.', 'warning');
+                    return;
+                }
+            }
+
             // Collect selected collections
             const checkedBoxes = document.querySelectorAll('.shopify-collection-checkbox:checked');
             const collectionIds = Array.from(checkedBoxes).map(cb => cb.value);
@@ -456,6 +486,29 @@
                 });
 
                 window.AppController.showToast(`Successfully imported: "${result.title}" to Shopify! 🎉`, 'success');
+
+                // Perform Organic Publishing if checked
+                if (organicChecked) {
+                    try {
+                        window.AppController.showToast('Generating AI caption and publishing organically... 📢', 'info');
+                        const style = document.getElementById('shopify-publish-ai-style')?.value || 'viral';
+                        
+                        // Use the product title/details for post topic
+                        const captionResult = await window.API.generatePostCaption(title, style);
+                        const caption = captionResult.caption;
+
+                        await window.API.publishPost({
+                            pageIds: selectedPages,
+                            instagramIds: selectedIgs,
+                            videos: this.floatingVideos,
+                            caption: caption
+                        });
+                        window.AppController.showToast('Organic post/reel published successfully! 📢', 'success');
+                    } catch (pubErr) {
+                        console.error("Organic publishing failed during Shopify import:", pubErr);
+                        window.AppController.showToast('Product imported, but organic post publish failed: ' + pubErr.message, 'warning');
+                    }
+                }
                 
                 // Store imported details for later ad creation
                 ShopifyImporter.importedProduct = {
@@ -733,7 +786,47 @@
             
             if (filtered.length === 0) filtered = words;
             
-            return filtered.slice(0, 3).join(' ');
+        loadPublishDestinations: async function() {
+            const destList = document.getElementById('shopify-publish-destinations');
+            if (!destList) return;
+
+            destList.innerHTML = '<p style="color:var(--text-secondary); font-size:0.85rem; padding:4px;">Loading...</p>';
+
+            try {
+                const result = await window.API.request('/api/accounts/pages');
+                if (result.pages && result.pages.length) {
+                    destList.innerHTML = '';
+                    result.pages.forEach(page => {
+                        // Render FB Page checkbox
+                        const pageLabel = `${page.name} (${page.accountLabel || 'FB'})`;
+                        const pageRow = document.createElement('label');
+                        pageRow.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:6px; cursor:pointer; font-size:0.9rem;';
+                        pageRow.innerHTML = `
+                            <input type="checkbox" class="shopify-publish-page-checkbox" value="${page.id}">
+                            <span>${pageLabel}</span>
+                        `;
+                        destList.appendChild(pageRow);
+
+                        // Render linked IG checkbox if exists
+                        if (page.instagram_business_account) {
+                            const ig = page.instagram_business_account;
+                            const igLabel = `@${ig.username} (IG via ${page.name})`;
+                            const igRow = document.createElement('label');
+                            igRow.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:6px; cursor:pointer; font-size:0.9rem;';
+                            igRow.innerHTML = `
+                                <input type="checkbox" class="shopify-publish-ig-checkbox" value="${ig.id}">
+                                <span>${igLabel}</span>
+                            `;
+                            destList.appendChild(igRow);
+                        }
+                    });
+                } else {
+                    destList.innerHTML = '<p style="color:var(--text-secondary); font-size:0.85rem; padding:4px;">No Pages found. Connect an account first.</p>';
+                }
+            } catch (err) {
+                console.error("Failed to load shopify destinations:", err);
+                destList.innerHTML = `<p style="color:#f44336; font-size:0.85rem; padding:4px;">Failed to load: ${err.message}</p>`;
+            }
         },
 
         escapeHtml: function(value) {

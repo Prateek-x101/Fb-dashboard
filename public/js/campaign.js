@@ -1296,6 +1296,38 @@
                 const result = await window.API.createCampaign(payload);
                 this._retryState = null;
                 this._creationDraftId = '';
+                
+                // Cross-post organically if toggle is checked
+                if (document.getElementById('campaign-organic-publish-toggle')?.checked) {
+                    try {
+                        if (statusText) statusText.textContent = 'Publishing organic post/reel... 📢';
+                        const pageId = document.getElementById('ad-page')?.value;
+                        const instagramId = document.getElementById('ad-instagram')?.value;
+                        
+                        const pageIds = pageId ? [pageId] : [];
+                        const instagramIds = instagramId ? [instagramId] : [];
+                        
+                        const videos = (this.campaignData.step3.ads || [])
+                            .map(ad => ({ filePath: ad.media, filename: ad.mediaFile }))
+                            .filter(v => v.filePath && v.filename);
+                        
+                        const caption = this.campaignData.step3.ads?.[0]?.primaryText || '';
+
+                        if ((pageIds.length || instagramIds.length) && videos.length) {
+                            await window.API.publishPost({
+                                pageIds,
+                                instagramIds,
+                                videos,
+                                caption
+                            });
+                            window.AppController.showToast('Successfully published organically too! 📢', 'success');
+                        }
+                    } catch (pubErr) {
+                        console.error("Organic publishing failed during campaign creation:", pubErr);
+                        window.AppController.showToast('Campaign created, but organic publishing failed: ' + pubErr.message, 'warning');
+                    }
+                }
+
                 if (statusText) statusText.textContent = '✅ Campaign created successfully!';
                 window.AppController.showToast('Campaign created successfully! 🎉', 'success');
 

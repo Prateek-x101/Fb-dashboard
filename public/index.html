@@ -378,9 +378,9 @@
                                 </select>
                             </div>
                         </div>
-                        <div class="form-group">
-                            <label>Description (Optional)</label>
-                            <input type="text" class="form-control" placeholder="Brief description below headline" id="description">
+                        <div class="form-group mb-2" style="display:flex; align-items:center; gap:8px; margin-top:12px; background:rgba(0,245,212,0.06); padding:8px; border-radius:6px; border:1px solid rgba(0,245,212,0.15);">
+                            <input type="checkbox" id="campaign-organic-publish-toggle" style="width:18px; height:18px; cursor:pointer;">
+                            <label for="campaign-organic-publish-toggle" style="margin-bottom:0; cursor:pointer; font-weight:600; color:var(--accent-cyan);">📢 Also publish these videos organically as Page Posts / Instagram Reels</label>
                         </div>
                     </div>
 
@@ -850,6 +850,33 @@
                     <label>🖼️ Scraped Media/Images Preview</label>
                     <div id="shopify-import-images-grid" style="display:flex; gap:10px; overflow-x:auto; padding:10px 0;">
                         <!-- images rendered here -->
+                    </div>
+                </div>
+
+                <!-- Organic Publish Toggle in Shopify Importer -->
+                <div class="glass-card mb-3" style="background:rgba(67, 97, 238, 0.05); border-color:var(--glass-border); padding: 12px; margin-top: 12px;">
+                    <div class="form-group mb-2" style="display:flex; align-items:center; gap:8px;">
+                        <input type="checkbox" id="shopify-organic-publish-toggle" style="width:18px; height:18px; cursor:pointer;">
+                        <label for="shopify-organic-publish-toggle" style="margin-bottom:0; cursor:pointer; font-weight:600; color:var(--accent-blue);">📢 Also publish imported videos organically as Page Posts / Reels</label>
+                    </div>
+                    
+                    <div id="shopify-organic-publish-settings" style="display:none; margin-top:12px; border-top:1px solid var(--glass-border); padding-top:12px;">
+                        <div class="grid-2 mb-2">
+                            <div class="form-group">
+                                <label>Target Page / Destination</label>
+                                <div id="shopify-publish-destinations" class="checkbox-group" style="max-height: 120px; overflow-y: auto; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 6px; border: 1px solid var(--glass-border);">
+                                    <p style="color:var(--text-secondary); font-size:0.85rem; padding:4px;">Loading Pages...</p>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>AI Caption Style (Gemini will generate copy based on description) ✨</label>
+                                <select class="form-control" id="shopify-publish-ai-style">
+                                    <option value="viral">Viral TikTok/Reels Style (Short, Hook, Emojis)</option>
+                                    <option value="sales">Product Sales Pitch (Features, CTA, Emojis)</option>
+                                    <option value="informational">Informational Copy (Approachable, Clean)</option>
+                                </select>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
