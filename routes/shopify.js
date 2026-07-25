@@ -536,6 +536,7 @@ router.post('/import', async (req, res) => {
         try {
             const createdVariants = createdProduct.variants || [];
             const createdImages = createdProduct.images || [];
+            const updatePromises = [];
 
             for (let i = 0; i < createdVariants.length; i++) {
                 const createdVar = createdVariants[i];
@@ -570,48 +571,60 @@ router.post('/import', async (req, res) => {
 
                     if (matchedImage) {
                         const updateUrl = `https://${store.shopUrl}/admin/api/2024-04/variants/${createdVar.id}.json`;
-                        await fetch(updateUrl, {
-                            method: 'PUT',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'X-Shopify-Access-Token': store.accessToken
-                            },
-                            body: JSON.stringify({
-                                variant: {
-                                    id: createdVar.id,
-                                    image_id: matchedImage.id
+                        updatePromises.push(
+                            fetch(updateUrl, {
+                                method: 'PUT',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'X-Shopify-Access-Token': store.accessToken
+                                },
+                                body: JSON.stringify({
+                                    variant: {
+                                        id: createdVar.id,
+                                        image_id: matchedImage.id
+                                    }
+                                })
+                            }).then(async r => {
+                                if (!r.ok) {
+                                    console.warn(`Failed to link image for variant ${createdVar.id}: ${await r.text()}`);
                                 }
                             })
-                        });
+                        );
                     }
                 }
+            }
+
+            if (updatePromises.length > 0) {
+                console.log(`Linking ${updatePromises.length} variant images in parallel...`);
+                await Promise.allSettled(updatePromises);
             }
         } catch (variantImgErr) {
             console.error('Failed to link images to product variants:', variantImgErr.message);
         }
 
-        // Link product to selected collections
+        // Link product to selected collections in parallel
         if (Array.isArray(collectionIds) && collectionIds.length > 0) {
-            for (const collId of collectionIds) {
-                try {
-                    const collectUrl = `https://${store.shopUrl}/admin/api/2024-04/collects.json`;
-                    await fetch(collectUrl, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'X-Shopify-Access-Token': store.accessToken
-                        },
-                        body: JSON.stringify({
-                            collect: {
-                                collection_id: collId,
-                                product_id: createdProductId
-                            }
-                        })
-                    });
-                } catch (collectErr) {
-                    console.error(`Failed to associate product with collection ${collId}:`, collectErr.message);
+            console.log(`Linking product to ${collectionIds.length} collections in parallel...`);
+            const collectPromises = collectionIds.map(async (collId) => {
+                const collectUrl = `https://${store.shopUrl}/admin/api/2024-04/collects.json`;
+                const r = await fetch(collectUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Shopify-Access-Token': store.accessToken
+                    },
+                    body: JSON.stringify({
+                        collect: {
+                            collection_id: collId,
+                            product_id: createdProductId
+                        }
+                    })
+                });
+                if (!r.ok) {
+                    console.warn(`Failed to associate product with collection ${collId}: ${await r.text()}`);
                 }
-            }
+            });
+            await Promise.allSettled(collectPromises);
         }
 
         const productUrl = `https://${actualDomain}/products/${createdProduct.handle}`;
