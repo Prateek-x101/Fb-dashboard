@@ -40,9 +40,11 @@ router.get('/inbox', async (req, res) => {
     const storage = getStorage();
     const accounts = storage.accounts || [];
     const type = req.query.type || 'all';
+    const filterPageId = req.query.pageId;
     const items = [];
 
     await Promise.all(accounts.map(async (acc) => {
+        if (filterPageId && acc.pageId !== filterPageId) return;
         const token = acc.accessToken;
 
         // ── Messenger DMs ─────────────────────────────────────────────────────

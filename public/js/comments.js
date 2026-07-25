@@ -21,9 +21,13 @@ const InboxManager = {
         this.renderTabs();
         this.bindSearch();
         document.getElementById('cm-refresh-btn')?.addEventListener('click', () => this.reload());
+        
+        // Bind page filter change
+        document.getElementById('cm-page-filter')?.addEventListener('change', () => this.reload());
     },
 
     onShow() {
+        this.loadPagesFilter();
         if (!this.items.length) this.loadInbox();
     },
 
@@ -68,9 +72,11 @@ const InboxManager = {
 
         // For "all" tab: load messenger + instagram (DMs only)
         const type = this.currentTab === 'all' ? 'all' : this.currentTab;
+        const pageId = document.getElementById('cm-page-filter')?.value || '';
+        const url = `/api/comments/inbox?type=${type}&pageId=${pageId}`;
 
         try {
-            const data = await window.API.request(`/api/comments/inbox?type=${type}`);
+            const data = await window.API.request(url);
             this.items = data.data || [];
             this.renderList();
         } catch (e) {
@@ -331,6 +337,31 @@ const InboxManager = {
             window.AppController?.showToast('Deleted', 'success');
             await this.loadThread(this.currentItem);
         } catch (e) { window.AppController?.showToast(e.message, 'error'); }
+    },
+
+    async loadPagesFilter() {
+        const pageFilter = document.getElementById('cm-page-filter');
+        if (!pageFilter) return;
+
+        const currentSelected = pageFilter.value;
+
+        try {
+            const result = await window.API.request('/api/accounts/pages');
+            pageFilter.innerHTML = '<option value="">-- All Pages --</option>';
+            if (result.pages && result.pages.length) {
+                result.pages.forEach(page => {
+                    const opt = document.createElement('option');
+                    opt.value = page.id;
+                    opt.textContent = `${page.name} (${page.accountLabel || page.id})`;
+                    if (page.id === currentSelected) {
+                        opt.selected = true;
+                    }
+                    pageFilter.appendChild(opt);
+                });
+            }
+        } catch (e) {
+            console.error("Failed to load page filter values:", e.message);
+        }
     },
 
     clearThread() {

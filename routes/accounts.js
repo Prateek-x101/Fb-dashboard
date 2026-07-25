@@ -17,6 +17,21 @@ router.get('/', async (req, res) => {
 
         for (let i = 0; i < accounts.length; i++) {
             const acc = accounts[i];
+
+            // Auto-resolve missing Page ID
+            if (acc.accessToken && !acc.pageId) {
+                try {
+                    const pagesResult = await facebookService.getConnectedInstagram(acc.accessToken);
+                    if (pagesResult.data && pagesResult.data.length > 0) {
+                        acc.pageId = pagesResult.data[0].id;
+                        updated = true;
+                        console.log(`Auto-assigned Page ID ${acc.pageId} to account ${acc.accountId || acc.label}`);
+                    }
+                } catch (err) {
+                    console.error(`Failed to auto-fetch Page ID for account ${acc.accountId}:`, err.message);
+                }
+            }
+
             if (acc.accessToken && acc.accountId && (!acc.currency || !acc.timezone_name)) {
                 try {
                     const rawId = acc.accountId.startsWith('act_') ? acc.accountId : `act_${acc.accountId}`;
