@@ -496,6 +496,16 @@ select.form-control {
   box-shadow: 0 0 15px rgba(67, 97, 238, 0.2);
 }
 
+@keyframes budgetTypeFlash {
+  0%   { transform: scale(1);    box-shadow: 0 0 0px rgba(67,97,238,0); }
+  30%  { transform: scale(1.04); box-shadow: 0 0 22px rgba(67,97,238,0.7); }
+  60%  { transform: scale(1.01); box-shadow: 0 0 14px rgba(67,97,238,0.4); }
+  100% { transform: scale(1);    box-shadow: 0 0 15px rgba(67,97,238,0.2); }
+}
+.budget-type-flash .radio-card-content {
+  animation: budgetTypeFlash 0.45s ease-out forwards;
+}
+
 /* Password Input */
 .password-input {
   position: relative;

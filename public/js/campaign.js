@@ -351,6 +351,38 @@
                 btnCampaignMediaDownload.addEventListener('click', () => this.handleVideoUrlDownload());
             }
 
+            // Campaign name → auto-switch ABO/CBO with animation
+            const campaignNameInput = document.getElementById('campaign-name');
+            if (campaignNameInput) {
+                campaignNameInput.addEventListener('input', () => {
+                    const val = campaignNameInput.value.toUpperCase();
+                    const hasABO = val.includes('ABO');
+                    const hasCBO = val.includes('CBO');
+                    if (!hasABO && !hasCBO) return;
+
+                    const aboRadio = document.getElementById('budget-type-abo');
+                    const cboRadio = document.getElementById('budget-type-cbo');
+                    const aboCard = aboRadio?.closest('.radio-card');
+                    const cboCard = cboRadio?.closest('.radio-card');
+
+                    const targetRadio  = hasABO ? aboRadio  : cboRadio;
+                    const targetCard   = hasABO ? aboCard   : cboCard;
+                    const otherCard    = hasABO ? cboCard   : aboCard;
+
+                    if (!targetRadio || targetRadio.checked) return;
+                    targetRadio.checked = true;
+                    targetRadio.dispatchEvent(new Event('change', { bubbles: true }));
+
+                    // Flash animation on the newly selected card
+                    [aboCard, cboCard].forEach(c => c && c.classList.remove('budget-type-flash'));
+                    if (targetCard) {
+                        void targetCard.offsetWidth; // force reflow
+                        targetCard.classList.add('budget-type-flash');
+                        targetCard.addEventListener('animationend', () => targetCard.classList.remove('budget-type-flash'), { once: true });
+                    }
+                });
+            }
+
             const btnAutoFill = document.getElementById('btn-auto-fill-copy');
             if (btnAutoFill) btnAutoFill.addEventListener('click', () => this.autoFillCreativeCopy());
             const btnAddAd = document.getElementById('btn-add-creative-ad');
@@ -734,12 +766,35 @@
                             igSelect.appendChild(o);
                         }
                     });
+                    // Auto-select page and matching Instagram
                     if (pageSelect) {
                         const matchingPage = pages.find(page =>
                             page.id === account.pageId &&
                             ((!page.accountIds && page.accountId === account.id) || page.accountIds?.includes(account.id))
                         );
-                        pageSelect.value = matchingPage ? account.pageId : '';
+                        const selectedPageId = matchingPage ? account.pageId : (pages.length === 1 ? pages[0].id : '');
+                        pageSelect.value = selectedPageId;
+
+                        // Auto-select Instagram linked to the selected page
+                        if (selectedPageId && igSelect) {
+                            const selectedPage = pages.find(p => p.id === selectedPageId);
+                            if (selectedPage?.instagram_business_account) {
+                                igSelect.value = selectedPage.instagram_business_account.id;
+                            }
+                        }
+                    }
+
+                    // When user manually picks a page, auto-select its Instagram
+                    if (pageSelect && igSelect) {
+                        pageSelect.addEventListener('change', () => {
+                            const pid = pageSelect.value;
+                            const pg = pages.find(p => p.id === pid);
+                            if (pg?.instagram_business_account) {
+                                igSelect.value = pg.instagram_business_account.id;
+                            } else {
+                                igSelect.value = '';
+                            }
+                        });
                     }
                 } catch {
                     if (pageSelect) pageSelect.innerHTML = '<option value="">Could not load pages</option>';
@@ -1648,6 +1703,8 @@
                     }
                 }
 
+                // Sync DOM state FIRST so thumbnail/media are not wiped by re-render
+                this.collectCreativeAdsFromDOM();
                 this.campaignData.step3.ads.forEach((ad, index) => {
                     ad.primaryText = (variations[index] || result.primaryText || '').trim();
                 });
