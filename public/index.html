@@ -19,6 +19,7 @@
             <li><a href="#" class="nav-item active" data-section="section-dashboard"><span>📊</span> Dashboard</a></li>
             <li><a href="#" class="nav-item" data-section="section-campaign"><span>➕</span> Create Campaign</a></li>
             <li><a href="#" class="nav-item" data-section="section-shopify"><span>🛍️</span> Shopify Importer</a></li>
+            <li><a href="#" class="nav-item" data-section="section-publisher"><span>📢</span> Publisher</a></li>
             <li><a href="#" class="nav-item" data-section="section-accounts"><span>👥</span> Accounts</a></li>
             <li><a href="#" class="nav-item" data-section="section-comments"><span>💬</span> Comments</a></li>
             <li><a href="#" class="nav-item" data-section="section-settings"><span>⚙️</span> Settings</a></li>
@@ -517,6 +518,110 @@
             </div>
         </section>
 
+        <!-- SECTION: Publisher (Post to FB Page & Instagram Reels/Posts) -->
+        <section id="section-publisher" class="section">
+            <h2 class="mb-3">📢 Page & Instagram Publisher</h2>
+            
+            <div class="grid-2" style="gap:20px; align-items:start;">
+                
+                <!-- Left panel: Configuration -->
+                <div class="space-y-3">
+                    <div class="glass-card">
+                        <h3>👥 Destination Pages & Accounts</h3>
+                        <p class="mt-1" style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;">Select one or more Facebook Pages or linked Instagram Accounts to publish to.</p>
+                        
+                        <div class="form-group mb-2">
+                            <label>Facebook Pages</label>
+                            <div id="publisher-fb-pages-list" class="checkbox-group" style="max-height: 180px; overflow-y: auto; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 6px; border: 1px solid var(--glass-border);">
+                                <p style="color:var(--text-secondary); font-size:0.85rem; padding:4px;">Loading pages...</p>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Instagram Business Accounts</label>
+                            <div id="publisher-ig-accounts-list" class="checkbox-group" style="max-height: 180px; overflow-y: auto; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 6px; border: 1px solid var(--glass-border);">
+                                <p style="color:var(--text-secondary); font-size:0.85rem; padding:4px;">Loading accounts...</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="glass-card">
+                        <h3>🖼️ Media Content</h3>
+                        <p class="mt-1" style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;">Add video URLs in bulk. Each link will download, optimize to canvas, and publish.</p>
+                        
+                        <div id="publisher-video-url-list">
+                            <div class="flex gap-2 mb-1 publisher-video-url-row" style="display:flex; gap:8px; margin-bottom:8px; align-items:center;">
+                                <input type="text" class="form-control publisher-video-url-input" placeholder="Paste link (FB Ads Library, YouTube, Insta, Pinterest…)" style="flex:1;">
+                                <button type="button" class="btn btn-secondary btn-sm btn-remove-publisher-url-row" style="display:none; padding:4px 8px;">🗑️</button>
+                            </div>
+                        </div>
+                        <div class="flex justify-between align-center mt-2" style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
+                            <button type="button" class="btn btn-secondary btn-xs" id="btn-publisher-add-url-row" style="padding: 4px 8px; font-size: 0.75rem;">➕ Add Another Link</button>
+                            <div class="flex gap-2 align-center">
+                                <select class="form-control" id="publisher-media-url-canvas" style="width:140px; background:var(--bg-card); color:white; border-color:var(--glass-border);">
+                                    <option value="original">Original Aspect</option>
+                                    <option value="9:16">9:16 Vertical</option>
+                                    <option value="1:1">1:1 Square</option>
+                                </select>
+                                <button type="button" class="btn btn-primary" id="btn-publisher-media-url-download" style="white-space:nowrap;">📥 Prepare Videos</button>
+                            </div>
+                        </div>
+
+                        <div id="publisher-media-preview-container" class="mt-3 flex gap-2" style="display:none; flex-wrap:wrap; gap:8px; margin-top:12px;"></div>
+                    </div>
+                </div>
+
+                <!-- Right panel: AI Captions & Post Details -->
+                <div class="glass-card" style="display:flex; flex-direction:column; justify-content:space-between; min-height: 480px;">
+                    <div>
+                        <h3>✍️ Post Details & AI Captions</h3>
+                        <p class="mt-1" style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:12px;">Generate description in bulk or enter it manually.</p>
+                        
+                        <div class="form-group mb-2">
+                            <label>Product Name / Topic (For AI Caption Generator)</label>
+                            <input type="text" class="form-control" id="publisher-ai-topic" placeholder="e.g. Dynamic Phone Holder Stand with face tracking">
+                        </div>
+
+                        <div class="form-group mb-2">
+                            <label>Caption Generation Style</label>
+                            <select class="form-control" id="publisher-ai-style">
+                                <option value="viral">Viral TikTok/Reels (Short, Emojis, Hook)</option>
+                                <option value="sales">Product Sales Copy (Features, Benefits, CTA)</option>
+                                <option value="informational">Educational / Informational (Clean, Detailed)</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group mb-3">
+                            <div class="flex justify-between mb-1" style="display:flex; justify-content:space-between; align-items:center;">
+                                <label style="margin-bottom:0;">Caption / Primary Text *</label>
+                                <button type="button" class="btn btn-gemini btn-xs" id="btn-publisher-generate-caption" style="padding: 2px 8px; font-size: 0.75rem; border-radius: 4px;">🤖 Generate with AI</button>
+                            </div>
+                            <textarea class="form-control" id="publisher-caption-text" rows="8" placeholder="Type caption or generate with AI (will include emojis and hashtags)..."></textarea>
+                        </div>
+
+                        <div class="form-group mb-2">
+                            <label>Thumbnail Frame (For Reels - Optional)</label>
+                            <select class="form-control" id="publisher-thumbnail-source">
+                                <option value="first_frame">Use First Frame</option>
+                                <option value="middle_frame">Use Middle Frame (e.g. 50% duration)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="mt-4 pt-3 border-t" style="border-top: 1px solid var(--glass-border); padding-top:16px;">
+                        <button class="btn btn-primary w-full" id="btn-publisher-submit" style="width:100%; font-size:1.1rem; padding:12px;">🚀 Publish to Selected Pages & Instagram</button>
+                        
+                        <div class="mt-3" style="display: none;" id="publisher-status-container">
+                            <div class="loading-spinner"></div>
+                            <p style="color: var(--info); margin-top:8px; text-align:center; font-size:0.9rem;" id="publisher-status-text">Publishing posts...</p>
+                            <div id="publisher-status-details" style="display:none; font-size:0.8rem; margin-top:8px; background:rgba(0,0,0,0.3); padding:8px; border-radius:4px; max-height:150px; overflow-y:auto; font-family:monospace; color:var(--text-secondary);"></div>
+                        </div>
+                    </div>
+                </div>
+                
+            </div>
+        </section>
+
         <!-- SECTION 4: Settings -->
         <section id="section-settings" class="section">
             <h2 class="mb-3">⚙️ System Settings</h2>
@@ -908,5 +1013,6 @@
     <script src="/js/settings.js"></script>
     <script src="/js/shopify.js"></script>
     <script src="/js/comments.js"></script>
+    <script src="/js/publisher.js"></script>
 </body>
 </html>

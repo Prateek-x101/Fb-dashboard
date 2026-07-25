@@ -94,6 +94,16 @@
             method: 'POST',
             body: JSON.stringify({ url, canvasType })
         }),
+
+        // Publisher Tab
+        generatePostCaption: (topic, style) => API.request('/api/publish/generate-caption', {
+            method: 'POST',
+            body: JSON.stringify({ topic, style })
+        }),
+        publishPost: (data) => API.request('/api/publish/post', {
+            method: 'POST',
+            body: JSON.stringify(data)
+        }),
         
         // Saved Audiences
         getSavedAudiences: () => API.request('/api/settings/saved-audiences'),

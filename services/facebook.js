@@ -119,8 +119,8 @@ const facebookService = {
     },
 
     async getConnectedInstagram(token) {
-        // Get every Page linked to this token, not only the first Graph API page.
-        const fields = encodeURIComponent('id,name,instagram_business_account{id,name,username}');
+        // Get every Page linked to this token, not only the first Graph API page. Includes Page access_token.
+        const fields = encodeURIComponent('id,name,access_token,instagram_business_account{id,name,username}');
         let nextUrl = `${BASE_URL}/me/accounts?fields=${fields}&limit=100&access_token=${token}`;
         const pages = [];
         let paging = null;
