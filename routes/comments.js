@@ -52,6 +52,9 @@ router.get('/inbox', async (req, res) => {
 
         try {
             // Get all Pages connected to this user account access token
+            const pagesResult = await facebookService.getConnectedInstagram(token);
+            const pages = pagesResult.data || [];
+
             // Let's process all pages in parallel!
             await Promise.all(pages.map(async (page) => {
                 // If filterPageId is set, only process if page.id matches filterPageId
