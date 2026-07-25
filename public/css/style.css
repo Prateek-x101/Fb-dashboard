@@ -1019,135 +1019,12 @@ code {
 }
 
 /* ===== VIDEO FILMSTRIP SCRUBBER (Canva-style) ===== */
-.filmstrip-wrap {
-    margin-top: 8px;
-    border-radius: 8px;
-    overflow: hidden;
-    background: rgba(0,0,0,0.35);
-    border: 1px solid rgba(255,255,255,0.1);
-}
-
-.filmstrip-preview-img {
-    width: 100%;
-    max-height: 120px;
-    object-fit: cover;
-    display: block;
-    border-bottom: 1px solid rgba(255,255,255,0.08);
-    background: #111;
-}
-
-.filmstrip-no-preview {
-    width: 100%;
-    height: 80px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: rgba(255,255,255,0.3);
-    font-size: 0.78rem;
-    border-bottom: 1px solid rgba(255,255,255,0.08);
-    background: rgba(0,0,0,0.2);
-}
-
-.filmstrip-controls-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 5px 8px 5px 5px;
-    background: rgba(0,0,0,0.25);
-}
-
-/* The scrollable strip of frame thumbnails */
-.filmstrip-strip-outer {
-    position: relative;
-    flex: 1;
-    min-width: 0;
-    height: 46px;
-    cursor: col-resize;
-    border-radius: 5px;
-    overflow: hidden;
-    background: #0a0a0a;
-    user-select: none;
-    touch-action: none;
-}
-
-.filmstrip-strip {
-    display: flex;
-    height: 100%;
-    width: 100%;
-    pointer-events: none;
-}
-
-.filmstrip-frame-thumb {
-    flex: 1 1 0;
-    height: 100%;
-    object-fit: cover;
-    display: block;
-    border-right: 1px solid rgba(0,0,0,0.4);
-}
-
-/* The playhead — white vertical bar with top & bottom handles */
-.filmstrip-playhead {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    width: 3px;
-    background: #fff;
-    pointer-events: none;
-    border-radius: 2px;
-    box-shadow: 0 0 6px rgba(255,255,255,0.5);
-    transform: translateX(-50%);
-    transition: none;
-}
-.filmstrip-playhead::before,
-.filmstrip-playhead::after {
-    content: '';
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 13px;
-    height: 8px;
-    background: #fff;
-    border-radius: 3px;
-}
-.filmstrip-playhead::before { top: -6px; border-radius: 3px 3px 0 0; }
-.filmstrip-playhead::after  { bottom: -6px; border-radius: 0 0 3px 3px; }
-
-/* Loading shimmer in strip */
-.filmstrip-loading {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 100%;
-    height: 100%;
-    color: rgba(255,255,255,0.3);
-    font-size: 0.72rem;
-    letter-spacing: 0.05em;
-}
-
-.filmstrip-use-btn {
-    flex-shrink: 0;
-    font-size: 0.72rem !important;
-    padding: 4px 9px !important;
-    white-space: nowrap;
-    background: var(--accent-purple, #7c3aed) !important;
-    border-color: transparent !important;
-    color: #fff !important;
-}
-.filmstrip-use-btn:hover:not(:disabled) {
-    filter: brightness(1.15);
-}
-.filmstrip-use-btn:disabled {
-    opacity: 0.55;
-    cursor: default;
-}
-
 .filmstrip-upload-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 4px;
+    margin-bottom: 6px;
 }
-
 .filmstrip-remove-thumb {
     background: none;
     border: none;
@@ -1157,6 +1034,129 @@ code {
     padding: 2px 5px;
 }
 .filmstrip-remove-thumb:hover { text-decoration: underline; }
+
+/* Outer wrapper */
+.filmstrip-wrap {
+    margin-top: 4px;
+    background: rgba(0,0,0,0.30);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 8px;
+    padding: 8px 8px 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+/* Status line */
+.filmstrip-status {
+    font-size: 0.72rem;
+    color: rgba(255,255,255,0.45);
+    text-align: center;
+    min-height: 14px;
+}
+.filmstrip-status.ok   { color: #4ade80; }
+.filmstrip-status.busy { color: rgba(255,255,255,0.4); }
+
+/* Row: left-arrow  |  viewport  |  right-arrow */
+.filmstrip-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.filmstrip-scroll-btn {
+    flex-shrink: 0;
+    width: 24px;
+    height: 56px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 4px;
+    color: #fff;
+    font-size: 1rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s;
+    user-select: none;
+}
+.filmstrip-scroll-btn:hover:not(:disabled) { background: rgba(255,255,255,0.16); }
+.filmstrip-scroll-btn:disabled { opacity: 0.25; cursor: default; }
+
+/* The visible window into the strip */
+.filmstrip-viewport {
+    flex: 1;
+    min-width: 0;
+    height: 56px;
+    position: relative;
+    overflow: hidden;
+    border-radius: 5px;
+    background: #0a0a0a;
+    cursor: pointer;
+    user-select: none;
+    touch-action: none;
+}
+
+/* The actual scrollable track of frames — wider than viewport */
+.filmstrip-track {
+    display: flex;
+    height: 100%;
+    position: absolute;
+    top: 0;
+    left: 0;
+    will-change: transform;
+}
+
+.filmstrip-frame-img {
+    height: 100%;
+    width: 64px;
+    flex-shrink: 0;
+    object-fit: cover;
+    display: block;
+    border-right: 1px solid rgba(0,0,0,0.45);
+    pointer-events: none;
+}
+
+/* Loading placeholder inside track */
+.filmstrip-loading-cell {
+    height: 100%;
+    width: 64px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255,255,255,0.04);
+    border-right: 1px solid rgba(0,0,0,0.3);
+}
+
+/* The frame-selector box — same size as one frame, draggable */
+.filmstrip-selector {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    width: 64px;          /* same as one frame */
+    border: 2.5px solid #fff;
+    border-radius: 3px;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(0,0,0,0.4);
+    pointer-events: none;
+    box-sizing: border-box;
+    z-index: 2;
+    transition: left 0.08s ease;
+}
+/* Top and bottom grab handles */
+.filmstrip-selector::before,
+.filmstrip-selector::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 20px;
+    height: 6px;
+    background: #fff;
+    border-radius: 2px;
+}
+.filmstrip-selector::before { top: -4px; }
+.filmstrip-selector::after  { bottom: -4px; }
 
 @media (max-width: 700px) {
     .creative-card-body {

@@ -1079,13 +1079,13 @@
                 const isVideo = /\.(mp4|mov|avi|webm)$/i.test(ad.mediaFile || '');
 
                 // Build filmstrip-style thumbnail section for videos
-                const filmstripPreviewHtml = ad.thumbnailPreviewUrl
-                    ? `<img src="${ad.thumbnailPreviewUrl}" class="filmstrip-preview-img" alt="Thumbnail">`
-                    : `<div class="filmstrip-no-preview">Loading frames…</div>`;
-
                 const filmstripRemoveBtn = (ad.thumbnailFile || ad.thumbnailPreviewUrl)
-                    ? `<button type="button" class="filmstrip-remove-thumb">✖ Remove</button>`
+                    ? `<button type="button" class="filmstrip-remove-thumb">✖ Remove thumbnail</button>`
                     : '';
+
+                const filmstripStatusText = ad.thumbnailFile
+                    ? `✔ Thumbnail set — drag selector to change`
+                    : `Drag the frame-box to pick a thumbnail`;
 
                 const thumbnailHtml = isVideo ? `
                     <div class="creative-thumbnail-section">
@@ -1100,15 +1100,14 @@
                             </div>
                         </div>
                         <div class="filmstrip-wrap" data-ad-index="${index}">
-                            ${filmstripPreviewHtml}
-                            <div class="filmstrip-controls-row">
-                                <div class="filmstrip-strip-outer">
-                                    <div class="filmstrip-strip">
-                                        <div class="filmstrip-loading">⏳ Loading…</div>
-                                    </div>
-                                    <div class="filmstrip-playhead" style="left:5%"></div>
+                            <div class="filmstrip-status busy">${filmstripStatusText}</div>
+                            <div class="filmstrip-row">
+                                <button type="button" class="filmstrip-scroll-btn" data-dir="-1">&#8249;</button>
+                                <div class="filmstrip-viewport">
+                                    <div class="filmstrip-track"></div>
+                                    <div class="filmstrip-selector"></div>
                                 </div>
-                                <button type="button" class="btn filmstrip-use-btn">✔ Use frame</button>
+                                <button type="button" class="filmstrip-scroll-btn" data-dir="1">&#8250;</button>
                             </div>
                         </div>
                     </div>
@@ -1199,171 +1198,234 @@
             const wrap = card.querySelector('.filmstrip-wrap');
             if (!wrap || !ad.previewUrl) return;
 
-            const strip        = wrap.querySelector('.filmstrip-strip');
-            const stripOuter   = wrap.querySelector('.filmstrip-strip-outer');
-            const playhead     = wrap.querySelector('.filmstrip-playhead');
-            const useBtn       = wrap.querySelector('.filmstrip-use-btn');
-            const previewArea  = wrap.querySelector('.filmstrip-preview-img, .filmstrip-no-preview');
+            const track      = wrap.querySelector('.filmstrip-track');
+            const viewport   = wrap.querySelector('.filmstrip-viewport');
+            const selector   = wrap.querySelector('.filmstrip-selector');
+            const statusEl   = wrap.querySelector('.filmstrip-status');
+            const btnLeft    = wrap.querySelector('.filmstrip-scroll-btn[data-dir="-1"]');
+            const btnRight   = wrap.querySelector('.filmstrip-scroll-btn[data-dir="1"]');
 
-            const NUM_FRAMES = 12;
+            const FRAME_W    = 64;   // px — matches CSS
+            const NUM_FRAMES = 20;   // total frames extracted
+
             let videoDuration = 0;
-            let currentBlob   = null;
+            let frameDataUrls = [];  // dataURL per frame index
+            let frameBlobs    = [];  // blob per frame index
+            let selectedIdx   = 0;  // currently selected frame index
+            let trackOffset   = 0;  // how many px the track is shifted left (scroll)
             let isDragging    = false;
-            let previewImg    = wrap.querySelector('.filmstrip-preview-img');
+            let dragStartX    = 0;
+            let selectorLeft  = 0;  // selector position in px relative to viewport left
 
-            // Hidden video element for frame extraction
+            // ── Hidden video for frame extraction ──────────────────────────
             const video = document.createElement('video');
             video.src        = ad.previewUrl;
             video.preload    = 'metadata';
             video.muted      = true;
             video.playsInline = true;
 
-            // Helper: capture current video frame → blob + dataURL
-            const captureFrame = () => new Promise(resolve => {
+            const captureCurrentFrame = () => new Promise(resolve => {
                 try {
                     const canvas = document.createElement('canvas');
                     canvas.width  = video.videoWidth  || 1280;
                     canvas.height = video.videoHeight || 720;
                     canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
                     canvas.toBlob(blob => {
-                        resolve({ blob, dataUrl: canvas.toDataURL('image/jpeg', 0.88) });
-                    }, 'image/jpeg', 0.88);
+                        resolve({ blob, dataUrl: canvas.toDataURL('image/jpeg', 0.85) });
+                    }, 'image/jpeg', 0.85);
                 } catch(e) { resolve({ blob: null, dataUrl: '' }); }
             });
 
-            // Seek video to a time and capture
-            const seekAndCapture = (time) => new Promise(resolve => {
-                const done = () => {
-                    captureFrame().then(resolve);
-                };
-                video.addEventListener('seeked', done, { once: true });
+            const seekTo = (time) => new Promise(resolve => {
+                video.addEventListener('seeked', resolve, { once: true });
                 video.currentTime = time;
             });
 
-            // Build the filmstrip after metadata is ready
+            // ── Build the strip ────────────────────────────────────────────
             const buildStrip = async () => {
                 videoDuration = video.duration || 0;
                 if (!videoDuration) return;
 
-                strip.innerHTML = '';
                 const interval = videoDuration / NUM_FRAMES;
+                track.innerHTML = '';
 
+                // Add placeholder cells first so layout appears immediately
                 for (let i = 0; i < NUM_FRAMES; i++) {
-                    const { dataUrl } = await seekAndCapture(i * interval + 0.01);
+                    const cell = document.createElement('div');
+                    cell.className = 'filmstrip-loading-cell';
+                    cell.innerHTML = '<span style="font-size:9px;color:rgba(255,255,255,0.2);">…</span>';
+                    track.appendChild(cell);
+                }
+
+                // Extract frames one by one, replacing placeholders
+                for (let i = 0; i < NUM_FRAMES; i++) {
+                    if (!document.contains(wrap)) break; // card was removed, stop
+                    const time = i * interval + 0.02;
+                    await seekTo(time);
+                    const { blob, dataUrl } = await captureCurrentFrame();
+                    frameDataUrls[i] = dataUrl;
+                    frameBlobs[i]    = blob;
+
                     const img = document.createElement('img');
                     img.src       = dataUrl;
-                    img.className = 'filmstrip-frame-thumb';
-                    strip.appendChild(img);
+                    img.className = 'filmstrip-frame-img';
+                    track.children[i].replaceWith(img);
                 }
 
-                // Set playhead to initial position (5% of duration by default)
-                const initRatio = ad.thumbnailPreviewUrl ? 0.05 : 0.05;
-                playhead.style.left = `${initRatio * 100}%`;
-
-                // If no thumbnail set yet, capture first frame as preview
-                if (!previewImg || previewImg.classList.contains('filmstrip-no-preview')) {
-                    const { blob, dataUrl } = await seekAndCapture(videoDuration * 0.05);
-                    currentBlob = blob;
-
-                    // Replace the no-preview placeholder with an actual img
-                    const newImg = document.createElement('img');
-                    newImg.src       = dataUrl;
-                    newImg.className = 'filmstrip-preview-img';
-                    newImg.alt       = 'Thumbnail';
-                    if (previewArea) previewArea.replaceWith(newImg);
-                    previewImg = newImg;
-                }
+                // Position selector on frame 0 (or restore saved position)
+                placeSelector(0);
+                setStatus('Drag the frame-box left/right to pick thumbnail', false);
             };
 
-            video.addEventListener('loadeddata', () => { buildStrip(); }, { once: true });
-            video.addEventListener('error', () => {
-                strip.innerHTML = '<div class="filmstrip-loading" style="color:rgba(255,100,100,0.6);">Could not load frames</div>';
-            }, { once: true });
-            video.load();
+            // ── Selector positioning ───────────────────────────────────────
+            // viewportWidth is constant; total track width = NUM_FRAMES * FRAME_W
+            const viewportW = () => viewport.clientWidth || 300;
 
-            // ─── Drag / scrub logic ───────────────────────────────────────
-            const getRatioFromEvent = (e) => {
-                const rect     = stripOuter.getBoundingClientRect();
-                const clientX  = e.touches ? e.touches[0].clientX : e.clientX;
-                return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+            // Convert frame index → pixel left inside viewport (accounting for scroll)
+            const frameToViewportLeft = (idx) => idx * FRAME_W - trackOffset;
+
+            // Convert viewport-relative px → nearest frame index (clamped)
+            const viewportPxToFrameIdx = (px) => {
+                const trackPx = px + trackOffset;
+                return Math.max(0, Math.min(NUM_FRAMES - 1, Math.round(trackPx / FRAME_W)));
             };
 
-            let scrubTimer = null;
-            const onScrub = (e) => {
-                if (!isDragging || !videoDuration) return;
-                e.preventDefault();
-                const ratio    = getRatioFromEvent(e);
-                const seekTime = ratio * videoDuration;
-                playhead.style.left = `${ratio * 100}%`;
+            const placeSelector = (idx) => {
+                selectedIdx = idx;
+                const left  = frameToViewportLeft(idx);
+                // Clamp so selector stays within viewport visually
+                selector.style.left = `${Math.max(0, Math.min(viewportW() - FRAME_W, left))}px`;
+            };
 
-                // Throttle seeks (one per animation frame)
-                if (scrubTimer) return;
-                scrubTimer = requestAnimationFrame(async () => {
-                    scrubTimer = null;
-                    const { blob, dataUrl } = await seekAndCapture(seekTime);
-                    if (!isDragging) return; // discard if user already released
-                    currentBlob = blob;
-                    if (previewImg) {
-                        previewImg.src = dataUrl;
-                        previewImg.style.display = 'block';
+            // Scroll the track by delta px, update selector, clamp
+            const scrollTrack = (delta) => {
+                const maxOffset = Math.max(0, NUM_FRAMES * FRAME_W - viewportW());
+                trackOffset = Math.max(0, Math.min(maxOffset, trackOffset + delta));
+                track.style.transform = `translateX(-${trackOffset}px)`;
+                // Re-place selector so it follows the selected frame
+                placeSelector(selectedIdx);
+                updateScrollBtns();
+            };
+
+            const updateScrollBtns = () => {
+                const maxOffset = Math.max(0, NUM_FRAMES * FRAME_W - viewportW());
+                btnLeft.disabled  = trackOffset <= 0;
+                btnRight.disabled = trackOffset >= maxOffset;
+            };
+
+            const setStatus = (msg, busy = true) => {
+                if (!statusEl) return;
+                statusEl.textContent = msg;
+                statusEl.className   = 'filmstrip-status ' + (busy ? 'busy' : 'ok');
+            };
+
+            // ── Save selected frame as thumbnail ───────────────────────────
+            const saveFrame = async (idx) => {
+                const blob = frameBlobs[idx];
+                if (!blob) return;
+                setStatus('⏳ Saving thumbnail…', true);
+                try {
+                    const fname    = (ad.mediaFile || 'video').replace(/\.[^/.]+$/, '') + '_thumb.jpg';
+                    const formData = new FormData();
+                    formData.append('file', new File([blob], fname, { type: 'image/jpeg' }));
+                    const resp = await window.API.uploadMedia(formData);
+
+                    this.campaignData.step3.ads[index].thumbnail          = resp.filePath || resp.filename;
+                    this.campaignData.step3.ads[index].thumbnailFile      = resp.filename || fname;
+                    this.campaignData.step3.ads[index].thumbnailPreviewUrl = URL.createObjectURL(blob);
+
+                    setStatus('✔ Thumbnail set', false);
+                    window.AppController.showToast('Thumbnail set ✔', 'success');
+
+                    // Update remove button visibility without full re-render
+                    const uploadRow = wrap.closest('.creative-thumbnail-section')?.querySelector('.filmstrip-upload-row');
+                    if (uploadRow && !uploadRow.querySelector('.filmstrip-remove-thumb')) {
+                        const btn = document.createElement('button');
+                        btn.type = 'button';
+                        btn.className = 'filmstrip-remove-thumb';
+                        btn.textContent = '✖ Remove thumbnail';
+                        btn.addEventListener('click', () => {
+                            this.campaignData.step3.ads[index].thumbnail = '';
+                            this.campaignData.step3.ads[index].thumbnailFile = '';
+                            this.campaignData.step3.ads[index].thumbnailPreviewUrl = '';
+                            this.renderCreativeAds();
+                        });
+                        uploadRow.querySelector('div').prepend(btn);
                     }
-                });
+                } catch(err) {
+                    setStatus('⚠ Save failed — try again', true);
+                }
             };
 
-            stripOuter.addEventListener('mousedown',  e => { isDragging = true; onScrub(e); });
-            stripOuter.addEventListener('touchstart', e => { isDragging = true; onScrub(e); }, { passive: false });
+            // ── Drag on viewport ───────────────────────────────────────────
+            let dragSaveTimer = null;
 
-            // Use document-level handlers for smooth dragging outside the strip
-            const onMove  = (e) => onScrub(e);
-            const onUp    = () => { isDragging = false; if (scrubTimer) { cancelAnimationFrame(scrubTimer); scrubTimer = null; } };
+            const getClientX = (e) => e.touches ? e.touches[0].clientX : e.clientX;
 
-            document.addEventListener('mousemove',  onMove);
-            document.addEventListener('touchmove',  onMove, { passive: false });
-            document.addEventListener('mouseup',    onUp);
-            document.addEventListener('touchend',   onUp);
+            viewport.addEventListener('mousedown', (e) => {
+                isDragging = true;
+                dragStartX = getClientX(e) - frameToViewportLeft(selectedIdx);
+                e.preventDefault();
+            });
+            viewport.addEventListener('touchstart', (e) => {
+                isDragging = true;
+                dragStartX = getClientX(e) - frameToViewportLeft(selectedIdx);
+            }, { passive: true });
 
-            // Cleanup global listeners when the card is removed from DOM
+            // Click to jump selector to clicked frame
+            viewport.addEventListener('click', (e) => {
+                if (Math.abs(getClientX(e) - (dragStartX + frameToViewportLeft(selectedIdx))) > 4) return;
+                const rect  = viewport.getBoundingClientRect();
+                const newIdx = viewportPxToFrameIdx(getClientX(e) - rect.left);
+                if (newIdx !== selectedIdx) {
+                    placeSelector(newIdx);
+                    clearTimeout(dragSaveTimer);
+                    dragSaveTimer = setTimeout(() => saveFrame(newIdx), 300);
+                }
+            });
+
+            const onMove = (e) => {
+                if (!isDragging) return;
+                const rect     = viewport.getBoundingClientRect();
+                const relX     = getClientX(e) - rect.left;  // px inside viewport
+                const newIdx   = viewportPxToFrameIdx(relX);
+                if (newIdx !== selectedIdx) {
+                    placeSelector(newIdx);
+                    // Debounce save — upload only after dragging stops briefly
+                    clearTimeout(dragSaveTimer);
+                    dragSaveTimer = setTimeout(() => saveFrame(newIdx), 500);
+                }
+            };
+            const onUp = () => { isDragging = false; };
+
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('touchmove', onMove, { passive: true });
+            document.addEventListener('mouseup',   onUp);
+            document.addEventListener('touchend',  onUp);
+
+            // ── Scroll buttons ─────────────────────────────────────────────
+            btnLeft.addEventListener('click',  () => scrollTrack(-FRAME_W * 3));
+            btnRight.addEventListener('click', () => scrollTrack(FRAME_W * 3));
+
+            // ── Cleanup when card is removed ───────────────────────────────
             const observer = new MutationObserver(() => {
                 if (!document.contains(wrap)) {
                     document.removeEventListener('mousemove', onMove);
                     document.removeEventListener('touchmove', onMove);
                     document.removeEventListener('mouseup',   onUp);
                     document.removeEventListener('touchend',  onUp);
+                    clearTimeout(dragSaveTimer);
                     observer.disconnect();
                 }
             });
             observer.observe(document.body, { childList: true, subtree: true });
 
-            // ─── "Use frame" button ────────────────────────────────────────
-            useBtn.addEventListener('click', async () => {
-                useBtn.textContent = '⏳ Saving…';
-                useBtn.disabled    = true;
-                try {
-                    let blob = currentBlob;
-                    if (!blob) {
-                        const result = await captureFrame();
-                        blob = result.blob;
-                    }
-                    if (!blob) throw new Error('No frame captured');
-
-                    const fname    = (ad.mediaFile || 'video').replace(/\.[^/.]+$/, '') + '_thumb.jpg';
-                    const formData = new FormData();
-                    formData.append('file', new File([blob], fname, { type: 'image/jpeg' }));
-                    const resp = await window.API.uploadMedia(formData);
-
-                    const previewUrl = URL.createObjectURL(blob);
-                    this.campaignData.step3.ads[index].thumbnail         = resp.filePath || resp.filename;
-                    this.campaignData.step3.ads[index].thumbnailFile     = resp.filename || fname;
-                    this.campaignData.step3.ads[index].thumbnailPreviewUrl = previewUrl;
-
-                    window.AppController.showToast('Thumbnail set ✔', 'success');
-                    this.renderCreativeAds();
-                } catch(err) {
-                    window.AppController.showToast('Failed: ' + err.message, 'danger');
-                    useBtn.textContent = '✔ Use frame';
-                    useBtn.disabled    = false;
-                }
-            });
+            // ── Start ──────────────────────────────────────────────────────
+            setStatus('⏳ Loading frames…', true);
+            updateScrollBtns();
+            video.addEventListener('loadeddata', buildStrip, { once: true });
+            video.addEventListener('error', () => setStatus('⚠ Could not load video', true), { once: true });
+            video.load();
         },
 
         escapeHtml: function(value) {
