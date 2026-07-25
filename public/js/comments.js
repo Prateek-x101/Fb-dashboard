@@ -78,6 +78,12 @@ const InboxManager = {
         try {
             const data = await window.API.request(url);
             this.items = data.data || [];
+            
+            if (data.errors && data.errors.length > 0) {
+                const warningMsg = data.errors.map(err => `${err.accountLabel}: ${err.message}`).join(', ');
+                window.AppController?.showToast(`⚠️ Connection warning: ${warningMsg}`, 'warning', 10000);
+            }
+            
             this.renderList();
         } catch (e) {
             if (list) list.innerHTML = `<div class="cm2-empty">⚠️ ${this.esc(e.message)}</div>`;

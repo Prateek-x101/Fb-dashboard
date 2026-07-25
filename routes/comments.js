@@ -42,6 +42,7 @@ router.get('/inbox', async (req, res) => {
     const type = req.query.type || 'all';
     const filterPageId = (req.query.pageId || '').trim();
     const items = [];
+    const errors = [];
 
     console.log(`GET /api/comments/inbox - type: ${type}, pageId filter: "${filterPageId}"`);
 
@@ -204,13 +205,14 @@ router.get('/inbox', async (req, res) => {
             }
         } catch (err) {
             console.error(`Failed to fetch pages/comments for account:`, err.message);
+            errors.push({ accountLabel: acc.label || acc.accountId, message: err.message });
         }
     }));
 
     // Sort items by time descending so newest comments/messages show first
     items.sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0));
 
-    res.json({ success: true, data: items });
+    res.json({ success: true, data: items, errors });
 });
 
 // ── GET /api/comments/conversation ───────────────────────────────────────────
