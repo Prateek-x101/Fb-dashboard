@@ -452,7 +452,7 @@
                 (accounts || []).forEach(acc => {
                     const opt = document.createElement('option');
                     opt.value = acc.id;
-                    opt.textContent = `${acc.name} (act_${acc.accountId})`;
+                    opt.textContent = `${acc.label || acc.name || 'Account'} (act_${acc.accountId})`;
                     accountSelect.appendChild(opt);
                 });
 
@@ -493,8 +493,16 @@
             igSelect.innerHTML = '<option value="">Loading...</option>';
 
             try {
+                // Find account details from the stored accounts list
+                const accounts = await window.API.getAccounts();
+                const currentAcc = accounts.find(a => a.id === accountId);
+                if (!currentAcc) throw new Error('Stored account details not found.');
+
+                // Facebook API expects raw accountId (e.g. 658299073494340)
+                const rawAccountId = currentAcc.accountId || currentAcc.id;
+
                 // Get pixels
-                const pixelsData = await window.API.getPixels(accountId);
+                const pixelsData = await window.API.getPixels(rawAccountId);
                 const pixels = pixelsData.data || [];
                 pixelSelect.innerHTML = '<option value="">-- Select Pixel --</option>';
                 pixels.forEach(p => {
@@ -511,10 +519,7 @@
                 pageSelect.innerHTML = '<option value="">-- Select Page --</option>';
                 igSelect.innerHTML = '<option value="">No Instagram linked</option>';
 
-                // Get the ad account detail to know the original actId
-                const accounts = await window.API.getAccounts();
-                const currentAcc = accounts.find(a => a.id === accountId);
-                const currentAccId = currentAcc?.accountId || '';
+                const currentAccId = currentAcc.accountId || '';
 
                 pages.forEach(page => {
                     const pageBelongs = !page.accountIds || page.accountIds.includes(accountId) || page.accountId === accountId || page.accountIds.includes(currentAccId);
@@ -536,8 +541,13 @@
                 });
 
                 // Auto-select page if account has a default pageId
-                if (currentAcc?.pageId) {
+                if (currentAcc.pageId) {
                     pageSelect.value = currentAcc.pageId;
+                }
+                
+                // Auto-select Instagram if account has a default instagramAccountId
+                if (currentAcc.instagramAccountId) {
+                    igSelect.value = currentAcc.instagramAccountId;
                 }
 
             } catch (err) {
