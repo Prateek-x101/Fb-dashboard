@@ -74,7 +74,12 @@ router.get('/inbox', async (req, res) => {
                         const url = `${BASE}/${pageId}/conversations?platform=messenger&fields=${encodeURIComponent(fields)}&limit=30&access_token=${pageToken}`;
                         const r = await fetch(url);
                         const d = await r.json();
-                        if (d.data) {
+                        if (d.error) {
+                            errors.push({
+                                accountLabel: `${acc.label || acc.accountId} (${pageName})`,
+                                message: `Messenger: ${d.error.message}`
+                            });
+                        } else if (d.data) {
                             d.data.forEach(conv => {
                                 const participants = conv.participants?.data || [];
                                 const customer = participants.find(p => p.id !== pageId) || participants[0];
@@ -105,7 +110,12 @@ router.get('/inbox', async (req, res) => {
                         const url = `${BASE}/${instagramAccountId}/conversations?platform=instagram&fields=${encodeURIComponent(fields)}&limit=30&access_token=${token}`;
                         const r = await fetch(url);
                         const d = await r.json();
-                        if (d.data) {
+                        if (d.error) {
+                            errors.push({
+                                accountLabel: `${acc.label || acc.accountId} (@${instagramUsername})`,
+                                message: `Instagram DM: ${d.error.message}`
+                            });
+                        } else if (d.data) {
                             d.data.forEach(conv => {
                                 const participants = conv.participants?.data || [];
                                 const customer = participants.find(p => p.id !== instagramAccountId) || participants[0];
@@ -137,7 +147,12 @@ router.get('/inbox', async (req, res) => {
                         const url = `${BASE}/${pageId}/posts?fields=${encodeURIComponent(fields)}&limit=25&access_token=${pageToken}`;
                         const r = await fetch(url);
                         const d = await r.json();
-                        if (d.data) {
+                        if (d.error) {
+                            errors.push({
+                                accountLabel: `${acc.label || acc.accountId} (${pageName})`,
+                                message: `FB Comments: ${d.error.message}`
+                            });
+                        } else if (d.data) {
                             d.data.forEach(post => {
                                 const count = post.comments?.summary?.total_count || 0;
                                 if (count === 0) return;
@@ -172,7 +187,12 @@ router.get('/inbox', async (req, res) => {
                         const url = `${BASE}/${instagramAccountId}/media?fields=${fields}&limit=25&access_token=${token}`;
                         const r = await fetch(url);
                         const d = await r.json();
-                        if (d.data) {
+                        if (d.error) {
+                            errors.push({
+                                accountLabel: `${acc.label || acc.accountId} (@${instagramUsername})`,
+                                message: `IG Comments: ${d.error.message}`
+                            });
+                        } else if (d.data) {
                             await Promise.all(d.data.filter(m => m.comments_count > 0).map(async (media) => {
                                 let lastComment = null, commenterName = '';
                                 try {
