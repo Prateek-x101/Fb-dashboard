@@ -216,7 +216,7 @@ router.get('/:id/billing', async (req, res) => {
         if (!account) return res.status(404).json({ error: 'Account not found' });
 
         const rawId = account.accountId.startsWith('act_') ? account.accountId : `act_${account.accountId}`;
-        const fields = 'balance,currency,spend_cap,amount_spent,funding_source_details,adtrust_dsl,account_status';
+        const fields = 'balance,currency,spend_cap,amount_spent,funding_source_details,account_status';
         const url = `https://graph.facebook.com/v25.0/${rawId}?fields=${fields}&access_token=${account.accessToken}`;
         const response = await fetch(url);
         const data = await response.json();

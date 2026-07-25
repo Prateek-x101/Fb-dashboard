@@ -557,69 +557,152 @@
                         <span class="badge badge-success">Active</span>
                     </div>
                     <p class="mb-1">Ad Account: <code style="color:var(--accent-cyan);">act_${acc.accountId || acc.id}</code></p>
-                    <p class="mb-1" style="font-size:0.8rem; color:var(--text-secondary);">Currency: <strong>${acc.currency || '—'}</strong></p>
                     <p class="mb-1" style="font-size:0.8rem; color:var(--text-secondary);">Page ID: ${acc.pageId || '<em>Not set</em>'}</p>
                     <p class="mb-2" style="font-size:0.8rem; color:var(--text-secondary);">Token: <span style="color:var(--success);">${this.maskToken(acc.accessToken || acc.token)}</span></p>
                     <div class="mb-2" style="display:flex;gap:6px;flex-wrap:wrap;">${igBadge}${tzBadge}</div>
-                    <div id="billing-${acc.id}" class="billing-section mb-2" style="display:none; background:rgba(0,0,0,0.2); border-radius:8px; padding:10px; font-size:0.82rem;"></div>
+                    <div id="billing-${acc.id}" class="billing-section mb-2" style="background:rgba(0,0,0,0.18); border-radius:10px; padding:12px; font-size:0.82rem;">
+                        <span style="color:var(--text-secondary); font-size:0.8rem;">⏳ Loading billing…</span>
+                    </div>
                     <div class="flex gap-2" style="flex-wrap:wrap;">
                         <button class="btn btn-secondary btn-sm" style="flex:1" onclick="window.SettingsManager.editAccount('${acc.id}')">✏️ Edit</button>
                         <button class="btn btn-secondary btn-sm" style="flex:1" onclick="window.SettingsManager.fetchInstagram('${acc.id}')">📷 Instagram</button>
-                        <button class="btn btn-secondary btn-sm" style="flex:1" onclick="window.SettingsManager.loadBilling('${acc.id}')">💳 Billing</button>
                         <button class="btn btn-secondary btn-sm" style="flex:1" onclick="window.SettingsManager.testAccountById('${acc.id}')">🧪 Test</button>
                         <button class="btn btn-danger btn-sm" style="flex:1" onclick="window.SettingsManager.deleteAccount('${acc.id}')">🗑️ Delete</button>
                     </div>
                 `;
                 grid.appendChild(card);
             });
+
+            // Auto-load billing for all accounts in parallel
+            window.APP.accounts.forEach(acc => this.loadBilling(acc.id));
         },
 
         loadBilling: async function(id) {
             const section = document.getElementById(`billing-${id}`);
             if (!section) return;
 
-            // Toggle if already showing
-            if (section.style.display !== 'none' && section.innerHTML) {
-                section.style.display = 'none';
-                return;
-            }
-
-            section.style.display = 'block';
-            section.innerHTML = '<span style="color:var(--text-secondary);">Loading billing info…</span>';
             try {
                 const data = await window.API.getAccountBilling(id);
                 const cur = data.currency || '';
-                const div = n => (parseFloat(n || 0) / 100).toFixed(2);
+                // Meta returns monetary values in cents/smallest unit
+                const fmt = n => {
+                    const val = parseFloat(n || 0) / 100;
+                    return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                };
 
-                // Determine account status label
-                const statusMap = { 1:'Active', 2:'Disabled', 3:'Unsettled', 7:'Pending Review', 9:'In Grace Period', 100:'Pending Closure', 101:'Closed', 201:'Any Active', 202:'Any Closed' };
-                const statusLabel = statusMap[data.account_status] || `Status ${data.account_status}`;
-                const statusColor = data.account_status === 1 ? 'var(--success)' : 'var(--danger-color)';
+                // Account status
+                const statusMap = { 1:'Active', 2:'Disabled', 3:'Unsettled', 7:'Pending Review', 9:'In Grace Period', 100:'Pending Closure', 101:'Closed' };
+                const accountStatus = data.account_status;
+                const statusLabel = statusMap[accountStatus] || `Unknown (${accountStatus})`;
+                const isActive = accountStatus === 1;
+                const isFailed = [2, 3, 9].includes(accountStatus); // disabled, unsettled, grace period
+                const statusColor = isActive ? 'var(--success)' : 'var(--danger-color)';
 
                 // Funding source
-                let fundingHtml = '<em style="color:var(--text-secondary);">No funding source on file</em>';
                 const fs = data.funding_source_details;
-                if (fs) {
-                    const typeLabel = { 1:'Credit Card', 2:'Facebook Credit', 3:'Ad Credit', 4:'Direct Debit', 7:'PayPal', 8:'Facebook Coupon', 10:'Credit Line / Invoice' }[fs.type] || `Type ${fs.type}`;
-                    fundingHtml = `<strong>${typeLabel}</strong>${fs.display_string ? ` — ${fs.display_string}` : ''}`;
+                const fundingTypeMap = { 1:'Credit Card', 2:'Facebook Credit', 3:'Ad Credit', 4:'Direct Debit', 7:'PayPal', 8:'Facebook Coupon', 10:'Credit Line' };
+                const fundingType = fs ? (fundingTypeMap[fs.type] || `Type ${fs.type}`) : null;
+                const isCreditLine = fs && fs.type === 10;
+                const fundingDisplay = fs ? (fs.display_string || fundingType) : null;
+
+                // Balance logic:
+                // Credit line accounts: balance = outstanding amount owed (shown as positive on Meta)
+                // Card/prepay accounts: balance = current outstanding charge for this billing cycle
+                const balanceRaw = parseFloat(data.balance || 0);
+                const balanceAbs = Math.abs(balanceRaw) / 100;
+                const balanceFmt = balanceAbs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+                // Spend cap / remaining
+                const spendCapRaw = parseFloat(data.spend_cap || 0);
+                const amountSpentRaw = parseFloat(data.amount_spent || 0);
+                const hasSpendCap = spendCapRaw > 0;
+                const remaining = hasSpendCap ? (spendCapRaw - amountSpentRaw) / 100 : null;
+                const remainingFmt = remaining !== null ? remaining.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : null;
+                const remainingColor = remaining !== null && remaining < 0 ? 'var(--danger-color)' : 'var(--success)';
+
+                // Payment cycle (prepay threshold)
+                const cycle = data.adspaymentcycle;
+                const payWhenFmt = cycle && cycle.value ? `${cur} ${fmt(cycle.value)}` : null;
+                const payDateFmt = cycle && cycle.next_date ? new Date(cycle.next_date * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : null;
+
+                // Build rows
+                let rows = '';
+
+                // Status row (only show if not active)
+                if (!isActive) {
+                    rows += `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
+                        <span style="color:var(--text-secondary);">Account Status</span>
+                        <strong style="color:${statusColor};">⚠️ ${statusLabel}</strong>
+                    </div>`;
                 }
 
-                // Balance: negative means you OWE money (prepay accounts show positive balance)
-                const balanceRaw = parseFloat(data.balance || 0);
-                const balanceColor = balanceRaw >= 0 ? 'var(--success)' : 'var(--danger-color)';
+                // Current balance row
+                const balanceLabel = isCreditLine ? 'Current Balance' : 'Current Balance';
+                const failedTag = isFailed ? ' <span style="color:var(--danger-color);font-size:0.75rem;">(failed)</span>' : '';
+                rows += `<div style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
+                    <div style="color:var(--text-secondary);font-size:0.76rem;margin-bottom:3px;">${balanceLabel}</div>
+                    <div style="font-size:1.25rem;font-weight:700;color:#fff;">${cur} ${balanceFmt}${failedTag}</div>
+                    ${isCreditLine ? '<div style="font-size:0.72rem;color:var(--text-secondary);margin-top:2px;">Outstanding on credit line</div>' : '<div style="font-size:0.72rem;color:var(--text-secondary);margin-top:2px;">Current billing cycle charge</div>'}
+                </div>`;
 
+                // Amount spent
+                if (amountSpentRaw > 0) {
+                    rows += `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
+                        <span style="color:var(--text-secondary);">Amount Spent</span>
+                        <strong>${cur} ${fmt(data.amount_spent)}</strong>
+                    </div>`;
+                }
+
+                // Spending limit + remaining (credit line / spend cap)
+                if (hasSpendCap) {
+                    rows += `<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                            <span style="color:var(--text-secondary);">Spending Limit</span>
+                            <span>${cur} ${fmt(data.spend_cap)}</span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;align-items:center;">
+                            <span style="color:var(--text-secondary);">Remaining</span>
+                            <strong style="color:${remainingColor};">${cur} ${remainingFmt}</strong>
+                        </div>
+                        <div style="height:5px;background:rgba(255,255,255,0.1);border-radius:3px;margin-top:5px;overflow:hidden;">
+                            <div style="height:100%;background:${remainingColor};border-radius:3px;width:${Math.max(0,Math.min(100,remaining/spendCapRaw*10000)).toFixed(1)}%;transition:width 0.4s;"></div>
+                        </div>
+                    </div>`;
+                }
+
+                // Payment threshold (prepay card accounts)
+                if (payWhenFmt || payDateFmt) {
+                    rows += `<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
+                        <div style="color:var(--text-secondary);font-size:0.76rem;margin-bottom:3px;">You'll pay when</div>
+                        <div style="display:flex;gap:12px;flex-wrap:wrap;">
+                            ${payWhenFmt ? `<span>Balance reaches <strong>${payWhenFmt}</strong></span>` : ''}
+                            ${payDateFmt ? `<span>Or on <strong>${payDateFmt}</strong></span>` : ''}
+                        </div>
+                    </div>`;
+                }
+
+                // Payment method
+                if (fundingDisplay) {
+                    const icon = isCreditLine ? '🏦' : (fs.type === 7 ? '🅿️' : '💳');
+                    const failedFundTag = isFailed ? ' <span style="color:var(--danger-color);font-size:0.72rem;">(failed)</span>' : '';
+                    rows += `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;">
+                        <span style="color:var(--text-secondary);">Payment Method</span>
+                        <span style="text-align:right;max-width:65%;">${icon} <strong>${fundingType}</strong>${fs.display_string ? ` — ${fs.display_string}` : ''}${failedFundTag}</span>
+                    </div>`;
+                } else {
+                    rows += `<div style="padding:5px 0;color:var(--text-secondary);font-size:0.78rem;">No payment method on file</div>`;
+                }
+
+                const headerColor = isActive ? 'var(--success)' : 'var(--danger-color)';
                 section.innerHTML = `
-                    <div style="display:grid; gap:5px;">
-                        <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Status</span><strong style="color:${statusColor};">${statusLabel}</strong></div>
-                        <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Balance</span><strong style="color:${balanceColor};">${cur} ${div(data.balance)}</strong></div>
-                        ${data.amount_spent ? `<div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Amount Spent</span><strong>${cur} ${div(data.amount_spent)}</strong></div>` : ''}
-                        ${data.spend_cap && data.spend_cap !== '0' ? `<div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Spend Cap</span><strong>${cur} ${div(data.spend_cap)}</strong></div>` : ''}
-                        ${data.adtrust_dsl ? `<div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Ad Trust Limit</span><strong>${cur} ${div(data.adtrust_dsl)}</strong></div>` : ''}
-                        <div style="display:flex;justify-content:space-between;align-items:center;"><span style="color:var(--text-secondary);">Funding Source</span><span style="text-align:right;max-width:60%;">${fundingHtml}</span></div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <span style="font-weight:600;font-size:0.85rem;">💳 Billing · <span style="color:${headerColor};">${isActive ? 'Active' : statusLabel}</span></span>
+                        <span style="font-size:0.72rem;color:var(--text-secondary);">${cur}</span>
                     </div>
+                    <div>${rows}</div>
                 `;
             } catch (err) {
-                section.innerHTML = `<span style="color:var(--danger-color);">Failed to load billing: ${err.message}</span>`;
+                if (section) section.innerHTML = `<span style="color:var(--danger-color);font-size:0.8rem;">⚠️ Billing unavailable: ${err.message}</span>`;
             }
         },
 
