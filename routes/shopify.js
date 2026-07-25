@@ -362,7 +362,7 @@ Based on the details, identify which collections match this product. Return ONLY
 // 5. Import Product to user's Shopify store
 router.post('/import', async (req, res) => {
     try {
-        const { storeId, product, skuPrefix, price, comparePrice, collectionIds, floatingVideoPath, floatingVideoFilename } = req.body;
+        const { storeId, product, skuPrefix, price, comparePrice, collectionIds, floatingVideos } = req.body;
         if (!storeId || !product || !skuPrefix) {
             return res.status(400).json({ error: 'Missing required parameters for Shopify import.' });
         }
@@ -449,28 +449,41 @@ router.post('/import', async (req, res) => {
             return { src };
         });
 
-        // Handle optional floating video upload
+        // Handle optional floating videos upload
         const metafields = [];
-        if (floatingVideoPath && fs.existsSync(floatingVideoPath)) {
+        if (Array.isArray(floatingVideos) && floatingVideos.length > 0) {
             try {
-                console.log(`Uploading Floating Video file to Shopify: ${floatingVideoPath}`);
-                const fileId = await uploadFileToShopify(store.shopUrl, store.accessToken, floatingVideoPath, floatingVideoFilename || path.basename(floatingVideoPath));
-                console.log(`Video uploaded successfully! Shopify File ID: ${fileId}`);
-                
-                // Get the exact metafield definition type
-                const metafieldType = await getFloatingVideoMetafieldType(store.shopUrl, store.accessToken);
-                console.log(`Detected custom.floating_videos metafield type: ${metafieldType}`);
-                
-                const value = metafieldType.includes('list') ? JSON.stringify([fileId]) : fileId;
-                
-                metafields.push({
-                    namespace: 'custom',
-                    key: 'floating_videos',
-                    value: value,
-                    type: metafieldType
+                console.log(`Uploading ${floatingVideos.length} Floating Video(s) to Shopify...`);
+                // Upload all videos in parallel
+                const uploadPromises = floatingVideos.map(async (vid) => {
+                    if (vid.filePath && fs.existsSync(vid.filePath)) {
+                        const fileId = await uploadFileToShopify(store.shopUrl, store.accessToken, vid.filePath, vid.filename || path.basename(vid.filePath));
+                        return fileId;
+                    }
+                    return null;
                 });
+                
+                const uploadResults = await Promise.allSettled(uploadPromises);
+                const fileIds = uploadResults
+                    .filter(r => r.status === 'fulfilled' && r.value)
+                    .map(r => r.value);
+                
+                if (fileIds.length > 0) {
+                    // Get the exact metafield definition type
+                    const metafieldType = await getFloatingVideoMetafieldType(store.shopUrl, store.accessToken);
+                    console.log(`Detected custom.floating_videos metafield type: ${metafieldType}`);
+                    
+                    const value = metafieldType.includes('list') ? JSON.stringify(fileIds) : fileIds[0];
+                    
+                    metafields.push({
+                        namespace: 'custom',
+                        key: 'floating_videos',
+                        value: value,
+                        type: metafieldType
+                    });
+                }
             } catch (err) {
-                console.error('Failed to upload floating video to Shopify Files:', err.message);
+                console.error('Failed to upload floating videos to Shopify Files:', err.message);
             }
         }
 

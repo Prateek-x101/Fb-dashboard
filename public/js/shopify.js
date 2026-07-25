@@ -3,8 +3,7 @@
     const ShopifyImporter = {
         scrapedProduct: null,
         userCollections: [],
-        floatingVideoPath: null,
-        floatingVideoFilename: null,
+        floatingVideos: [],
         importedProduct: null,
 
         init: function() {
@@ -66,27 +65,46 @@
         },
 
         handleVideoUpload: async function(e) {
-            const file = e.target.files[0];
+            const files = e.target.files;
             const previewContainer = document.getElementById('shopify-import-video-preview');
-            const videoEl = document.getElementById('shopify-import-video-el');
-            if (!file) return;
+            if (!files || !files.length) return;
 
             try {
-                window.AppController.showToast('Uploading video file to server...', 'info');
-                const formData = new FormData();
-                formData.append('file', file);
-                
-                const response = await window.API.uploadMedia(formData);
-                this.floatingVideoPath = response.filePath;
-                this.floatingVideoFilename = response.filename;
-                
-                if (previewContainer && videoEl) {
-                    videoEl.src = '/uploads/' + response.filename;
-                    previewContainer.style.display = 'block';
+                window.AppController.showToast(`Uploading ${files.length} video file(s) to server...`, 'info');
+                this.floatingVideos = [];
+                if (previewContainer) {
+                    previewContainer.innerHTML = '';
+                    previewContainer.style.display = 'none';
                 }
-                window.AppController.showToast('Video uploaded successfully to server! 📹', 'success');
+
+                const promises = Array.from(files).map(async (file) => {
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    const response = await window.API.uploadMedia(formData);
+                    return {
+                        filePath: response.filePath,
+                        filename: response.filename
+                    };
+                });
+
+                const results = await Promise.allSettled(promises);
+                const successful = results.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
+                
+                this.floatingVideos = successful;
+
+                if (previewContainer && this.floatingVideos.length > 0) {
+                    this.floatingVideos.forEach(vid => {
+                        const video = document.createElement('video');
+                        video.src = '/uploads/' + vid.filename;
+                        video.controls = true;
+                        video.style.cssText = 'max-height:80px; border-radius:4px; border:1px solid var(--glass-border);';
+                        previewContainer.appendChild(video);
+                    });
+                    previewContainer.style.display = 'flex';
+                }
+                window.AppController.showToast(`${this.floatingVideos.length} video(s) uploaded successfully to server! 📹`, 'success');
             } catch (err) {
-                window.AppController.showToast('Video upload failed: ' + err.message, 'error');
+                window.AppController.showToast('Videos upload failed: ' + err.message, 'error');
             }
         },
 
@@ -147,9 +165,7 @@
                 btnScrape.textContent = '🔍 Inspecting Listing...';
                 previewContainer.style.display = 'none';
 
-                // Reset video inputs and previews
-                this.floatingVideoPath = null;
-                this.floatingVideoFilename = null;
+                this.floatingVideos = [];
                 const videoInput = document.getElementById('shopify-import-video-file');
                 if (videoInput) videoInput.value = '';
                 const videoPreview = document.getElementById('shopify-import-video-preview');
@@ -337,8 +353,7 @@
                     price: price || null,
                     comparePrice: comparePrice || null,
                     collectionIds,
-                    floatingVideoPath: this.floatingVideoPath,
-                    floatingVideoFilename: this.floatingVideoFilename
+                    floatingVideos: this.floatingVideos
                 });
 
                 window.AppController.showToast(`Successfully imported: "${result.title}" to Shopify! 🎉`, 'success');
@@ -347,8 +362,8 @@
                 ShopifyImporter.importedProduct = {
                     title: result.title,
                     productUrl: result.productUrl,
-                    videoPath: this.floatingVideoPath,
-                    videoFilename: this.floatingVideoFilename
+                    videoPath: this.floatingVideos[0]?.filePath || null,
+                    videoFilename: this.floatingVideos[0]?.filename || null
                 };
 
                 // Hide preview and clear URL
