@@ -368,7 +368,7 @@ router.get('/auth/facebook', (req, res) => {
             protocol = 'https';
         }
         const redirectUri = `${protocol}://${host}/api/accounts/auth/facebook/callback`;
-        const authUrl = `https://www.facebook.com/v25.0/dialog/oauth?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=ads_management,ads_read,pages_read_engagement,pages_show_list,instagram_basic,business_management,pages_manage_posts,pages_messaging,instagram_manage_messages,pages_manage_engagement,instagram_manage_comments`;
+        const authUrl = `https://www.facebook.com/v25.0/dialog/oauth?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=ads_management,ads_read,pages_read_engagement,pages_show_list,instagram_basic,business_management,pages_manage_posts,pages_messaging,instagram_manage_messages,pages_manage_engagement,instagram_manage_comments,instagram_content_publish`;
         res.redirect(authUrl);
     } catch (error) {
         res.send(`
