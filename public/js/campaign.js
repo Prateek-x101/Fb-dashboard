@@ -1708,12 +1708,19 @@
                     }
                 }
 
-                // Sync DOM state FIRST so thumbnail/media are not wiped by re-render
-                this.collectCreativeAdsFromDOM();
-                this.campaignData.step3.ads.forEach((ad, index) => {
-                    ad.primaryText = (variations[index] || result.primaryText || '').trim();
+                // Update primary text IN-PLACE — never wipe and re-render the cards.
+                // Re-rendering does container.innerHTML='' which destroys the filmstrip/
+                // thumbnail section and causes the visible blank → reload flicker.
+                const cards = document.querySelectorAll('#creative-ads-container .creative-ad-card');
+                cards.forEach((card, index) => {
+                    const textField = card.querySelector('.creative-primary-text');
+                    const newText = (variations[index] || result.primaryText || '').trim();
+                    if (textField) textField.value = newText;
+                    // Keep campaignData in sync without touching the DOM structure
+                    if (this.campaignData.step3.ads[index]) {
+                        this.campaignData.step3.ads[index].primaryText = newText;
+                    }
                 });
-                this.renderCreativeAds();
                 if (!silent) window.AppController.showToast('Headline and primary text auto-filled ✨', 'success');
             } catch (error) {
                 if (!silent) window.AppController.showToast('Website/Gemini error: ' + error.message, 'error');
