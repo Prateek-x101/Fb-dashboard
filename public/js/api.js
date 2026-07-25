@@ -46,6 +46,7 @@
         fetchInstagram: (id) => API.request(`/api/accounts/${id}/fetch-instagram`, { method: 'POST' }),
         getAllPages: () => API.request('/api/accounts/pages'),
         getPages: (id) => API.request(`/api/accounts/${id}/pages`),
+        getAccountBilling: (id) => API.request(`/api/accounts/${id}/billing`),
         aiAudiences: (data) => API.request('/api/campaigns/ai-audiences', { method: 'POST', body: JSON.stringify(data) }),
 
         // Settings

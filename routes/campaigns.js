@@ -465,7 +465,7 @@ router.post('/create', async (req, res) => {
             name: campaign.name,
             objective: campaign.objective || 'OUTCOME_SALES',
             status: 'ACTIVE',
-            is_adset_budget_sharing_enabled: isCBO,
+            is_adset_budget_sharing_enabled: false,
             special_ad_categories: campaign.specialAdCategory && campaign.specialAdCategory !== 'NONE'
                 ? [campaign.specialAdCategory] : []
         };

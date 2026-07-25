@@ -17,21 +17,19 @@ router.get('/', async (req, res) => {
 
         for (let i = 0; i < accounts.length; i++) {
             const acc = accounts[i];
-            if (!acc.currency && acc.accessToken && acc.accountId) {
+            if (acc.accessToken && acc.accountId && (!acc.currency || !acc.timezone_name)) {
                 try {
                     const rawId = acc.accountId.startsWith('act_') ? acc.accountId : `act_${acc.accountId}`;
-                    const url = `https://graph.facebook.com/v25.0/${rawId}?fields=currency&access_token=${acc.accessToken}`;
+                    const url = `https://graph.facebook.com/v25.0/${rawId}?fields=currency,timezone_name&access_token=${acc.accessToken}`;
                     const response = await fetch(url);
                     if (response.ok) {
                         const data = await response.json();
-                        if (data.currency) {
-                            acc.currency = data.currency;
-                            updated = true;
-                            console.log(`Updated account ${acc.accountId} with currency: ${data.currency}`);
-                        }
+                        if (data.currency) { acc.currency = data.currency; updated = true; }
+                        if (data.timezone_name) { acc.timezone_name = data.timezone_name; updated = true; }
+                        console.log(`Updated account ${acc.accountId}: currency=${data.currency}, tz=${data.timezone_name}`);
                     }
                 } catch (err) {
-                    console.error(`Failed to fetch currency for account ${acc.accountId}:`, err.message);
+                    console.error(`Failed to fetch account info for ${acc.accountId}:`, err.message);
                 }
             }
         }
@@ -205,6 +203,27 @@ router.get('/pages', async (req, res) => {
         res.json({ pages: Array.from(pageMap.values()), errors });
     } catch (error) {
         res.status(500).json({ error: 'Failed to fetch connected pages', details: error.message });
+    }
+});
+
+// Billing info for an account (balance, spend, funding source)
+router.get('/:id/billing', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const fetch = require('node-fetch');
+        const storage = getStorage();
+        const account = (storage.accounts || []).find(a => a.id === id);
+        if (!account) return res.status(404).json({ error: 'Account not found' });
+
+        const rawId = account.accountId.startsWith('act_') ? account.accountId : `act_${account.accountId}`;
+        const fields = 'balance,currency,spend_cap,amount_spent,funding_source_details,adtrust_dsl,account_status';
+        const url = `https://graph.facebook.com/v25.0/${rawId}?fields=${fields}&access_token=${account.accessToken}`;
+        const response = await fetch(url);
+        const data = await response.json();
+        if (data.error) return res.status(400).json({ error: data.error.message, code: data.error.code });
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch billing info', details: error.message });
     }
 });
 

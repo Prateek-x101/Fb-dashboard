@@ -544,6 +544,10 @@
                 const igBadge = acc.instagramUsername
                     ? `<span class="badge" style="background:linear-gradient(135deg,#833ab4,#fd1d1d,#fcb045); color:#fff;">📷 @${acc.instagramUsername}</span>`
                     : `<span class="badge" style="background:rgba(255,255,255,0.08); color:var(--text-secondary);">📷 No Instagram</span>`;
+
+                const tzBadge = acc.timezone_name
+                    ? `<span class="badge" style="background:rgba(255,255,255,0.06); color:var(--text-secondary); font-size:0.72rem;">⏱ ${acc.timezone_name}</span>`
+                    : '';
  
                 const card = document.createElement('div');
                 card.className = 'glass-card';
@@ -553,18 +557,70 @@
                         <span class="badge badge-success">Active</span>
                     </div>
                     <p class="mb-1">Ad Account: <code style="color:var(--accent-cyan);">act_${acc.accountId || acc.id}</code></p>
+                    <p class="mb-1" style="font-size:0.8rem; color:var(--text-secondary);">Currency: <strong>${acc.currency || '—'}</strong></p>
                     <p class="mb-1" style="font-size:0.8rem; color:var(--text-secondary);">Page ID: ${acc.pageId || '<em>Not set</em>'}</p>
                     <p class="mb-2" style="font-size:0.8rem; color:var(--text-secondary);">Token: <span style="color:var(--success);">${this.maskToken(acc.accessToken || acc.token)}</span></p>
-                    <div class="mb-3">${igBadge}</div>
+                    <div class="mb-2" style="display:flex;gap:6px;flex-wrap:wrap;">${igBadge}${tzBadge}</div>
+                    <div id="billing-${acc.id}" class="billing-section mb-2" style="display:none; background:rgba(0,0,0,0.2); border-radius:8px; padding:10px; font-size:0.82rem;"></div>
                     <div class="flex gap-2" style="flex-wrap:wrap;">
                         <button class="btn btn-secondary btn-sm" style="flex:1" onclick="window.SettingsManager.editAccount('${acc.id}')">✏️ Edit</button>
-                        <button class="btn btn-secondary btn-sm" style="flex:1" onclick="window.SettingsManager.fetchInstagram('${acc.id}')">📷 Fetch Instagram</button>
+                        <button class="btn btn-secondary btn-sm" style="flex:1" onclick="window.SettingsManager.fetchInstagram('${acc.id}')">📷 Instagram</button>
+                        <button class="btn btn-secondary btn-sm" style="flex:1" onclick="window.SettingsManager.loadBilling('${acc.id}')">💳 Billing</button>
                         <button class="btn btn-secondary btn-sm" style="flex:1" onclick="window.SettingsManager.testAccountById('${acc.id}')">🧪 Test</button>
                         <button class="btn btn-danger btn-sm" style="flex:1" onclick="window.SettingsManager.deleteAccount('${acc.id}')">🗑️ Delete</button>
                     </div>
                 `;
                 grid.appendChild(card);
             });
+        },
+
+        loadBilling: async function(id) {
+            const section = document.getElementById(`billing-${id}`);
+            if (!section) return;
+
+            // Toggle if already showing
+            if (section.style.display !== 'none' && section.innerHTML) {
+                section.style.display = 'none';
+                return;
+            }
+
+            section.style.display = 'block';
+            section.innerHTML = '<span style="color:var(--text-secondary);">Loading billing info…</span>';
+            try {
+                const data = await window.API.getAccountBilling(id);
+                const cur = data.currency || '';
+                const div = n => (parseFloat(n || 0) / 100).toFixed(2);
+
+                // Determine account status label
+                const statusMap = { 1:'Active', 2:'Disabled', 3:'Unsettled', 7:'Pending Review', 9:'In Grace Period', 100:'Pending Closure', 101:'Closed', 201:'Any Active', 202:'Any Closed' };
+                const statusLabel = statusMap[data.account_status] || `Status ${data.account_status}`;
+                const statusColor = data.account_status === 1 ? 'var(--success)' : 'var(--danger-color)';
+
+                // Funding source
+                let fundingHtml = '<em style="color:var(--text-secondary);">No funding source on file</em>';
+                const fs = data.funding_source_details;
+                if (fs) {
+                    const typeLabel = { 1:'Credit Card', 2:'Facebook Credit', 3:'Ad Credit', 4:'Direct Debit', 7:'PayPal', 8:'Facebook Coupon', 10:'Credit Line / Invoice' }[fs.type] || `Type ${fs.type}`;
+                    fundingHtml = `<strong>${typeLabel}</strong>${fs.display_string ? ` — ${fs.display_string}` : ''}`;
+                }
+
+                // Balance: negative means you OWE money (prepay accounts show positive balance)
+                const balanceRaw = parseFloat(data.balance || 0);
+                const balanceColor = balanceRaw >= 0 ? 'var(--success)' : 'var(--danger-color)';
+
+                section.innerHTML = `
+                    <div style="display:grid; gap:5px;">
+                        <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Status</span><strong style="color:${statusColor};">${statusLabel}</strong></div>
+                        <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Balance</span><strong style="color:${balanceColor};">${cur} ${div(data.balance)}</strong></div>
+                        ${data.amount_spent ? `<div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Amount Spent</span><strong>${cur} ${div(data.amount_spent)}</strong></div>` : ''}
+                        ${data.spend_cap && data.spend_cap !== '0' ? `<div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Spend Cap</span><strong>${cur} ${div(data.spend_cap)}</strong></div>` : ''}
+                        ${data.adtrust_dsl ? `<div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Ad Trust Limit</span><strong>${cur} ${div(data.adtrust_dsl)}</strong></div>` : ''}
+                        <div style="display:flex;justify-content:space-between;align-items:center;"><span style="color:var(--text-secondary);">Funding Source</span><span style="text-align:right;max-width:60%;">${fundingHtml}</span></div>
+                    </div>
+                `;
+            } catch (err) {
+                section.innerHTML = `<span style="color:var(--danger-color);">Failed to load billing: ${err.message}</span>`;
+            }
         },
 
         fetchInstagram: async function(id) {

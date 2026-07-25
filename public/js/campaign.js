@@ -542,6 +542,12 @@
         handleAccountChange: async function(account) {
             if (!account) return;
 
+            // Update timezone label near datetime input
+            const tzLabel = document.getElementById('schedule-timezone-label');
+            if (tzLabel) {
+                tzLabel.textContent = account.timezone_name ? `⏱ Account timezone: ${account.timezone_name}` : '';
+            }
+
             // Update currency symbol display
             const symbol = this.getCurrencySymbol(account);
             document.querySelectorAll('.currency-symbol').forEach(el => { el.textContent = symbol; });
@@ -594,12 +600,11 @@
                     if (igSelect) igSelect.innerHTML = '<option value="">No Instagram linked</option>';
                     pages.forEach(page => {
                         const pageBelongsToAccount = !page.accountIds || page.accountIds.includes(account.id) || page.accountId === account.id;
+                        if (!pageBelongsToAccount) return; // hide pages not linked to this ad account
                         if (pageSelect) {
                             const opt = document.createElement('option');
                             opt.value = page.id;
-                            const accountNames = (page.accountLabels || [page.accountLabel || 'Connected account']).join(', ');
-                            opt.textContent = `${page.name || page.id} — ${accountNames}${pageBelongsToAccount ? '' : ' (select matching ad account)'}`;
-                            opt.disabled = !pageBelongsToAccount;
+                            opt.textContent = page.name || page.id;
                             pageSelect.appendChild(opt);
                         }
                         if (igSelect && page.instagram_business_account) {
@@ -607,7 +612,6 @@
                             const o = document.createElement('option');
                             o.value = ig.id;
                             o.textContent = `@${ig.username || ig.name || ig.id}`;
-                            o.disabled = !pageBelongsToAccount;
                             igSelect.appendChild(o);
                         }
                     });
@@ -864,15 +868,44 @@
         },
 
         // ── Media and ad cards ─────────────────────────────────────────────
+        extractVideoFrame: function(file) {
+            return new Promise((resolve) => {
+                const video = document.createElement('video');
+                video.preload = 'metadata';
+                video.muted = true;
+                video.playsInline = true;
+                const blobUrl = URL.createObjectURL(file);
+                video.src = blobUrl;
+                const cleanup = () => URL.revokeObjectURL(blobUrl);
+                const capture = () => {
+                    try {
+                        const canvas = document.createElement('canvas');
+                        canvas.width = video.videoWidth || 1280;
+                        canvas.height = video.videoHeight || 720;
+                        canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+                        canvas.toBlob(blob => { cleanup(); resolve(blob); }, 'image/jpeg', 0.88);
+                    } catch(e) { cleanup(); resolve(null); }
+                };
+                video.addEventListener('seeked', capture, { once: true });
+                video.addEventListener('loadeddata', () => { video.currentTime = Math.min(1, video.duration * 0.05 || 1); }, { once: true });
+                video.addEventListener('error', () => { cleanup(); resolve(null); }, { once: true });
+                setTimeout(() => { cleanup(); resolve(null); }, 12000);
+            });
+        },
+
         handleMediaUpload: async function(files, card = null) {
             const selectedFiles = Array.isArray(files) ? files : [files];
             if (!selectedFiles.length) return;
             const uploaded = [];
 
             for (const file of selectedFiles) {
+                const isVid = /\.(mp4|mov|avi|webm)$/i.test(file.name);
                 const item = {
                     mediaFile: file.name,
-                    previewUrl: URL.createObjectURL(file)
+                    previewUrl: URL.createObjectURL(file),
+                    thumbnail: '',
+                    thumbnailFile: '',
+                    thumbnailPreviewUrl: ''
                 };
                 try {
                     const formData = new FormData();
@@ -882,6 +915,26 @@
                 } catch {
                     item.media = file.name;
                 }
+
+                // Auto-extract thumbnail from video frame
+                if (isVid) {
+                    try {
+                        window.AppController.showToast('Extracting video thumbnail...', 'info');
+                        const frameBlob = await this.extractVideoFrame(file);
+                        if (frameBlob) {
+                            const thumbName = file.name.replace(/\.[^/.]+$/, '_thumb.jpg');
+                            const thumbForm = new FormData();
+                            thumbForm.append('file', new File([frameBlob], thumbName, { type: 'image/jpeg' }));
+                            const thumbResp = await window.API.uploadMedia(thumbForm);
+                            item.thumbnail = thumbResp.filePath || thumbResp.filename;
+                            item.thumbnailFile = thumbResp.filename || thumbName;
+                            item.thumbnailPreviewUrl = URL.createObjectURL(frameBlob);
+                        }
+                    } catch(e) {
+                        console.log('Auto thumbnail skipped:', e.message);
+                    }
+                }
+
                 uploaded.push(item);
             }
 
@@ -889,7 +942,23 @@
                 card.setAttribute('data-media', uploaded[0].media);
                 card.setAttribute('data-media-file', uploaded[0].mediaFile);
                 this.setCreativePreview(card, uploaded[0]);
-                this.renumberCreativeAds();
+                // Sync thumbnail into ads data and re-render so thumbnail section shows
+                const cardIdx = parseInt(card.getAttribute('data-index'), 10);
+                if (!isNaN(cardIdx) && this.campaignData.step3.ads[cardIdx]) {
+                    Object.assign(this.campaignData.step3.ads[cardIdx], {
+                        media: uploaded[0].media,
+                        mediaFile: uploaded[0].mediaFile,
+                        previewUrl: uploaded[0].previewUrl,
+                        thumbnail: uploaded[0].thumbnail || '',
+                        thumbnailFile: uploaded[0].thumbnailFile || '',
+                        thumbnailPreviewUrl: uploaded[0].thumbnailPreviewUrl || ''
+                    });
+                }
+                if (uploaded[0].thumbnailFile) {
+                    this.renderCreativeAds(); // full re-render to show auto thumbnail
+                } else {
+                    this.renumberCreativeAds();
+                }
             } else {
                 const blankIndex = this.campaignData.step3.ads.findIndex(ad => !ad.media && !ad.mediaFile);
                 uploaded.forEach((item, index) => {
@@ -898,7 +967,10 @@
                             ...this.campaignData.step3.ads[blankIndex],
                             media: item.media,
                             mediaFile: item.mediaFile,
-                            previewUrl: item.previewUrl
+                            previewUrl: item.previewUrl,
+                            thumbnail: item.thumbnail || '',
+                            thumbnailFile: item.thumbnailFile || '',
+                            thumbnailPreviewUrl: item.thumbnailPreviewUrl || ''
                         };
                     } else {
                         this.addCreativeAd(item, false);
