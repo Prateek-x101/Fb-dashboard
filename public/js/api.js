@@ -47,6 +47,7 @@
         getAllPages: () => API.request('/api/accounts/pages'),
         getPages: (id) => API.request(`/api/accounts/${id}/pages`),
         getAccountBilling: (id) => API.request(`/api/accounts/${id}/billing`),
+        getAccountCapabilities: (id) => API.request(`/api/accounts/${id}/capabilities`),
         aiAudiences: (data) => API.request('/api/campaigns/ai-audiences', { method: 'POST', body: JSON.stringify(data) }),
 
         // Settings

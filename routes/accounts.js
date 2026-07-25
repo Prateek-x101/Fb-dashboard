@@ -501,5 +501,49 @@ router.get('/auth/facebook/callback', async (req, res) => {
     }
 });
 
+// GET /:accountId/capabilities — fetch FB account capabilities to determine available enhancements
+router.get('/:accountId/capabilities', async (req, res) => {
+    try {
+        const fetch = require('node-fetch');
+        const storage = getStorage();
+        const { accountId } = req.params;
+
+        const account = (storage.accounts || []).find(
+            a => a.id === accountId || a.accountId === accountId
+        );
+        if (!account) return res.status(404).json({ error: 'Account not found' });
+
+        const token = account.accessToken || storage.settings?.facebookAccessToken;
+        if (!token) return res.status(400).json({ error: 'No access token' });
+
+        const rawId = account.accountId.startsWith('act_') ? account.accountId : `act_${account.accountId}`;
+        const url = `https://graph.facebook.com/v25.0/${rawId}?fields=capabilities,is_prepay_account&access_token=${token}`;
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (data.error) return res.status(400).json({ error: data.error.message });
+
+        const caps = data.capabilities || [];
+        const hasDynamicAds   = caps.includes('DYNAMIC_ADS');
+        const hasLeadAds      = caps.includes('LEAD_ADS');
+
+        // Map capabilities → which enhancement keys are available for this account
+        const available = {
+            advantageAudience:  true,
+            multiAdvertiser:    true,
+            autoCreative:       true,
+            autoMusic:          true,
+            inlineComment:      true,
+            textOptimizations:  true,
+            productTags:        hasDynamicAds,   // catalog/dynamic ads only
+            enhanceCta:         true
+        };
+
+        res.json({ capabilities: caps, available });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 module.exports = router;
 

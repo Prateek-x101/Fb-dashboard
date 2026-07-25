@@ -14,6 +14,8 @@
         _autoFilledCopy: { headline: '', description: '', primaryText: '' },
         _creationDraftId: '',
         _retryState: null,
+        _accountEnhancements: {},   // { [accountId]: { key: bool, ... } }
+        _currentAccountId: null,    // track which account is active
 
         init: function() {
             this.bindEvents();
