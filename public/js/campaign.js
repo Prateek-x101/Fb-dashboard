@@ -585,8 +585,41 @@
             return '₹'; // Default to INR
         },
 
+        applyEnhancements: function(features) {
+            // features = { advantageAudience: bool, multiAdvertiser: bool, ... }
+            document.querySelectorAll('.enhancement-btn').forEach(btn => {
+                const key = btn.getAttribute('data-key');
+                if (!key || key === 'autoMusic') return; // autoMusic is always hidden
+                const supported = features[key] !== false; // default to true if key not in response
+                btn.style.display = supported ? '' : 'none';
+                // Deactivate hidden buttons so they don't get submitted
+                if (!supported) btn.classList.remove('active');
+            });
+            // Refresh hint text
+            const activeKeys = Array.from(document.querySelectorAll('.enhancement-btn.active'))
+                .map(b => b.getAttribute('data-key'));
+            const hint = document.getElementById('enhancements-desc-hint');
+            if (hint) {
+                hint.textContent = activeKeys.length
+                    ? `${activeKeys.length} enhancement${activeKeys.length > 1 ? 's' : ''} enabled — will be applied to all ads.`
+                    : 'Select any enhancements to enable them on all ads.';
+            }
+        },
+
         handleAccountChange: async function(account) {
             if (!account) return;
+
+            // Fetch supported enhancements for this account and update the UI
+            const accountId = account.accountId || account.id;
+            if (accountId) {
+                try {
+                    const features = await window.API.getAccountFeatures(accountId);
+                    this._accountEnhancements[accountId] = features;
+                    this.applyEnhancements(features);
+                } catch (e) {
+                    console.warn('Could not load account features:', e.message);
+                }
+            }
 
             // Update timezone label near datetime input
             const tzLabel = document.getElementById('schedule-timezone-label');

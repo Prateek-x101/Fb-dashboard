@@ -85,6 +85,54 @@ function parseIsoDate(dateString) {
     return undefined;
 }
 
+// Returns which enhancements are supported for a given ad account
+router.get('/account-features/:accountId', async (req, res) => {
+    try {
+        const { accountId } = req.params;
+        const storage = getStorage();
+        const account = (storage.accounts || []).find(a => a.accountId === accountId);
+        let token = account?.accessToken || storage.settings?.facebookAccessToken;
+        if (!token) return res.status(400).json({ error: 'No token for this account' });
+
+        // Fetch account capabilities and check for product catalogs in parallel
+        const [capRes, catRes] = await Promise.all([
+            fetch(`https://graph.facebook.com/v25.0/act_${accountId}?fields=capabilities,disable_reason&access_token=${token}`),
+            fetch(`https://graph.facebook.com/v25.0/act_${accountId}/product_catalogs?fields=id&limit=1&access_token=${token}`)
+        ]);
+
+        let capabilities = [];
+        let hasCatalog = false;
+
+        if (capRes.ok) {
+            const capData = await capRes.json();
+            capabilities = capData.capabilities || [];
+        }
+        if (catRes.ok) {
+            const catData = await catRes.json();
+            hasCatalog = Array.isArray(catData.data) && catData.data.length > 0;
+        }
+
+        // Determine supported enhancements based on capabilities
+        const capSet = new Set(capabilities.map(c => String(c).toUpperCase()));
+
+        res.json({
+            advantageAudience:   true,   // universally available
+            multiAdvertiser:     true,   // universally available
+            autoCreative:        true,   // universally available (standard_enhancements)
+            inlineComment:       true,   // universally available
+            textOptimizations:   !capSet.has('CANNOT_USE_CREATIVE_HUB'), // disabled for very restricted accounts
+            productTags:         hasCatalog,   // requires a connected product catalog
+            enhanceCta:          true    // universally available
+        });
+    } catch (error) {
+        // On any error fall back to all enabled so campaign creation isn't blocked
+        res.json({
+            advantageAudience: true, multiAdvertiser: true, autoCreative: true,
+            inlineComment: true, textOptimizations: true, productTags: false, enhanceCta: true
+        });
+    }
+});
+
 router.get('/locations', async (req, res) => {
     try {
         const { q } = req.query;
