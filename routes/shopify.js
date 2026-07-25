@@ -161,7 +161,8 @@ async function uploadFileToShopify(shopUrl, accessToken, localFilePath, filename
 
     const s3Res = await fetch(target.url, {
         method: 'POST',
-        body: formData
+        body: formData,
+        headers: formData.getHeaders()
     });
     if (!s3Res.ok) {
         const s3Text = await s3Res.text();
@@ -464,6 +465,11 @@ router.post('/import', async (req, res) => {
                 });
                 
                 const uploadResults = await Promise.allSettled(uploadPromises);
+                uploadResults.forEach((r, idx) => {
+                    if (r.status === 'rejected') {
+                        console.error(`Video upload ${idx} failed:`, r.reason);
+                    }
+                });
                 const fileIds = uploadResults
                     .filter(r => r.status === 'fulfilled' && r.value)
                     .map(r => r.value);
@@ -542,12 +548,25 @@ router.post('/import', async (req, res) => {
 
                 if (targetVar && targetVar.featured_image && targetVar.featured_image.src) {
                     const targetImageSrc = targetVar.featured_image.src;
-                    // Find matching created image in Shopify
-                    const matchedImage = createdImages.find(img => {
-                        const cleanCreated = img.src.split('?')[0];
-                        const cleanTarget = targetImageSrc.split('?')[0];
-                        return cleanCreated.endsWith(cleanTarget.substring(cleanTarget.lastIndexOf('/') + 1));
+                    const targetClean = targetImageSrc.split('?')[0];
+                    const targetFilename = targetClean.substring(targetClean.lastIndexOf('/') + 1);
+
+                    // Method 1: Match by index of target image in original scraped gallery
+                    let targetIndex = (product.images || []).findIndex(imgUrl => {
+                        const cleanImgUrl = imgUrl.split('?')[0];
+                        return cleanImgUrl.endsWith(targetFilename);
                     });
+
+                    let matchedImage = null;
+                    if (targetIndex !== -1 && createdImages[targetIndex]) {
+                        matchedImage = createdImages[targetIndex];
+                    } else {
+                        // Method 2: Match by filename substring in newly created Shopify images
+                        matchedImage = createdImages.find(img => {
+                            const cleanCreated = img.src.split('?')[0];
+                            return cleanCreated.includes(targetFilename) || targetClean.includes(cleanCreated.substring(cleanCreated.lastIndexOf('/') + 1));
+                        });
+                    }
 
                     if (matchedImage) {
                         const updateUrl = `https://${store.shopUrl}/admin/api/2024-04/variants/${createdVar.id}.json`;
