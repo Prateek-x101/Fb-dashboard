@@ -40,8 +40,10 @@ router.get('/inbox', async (req, res) => {
     const storage = getStorage();
     const accounts = storage.accounts || [];
     const type = req.query.type || 'all';
-    const filterPageId = req.query.pageId;
+    const filterPageId = (req.query.pageId || '').trim();
     const items = [];
+
+    console.log(`GET /api/comments/inbox - type: ${type}, pageId filter: "${filterPageId}"`);
 
     await Promise.all(accounts.map(async (acc) => {
         const token = acc.accessToken;
@@ -54,7 +56,7 @@ router.get('/inbox', async (req, res) => {
 
             for (const page of pages) {
                 // If filterPageId is set, only process if page.id matches filterPageId
-                if (filterPageId && page.id !== filterPageId) {
+                if (filterPageId && filterPageId !== 'undefined' && filterPageId !== 'null' && String(page.id).trim() !== String(filterPageId).trim()) {
                     continue;
                 }
 
@@ -117,6 +119,7 @@ router.get('/inbox', async (req, res) => {
                                     unread: conv.unread_count || 0,
                                     source: `@${instagramUsername}`,
                                     accountId: acc.id,
+                                    pageId: pageId,
                                     igAccountId: instagramAccountId,
                                     recipientId: customer?.id,
                                     avatarColor: avatarColor(name)
@@ -190,6 +193,7 @@ router.get('/inbox', async (req, res) => {
                                     picture: media.thumbnail_url || media.media_url || null,
                                     source: `@${instagramUsername}`,
                                     accountId: acc.id,
+                                    pageId: pageId,
                                     igAccountId: instagramAccountId,
                                     avatarColor: avatarColor(commenterName || '?')
                                 });

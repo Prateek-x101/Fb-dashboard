@@ -90,10 +90,18 @@ const InboxManager = {
     renderList() {
         const list = document.getElementById('cm-list');
         if (!list) return;
+        const pageFilter = document.getElementById('cm-page-filter');
+        const selectedPageId = pageFilter ? pageFilter.value : '';
+        
+        let filtered = this.items;
+        if (selectedPageId) {
+            filtered = filtered.filter(it => it.pageId && String(it.pageId).trim() === String(selectedPageId).trim());
+        }
+
         const query = (document.getElementById('cm-search')?.value || '').toLowerCase();
-        const filtered = query
-            ? this.items.filter(it => (it.name + it.preview + it.source).toLowerCase().includes(query))
-            : this.items;
+        if (query) {
+            filtered = filtered.filter(it => (it.name + it.preview + it.source).toLowerCase().includes(query));
+        }
 
         if (!filtered.length) {
             list.innerHTML = `<div class="cm2-empty">
@@ -407,6 +415,7 @@ const InboxManager = {
                     pageFilter.appendChild(opt);
                 });
             }
+            this.renderList();
         } catch (e) {
             console.error("Failed to load page filter values:", e.message);
         }
