@@ -216,11 +216,25 @@ router.get('/:id/billing', async (req, res) => {
         if (!account) return res.status(404).json({ error: 'Account not found' });
 
         const rawId = account.accountId.startsWith('act_') ? account.accountId : `act_${account.accountId}`;
-        const fields = 'balance,currency,spend_cap,amount_spent,funding_source_details,account_status';
-        const url = `https://graph.facebook.com/v25.0/${rawId}?fields=${fields}&access_token=${account.accessToken}`;
-        const response = await fetch(url);
-        const data = await response.json();
+        const token = account.accessToken;
+        const base = `https://graph.facebook.com/v25.0`;
+
+        // Fetch account info + today spend + yesterday spend in parallel
+        const [accResp, todayResp, yestResp] = await Promise.all([
+            fetch(`${base}/${rawId}?fields=balance,currency,spend_cap,amount_spent,funding_source_details,account_status&access_token=${token}`),
+            fetch(`${base}/${rawId}/insights?fields=spend&date_preset=today&access_token=${token}`),
+            fetch(`${base}/${rawId}/insights?fields=spend&date_preset=yesterday&access_token=${token}`)
+        ]);
+
+        const data = await accResp.json();
         if (data.error) return res.status(400).json({ error: data.error.message, code: data.error.code });
+
+        // Insights return spend in actual currency (not cents)
+        const todayData = await todayResp.json();
+        const yestData = await yestResp.json();
+        data.today_spend = todayData.data && todayData.data[0] ? todayData.data[0].spend : '0';
+        data.yesterday_spend = yestData.data && yestData.data[0] ? yestData.data[0].spend : '0';
+
         res.json(data);
     } catch (error) {
         res.status(500).json({ error: 'Failed to fetch billing info', details: error.message });

@@ -605,14 +605,7 @@
                 const isCreditLine = fs && fs.type === 10;
                 const fundingDisplay = fs ? (fs.display_string || fundingType) : null;
 
-                // Balance logic:
-                // Credit line accounts: balance = outstanding amount owed (shown as positive on Meta)
-                // Card/prepay accounts: balance = current outstanding charge for this billing cycle
-                const balanceRaw = parseFloat(data.balance || 0);
-                const balanceAbs = Math.abs(balanceRaw) / 100;
-                const balanceFmt = balanceAbs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-                // Spend cap / remaining
+                // Spend cap / remaining (credit line)
                 const spendCapRaw = parseFloat(data.spend_cap || 0);
                 const amountSpentRaw = parseFloat(data.amount_spent || 0);
                 const hasSpendCap = spendCapRaw > 0;
@@ -620,10 +613,15 @@
                 const remainingFmt = remaining !== null ? remaining.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : null;
                 const remainingColor = remaining !== null && remaining < 0 ? 'var(--danger-color)' : 'var(--success)';
 
-                // Payment cycle (prepay threshold)
-                const cycle = data.adspaymentcycle;
-                const payWhenFmt = cycle && cycle.value ? `${cur} ${fmt(cycle.value)}` : null;
-                const payDateFmt = cycle && cycle.next_date ? new Date(cycle.next_date * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : null;
+                // Balance (for card accounts - current billing cycle charge)
+                const balanceRaw = parseFloat(data.balance || 0);
+                const balanceAbs = Math.abs(balanceRaw) / 100;
+                const balanceFmt = balanceAbs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+                // Insights spend (returned in actual currency, NOT cents)
+                const fmtDirect = n => parseFloat(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                const todaySpend = parseFloat(data.today_spend || 0);
+                const yestSpend = parseFloat(data.yesterday_spend || 0);
 
                 // Build rows
                 let rows = '';
@@ -636,52 +634,55 @@
                     </div>`;
                 }
 
-                // Current balance row
-                const balanceLabel = isCreditLine ? 'Current Balance' : 'Current Balance';
                 const failedTag = isFailed ? ' <span style="color:var(--danger-color);font-size:0.75rem;">(failed)</span>' : '';
-                rows += `<div style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
-                    <div style="color:var(--text-secondary);font-size:0.76rem;margin-bottom:3px;">${balanceLabel}</div>
-                    <div style="font-size:1.25rem;font-weight:700;color:#fff;">${cur} ${balanceFmt}${failedTag}</div>
-                    ${isCreditLine ? '<div style="font-size:0.72rem;color:var(--text-secondary);margin-top:2px;">Outstanding on credit line</div>' : '<div style="font-size:0.72rem;color:var(--text-secondary);margin-top:2px;">Current billing cycle charge</div>'}
-                </div>`;
 
-                // Amount spent
-                if (amountSpentRaw > 0) {
+                if (isCreditLine) {
+                    // ── CREDIT LINE ACCOUNT ──────────────────────────────────
+                    // Hero: Remaining (not balance)
+                    rows += `<div style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
+                        <div style="color:var(--text-secondary);font-size:0.76rem;margin-bottom:3px;">Remaining</div>
+                        <div style="font-size:1.25rem;font-weight:700;color:${remainingColor};">${cur} ${remainingFmt || '—'}${failedTag}</div>
+                        <div style="font-size:0.72rem;color:var(--text-secondary);margin-top:2px;">of ${cur} ${fmt(data.spend_cap)} spending limit</div>
+                        ${hasSpendCap ? `<div style="height:5px;background:rgba(255,255,255,0.1);border-radius:3px;margin-top:5px;overflow:hidden;">
+                            <div style="height:100%;background:${remainingColor};border-radius:3px;width:${Math.max(0,Math.min(100,(remaining/(spendCapRaw/100))*100)).toFixed(1)}%;transition:width 0.4s;"></div>
+                        </div>` : ''}
+                    </div>`;
+
+                    // Current Spend (today)
                     rows += `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
-                        <span style="color:var(--text-secondary);">Amount Spent</span>
-                        <strong>${cur} ${fmt(data.amount_spent)}</strong>
+                        <span style="color:var(--text-secondary);">Current Spend <span style="font-size:0.7rem;">(today)</span></span>
+                        <strong style="color:#fff;">${cur} ${fmtDirect(data.today_spend)}</strong>
+                    </div>`;
+
+                    // Yesterday Spend
+                    rows += `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
+                        <span style="color:var(--text-secondary);">Yesterday Spend</span>
+                        <strong>${cur} ${fmtDirect(data.yesterday_spend)}</strong>
+                    </div>`;
+
+                } else {
+                    // ── CARD / PREPAY ACCOUNT ────────────────────────────────
+                    // Hero: Current Balance (billing cycle charge)
+                    rows += `<div style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
+                        <div style="color:var(--text-secondary);font-size:0.76rem;margin-bottom:3px;">Current Balance</div>
+                        <div style="font-size:1.25rem;font-weight:700;color:#fff;">${cur} ${balanceFmt}${failedTag}</div>
+                        <div style="font-size:0.72rem;color:var(--text-secondary);margin-top:2px;">Current billing cycle charge</div>
+                    </div>`;
+
+                    // Current Spend (today)
+                    rows += `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
+                        <span style="color:var(--text-secondary);">Current Spend <span style="font-size:0.7rem;">(today)</span></span>
+                        <strong style="color:#fff;">${cur} ${fmtDirect(data.today_spend)}</strong>
+                    </div>`;
+
+                    // Yesterday Spend
+                    rows += `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
+                        <span style="color:var(--text-secondary);">Yesterday Spend</span>
+                        <strong>${cur} ${fmtDirect(data.yesterday_spend)}</strong>
                     </div>`;
                 }
 
-                // Spending limit + remaining (credit line / spend cap)
-                if (hasSpendCap) {
-                    rows += `<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
-                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                            <span style="color:var(--text-secondary);">Spending Limit</span>
-                            <span>${cur} ${fmt(data.spend_cap)}</span>
-                        </div>
-                        <div style="display:flex;justify-content:space-between;align-items:center;">
-                            <span style="color:var(--text-secondary);">Remaining</span>
-                            <strong style="color:${remainingColor};">${cur} ${remainingFmt}</strong>
-                        </div>
-                        <div style="height:5px;background:rgba(255,255,255,0.1);border-radius:3px;margin-top:5px;overflow:hidden;">
-                            <div style="height:100%;background:${remainingColor};border-radius:3px;width:${Math.max(0,Math.min(100,remaining/spendCapRaw*10000)).toFixed(1)}%;transition:width 0.4s;"></div>
-                        </div>
-                    </div>`;
-                }
-
-                // Payment threshold (prepay card accounts)
-                if (payWhenFmt || payDateFmt) {
-                    rows += `<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
-                        <div style="color:var(--text-secondary);font-size:0.76rem;margin-bottom:3px;">You'll pay when</div>
-                        <div style="display:flex;gap:12px;flex-wrap:wrap;">
-                            ${payWhenFmt ? `<span>Balance reaches <strong>${payWhenFmt}</strong></span>` : ''}
-                            ${payDateFmt ? `<span>Or on <strong>${payDateFmt}</strong></span>` : ''}
-                        </div>
-                    </div>`;
-                }
-
-                // Payment method
+                // Payment method (both account types)
                 if (fundingDisplay) {
                     const icon = isCreditLine ? '🏦' : (fs.type === 7 ? '🅿️' : '💳');
                     const failedFundTag = isFailed ? ' <span style="color:var(--danger-color);font-size:0.72rem;">(failed)</span>' : '';
