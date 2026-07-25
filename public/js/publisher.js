@@ -5,7 +5,10 @@
         init: function() {
             this.bindEvents();
             
-            // Listen for tab routing readiness or custom app Ready
+            if (window.APP && window.APP.accounts && window.APP.accounts.length > 0) {
+                this.loadDestinations();
+            }
+
             document.addEventListener('appReady', () => {
                 this.loadDestinations();
             });

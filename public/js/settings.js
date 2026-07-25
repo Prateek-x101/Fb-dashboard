@@ -5,10 +5,19 @@
             this.bindEvents();
             this.wireDefaultExcludeSearch();
             this.bindPostMessageListener();
-            document.addEventListener('appReady', () => {
+            
+            const loadAll = () => {
                 this.loadSettings();
                 this.renderAccounts();
                 this.loadShopifyStores();
+            };
+
+            if (window.APP && window.APP.accounts && window.APP.accounts.length > 0) {
+                loadAll();
+            }
+
+            document.addEventListener('appReady', () => {
+                loadAll();
             });
         },
 

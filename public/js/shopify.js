@@ -8,6 +8,7 @@
 
         init: function() {
             this.bindEvents();
+            this.loadStoresSelect();
             document.addEventListener('appReady', () => {
                 this.loadStoresSelect();
             });
@@ -786,6 +787,9 @@
             
             if (filtered.length === 0) filtered = words;
             
+            return filtered.slice(0, 3).join(' ');
+        },
+
         loadPublishDestinations: async function() {
             const destList = document.getElementById('shopify-publish-destinations');
             if (!destList) return;

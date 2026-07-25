@@ -19,10 +19,19 @@
             this.bindEvents();
             this.setDefaultDateTime();
             this.setupGlobalAudienceTags();
-            document.addEventListener('appReady', () => {
+            
+            const loadAll = () => {
                 this.populateAccountSelect();
                 this.updateAudienceCards();
                 this.loadSavedAudiencesDropdown();
+            };
+
+            if (window.APP && window.APP.accounts && window.APP.accounts.length > 0) {
+                loadAll();
+            }
+
+            document.addEventListener('appReady', () => {
+                loadAll();
             });
             document.addEventListener('accountChanged', (e) => {
                 this.handleAccountChange(e.detail);
