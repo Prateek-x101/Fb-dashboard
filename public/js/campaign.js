@@ -914,6 +914,61 @@
             });
         },
 
+        extractMultipleVideoFrames: function(fileOrUrl, count = 6) {
+            return new Promise((resolve) => {
+                const video = document.createElement('video');
+                video.preload = 'metadata';
+                video.muted = true;
+                video.playsInline = true;
+                
+                let blobUrl = null;
+                if (fileOrUrl instanceof File) {
+                    blobUrl = URL.createObjectURL(fileOrUrl);
+                    video.src = blobUrl;
+                } else {
+                    video.src = fileOrUrl.startsWith('/') ? fileOrUrl : '/uploads/' + fileOrUrl;
+                }
+
+                const cleanup = () => { if (blobUrl) URL.revokeObjectURL(blobUrl); };
+
+                video.addEventListener('loadedmetadata', async () => {
+                    const duration = video.duration || 10;
+                    const frames = [];
+                    for (let i = 0; i < count; i++) {
+                        const ratio = (i + 0.5) / count;
+                        const time = duration * ratio;
+                        
+                        const frameBlob = await new Promise((fResolve) => {
+                            const onSeeked = () => {
+                                try {
+                                    const canvas = document.createElement('canvas');
+                                    canvas.width = video.videoWidth || 640;
+                                    canvas.height = video.videoHeight || 360;
+                                    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+                                    canvas.toBlob(blob => fResolve(blob), 'image/jpeg', 0.82);
+                                    video.removeEventListener('seeked', onSeeked);
+                                } catch(err) { fResolve(null); }
+                            };
+                            video.addEventListener('seeked', onSeeked);
+                            video.currentTime = time;
+                        });
+                        if (frameBlob) {
+                            frames.push({
+                                time: time.toFixed(1),
+                                blob: frameBlob,
+                                previewUrl: URL.createObjectURL(frameBlob)
+                            });
+                        }
+                    }
+                    cleanup();
+                    resolve(frames);
+                });
+
+                video.addEventListener('error', () => { cleanup(); resolve([]); });
+                setTimeout(() => { cleanup(); resolve([]); }, 20000);
+            });
+        },
+
         handleMediaUpload: async function(files, card = null) {
             const selectedFiles = Array.isArray(files) ? files : [files];
             if (!selectedFiles.length) return;
@@ -926,7 +981,9 @@
                     previewUrl: URL.createObjectURL(file),
                     thumbnail: '',
                     thumbnailFile: '',
-                    thumbnailPreviewUrl: ''
+                    thumbnailPreviewUrl: '',
+                    extractedThumbnails: null,
+                    selectedThumbnailIdx: 0
                 };
                 try {
                     const formData = new FormData();
@@ -937,22 +994,25 @@
                     item.media = file.name;
                 }
 
-                // Auto-extract thumbnail from video frame
+                // Auto-extract thumbnail frames from video
                 if (isVid) {
                     try {
-                        window.AppController.showToast('Extracting video thumbnail...', 'info');
-                        const frameBlob = await this.extractVideoFrame(file);
-                        if (frameBlob) {
+                        window.AppController.showToast('Extracting video thumbnails...', 'info');
+                        const frames = await this.extractMultipleVideoFrames(file, 6);
+                        item.extractedThumbnails = frames;
+                        if (frames && frames.length > 0) {
+                            const firstFrame = frames[0];
                             const thumbName = file.name.replace(/\.[^/.]+$/, '_thumb.jpg');
                             const thumbForm = new FormData();
-                            thumbForm.append('file', new File([frameBlob], thumbName, { type: 'image/jpeg' }));
+                            thumbForm.append('file', new File([firstFrame.blob], thumbName, { type: 'image/jpeg' }));
                             const thumbResp = await window.API.uploadMedia(thumbForm);
                             item.thumbnail = thumbResp.filePath || thumbResp.filename;
                             item.thumbnailFile = thumbResp.filename || thumbName;
-                            item.thumbnailPreviewUrl = URL.createObjectURL(frameBlob);
+                            item.thumbnailPreviewUrl = firstFrame.previewUrl;
+                            item.selectedThumbnailIdx = 0;
                         }
                     } catch(e) {
-                        console.log('Auto thumbnail skipped:', e.message);
+                        console.log('Auto thumbnails skipped:', e.message);
                     }
                 }
 
@@ -972,7 +1032,9 @@
                         previewUrl: uploaded[0].previewUrl,
                         thumbnail: uploaded[0].thumbnail || '',
                         thumbnailFile: uploaded[0].thumbnailFile || '',
-                        thumbnailPreviewUrl: uploaded[0].thumbnailPreviewUrl || ''
+                        thumbnailPreviewUrl: uploaded[0].thumbnailPreviewUrl || '',
+                        extractedThumbnails: uploaded[0].extractedThumbnails || null,
+                        selectedThumbnailIdx: uploaded[0].selectedThumbnailIdx !== undefined ? uploaded[0].selectedThumbnailIdx : 0
                     });
                 }
                 if (uploaded[0].thumbnailFile) {
@@ -991,7 +1053,9 @@
                             previewUrl: item.previewUrl,
                             thumbnail: item.thumbnail || '',
                             thumbnailFile: item.thumbnailFile || '',
-                            thumbnailPreviewUrl: item.thumbnailPreviewUrl || ''
+                            thumbnailPreviewUrl: item.thumbnailPreviewUrl || '',
+                            extractedThumbnails: item.extractedThumbnails || null,
+                            selectedThumbnailIdx: item.selectedThumbnailIdx !== undefined ? item.selectedThumbnailIdx : 0
                         };
                     } else {
                         this.addCreativeAd(item, false);
@@ -1011,7 +1075,9 @@
                 primaryText: media.primaryText || '',
                 thumbnail: media.thumbnail || '',
                 thumbnailFile: media.thumbnailFile || '',
-                thumbnailPreviewUrl: media.thumbnailPreviewUrl || ''
+                thumbnailPreviewUrl: media.thumbnailPreviewUrl || '',
+                extractedThumbnails: media.extractedThumbnails || null,
+                selectedThumbnailIdx: media.selectedThumbnailIdx !== undefined ? media.selectedThumbnailIdx : 0
             });
             if (rerender) this.renderCreativeAds();
         },
@@ -1054,21 +1120,80 @@
                 card.setAttribute('data-media-file', ad.mediaFile || '');
                 card.style.background = 'rgba(0,0,0,0.15)';
                 
-                const isVideo = /\.(mp4|mov|avi|webm)$/i.test(ad.mediaFile || '');
+                const isVideo = /\.(mp4|mov|avi|webm)$/i.test(ad.mediaFile || ad.media || '');
+                
+                // Auto-trigger frames extraction in background if not present yet
+                if (isVideo && !ad.extractedThumbnails && !ad.isExtractingThumbnails) {
+                    ad.isExtractingThumbnails = true;
+                    this.extractMultipleVideoFrames(ad.mediaFile || ad.media, 6).then(async (frames) => {
+                        ad.extractedThumbnails = frames || [];
+                        ad.isExtractingThumbnails = false;
+                        
+                        // If no thumbnail is set yet, default to the first frame
+                        if (!ad.thumbnail && frames && frames.length > 0) {
+                            const firstFrame = frames[0];
+                            const thumbName = (ad.mediaFile || 'video.mp4').replace(/\.[^/.]+$/, '_thumb.jpg');
+                            const thumbForm = new FormData();
+                            thumbForm.append('file', new File([firstFrame.blob], thumbName, { type: 'image/jpeg' }));
+                            try {
+                                const thumbResp = await window.API.uploadMedia(thumbForm);
+                                ad.thumbnail = thumbResp.filePath || thumbResp.filename;
+                                ad.thumbnailFile = thumbResp.filename || thumbName;
+                                ad.thumbnailPreviewUrl = firstFrame.previewUrl;
+                                ad.selectedThumbnailIdx = 0;
+                            } catch (err) {
+                                console.error('Auto upload of default first frame failed:', err.message);
+                            }
+                        }
+                        this.renderCreativeAds();
+                    });
+                }
+
                 let thumbnailHtml = '';
                 if (isVideo) {
-                    thumbnailHtml = `
-                        <div class="creative-thumbnail-section mt-2 mb-2" style="border-top:1px solid rgba(255,255,255,0.1); padding-top:10px;">
-                            <div class="flex justify-between align-center mb-1">
-                                <span style="font-size:0.85rem; color:var(--text-secondary);">🖼️ Custom Video Thumbnail (Optional)</span>
-                                <label class="btn btn-secondary btn-xs" style="cursor:pointer; font-size:0.75rem; padding: 2px 6px;">
-                                    📁 Upload Thumbnail
-                                    <input type="file" class="creative-thumbnail-input" accept="image/*" style="display:none;">
-                                </label>
+                    let sliderHtml = '';
+                    if (ad.isExtractingThumbnails) {
+                        sliderHtml = `<div style="padding:15px; text-align:center; color:var(--text-secondary); font-size:0.8rem;">
+                            <span class="cm2-spinner" style="display:inline-block; vertical-align:middle; margin-right:6px;"></span> Extracting video frames...
+                        </div>`;
+                    } else if (ad.extractedThumbnails && ad.extractedThumbnails.length > 0) {
+                        const slides = ad.extractedThumbnails.map((frame, fIdx) => {
+                            const isSelected = ad.selectedThumbnailIdx === fIdx;
+                            return `
+                                <div class="thumbnail-slide-item${isSelected ? ' selected' : ''}" data-idx="${fIdx}">
+                                    <img src="${frame.previewUrl}">
+                                    ${isSelected ? '<div class="thumbnail-slide-item-check">✓</div>' : ''}
+                                </div>
+                            `;
+                        }).join('');
+                        
+                        sliderHtml = `
+                            <div class="thumbnail-slider-wrapper">
+                                <button type="button" class="btn btn-secondary btn-xs btn-scroll-left" style="padding:4px 6px; font-size:0.7rem; border-radius:4px; cursor:pointer;">◀</button>
+                                <div class="thumbnail-slider" style="margin: 0 4px;">
+                                    ${slides}
+                                </div>
+                                <button type="button" class="btn btn-secondary btn-xs btn-scroll-right" style="padding:4px 6px; font-size:0.7rem; border-radius:4px; cursor:pointer;">▶</button>
                             </div>
-                            <div class="creative-thumbnail-preview flex align-center justify-between mt-1" style="${ad.thumbnailFile ? 'display:flex;' : 'display:none;'}">
-                                <span class="creative-thumbnail-filename" style="font-size:0.8rem; color:var(--accent-cyan);">📎 ${this.escapeHtml(ad.thumbnailFile || '')}</span>
-                                <button type="button" class="btn btn-link btn-xs creative-thumbnail-remove" style="color:var(--danger-color); padding:0; margin-left:10px; font-size:0.75rem; text-decoration:none;">Remove</button>
+                        `;
+                    } else {
+                        sliderHtml = `<div style="padding:10px; text-align:center; color:var(--text-secondary); font-size:0.8rem;">Could not extract suggested frames. Upload a custom thumbnail instead.</div>`;
+                    }
+
+                    thumbnailHtml = `
+                        <div class="choose-thumbnail-container">
+                            <div class="choose-thumbnail-header">
+                                <div class="thumbnail-tabs">
+                                    <button type="button" class="thumbnail-tab-btn active">Choose suggested</button>
+                                    <label class="thumbnail-tab-btn" style="cursor:pointer; margin:0;">
+                                        Upload image
+                                        <input type="file" class="creative-thumbnail-input" accept="image/*" style="display:none;">
+                                    </label>
+                                </div>
+                                ${ad.thumbnailFile ? `<span style="font-size:0.72rem; color:var(--accent-cyan); font-weight:500; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right;">📎 ${this.escapeHtml(ad.thumbnailFile)}</span>` : ''}
+                            </div>
+                            <div class="thumbnail-tab-content">
+                                ${sliderHtml}
                             </div>
                         </div>
                     `;
@@ -1079,7 +1204,7 @@
                         <h4 class="creative-ad-name" style="color:var(--accent-cyan);">${total === 1 ? 'Single content-Reel' : `Content-${index + 1} Reel`}</h4>
                         <div class="flex gap-2">
                             <label class="btn btn-secondary btn-sm" style="cursor:pointer;">📁 Change Media
-                                <input type="file" class="creative-media-input" accept="image/*,video/*" style="display:none;">
+                                  <input type="file" class="creative-media-input" accept="image/*,video/*" style="display:none;">
                             </label>
                             <button type="button" class="remove-card-btn creative-remove-ad"><span>✖</span></button>
                         </div>
@@ -1103,9 +1228,42 @@
                 });
                 
                 if (isVideo) {
+                    const slider = card.querySelector('.thumbnail-slider');
+                    const btnLeft = card.querySelector('.btn-scroll-left');
+                    const btnRight = card.querySelector('.btn-scroll-right');
+                    if (slider) {
+                        if (btnLeft) btnLeft.addEventListener('click', () => { slider.scrollLeft -= 120; });
+                        if (btnRight) btnRight.addEventListener('click', () => { slider.scrollLeft += 120; });
+                    }
+
+                    const slideItems = card.querySelectorAll('.thumbnail-slide-item');
+                    slideItems.forEach(itemEl => {
+                        itemEl.addEventListener('click', async () => {
+                            const fIdx = parseInt(itemEl.getAttribute('data-idx'), 10);
+                            if (ad.selectedThumbnailIdx === fIdx) return;
+                            
+                            ad.selectedThumbnailIdx = fIdx;
+                            const frame = ad.extractedThumbnails[fIdx];
+                            if (frame) {
+                                window.AppController.showToast('Uploading selected thumbnail frame...', 'info');
+                                const thumbName = (ad.mediaFile || 'video.mp4').replace(/\.[^/.]+$/, `_thumb_${fIdx}.jpg`);
+                                const thumbForm = new FormData();
+                                thumbForm.append('file', new File([frame.blob], thumbName, { type: 'image/jpeg' }));
+                                try {
+                                    const thumbResp = await window.API.uploadMedia(thumbForm);
+                                    ad.thumbnail = thumbResp.filePath || thumbResp.filename;
+                                    ad.thumbnailFile = thumbResp.filename || thumbName;
+                                    ad.thumbnailPreviewUrl = frame.previewUrl;
+                                    window.AppController.showToast('Thumbnail frame updated! ✅', 'success');
+                                    this.renderCreativeAds();
+                                } catch (err) {
+                                    window.AppController.showToast(`Failed to set thumbnail: ${err.message}`, 'error');
+                                }
+                            }
+                        });
+                    });
+
                     const thumbInput = card.querySelector('.creative-thumbnail-input');
-                    const removeThumbBtn = card.querySelector('.creative-thumbnail-remove');
-                    
                     if (thumbInput) {
                         thumbInput.addEventListener('change', async e => {
                             const file = e.target.files[0];
@@ -1116,26 +1274,17 @@
                                     window.AppController.showToast('Uploading custom thumbnail...', 'info');
                                     const response = await window.API.uploadMedia(formData);
                                     
-                                    this.campaignData.step3.ads[index].thumbnail = response.filePath;
-                                    this.campaignData.step3.ads[index].thumbnailFile = response.filename;
-                                    this.campaignData.step3.ads[index].thumbnailPreviewUrl = URL.createObjectURL(file);
+                                    ad.thumbnail = response.filePath;
+                                    ad.thumbnailFile = response.filename;
+                                    ad.thumbnailPreviewUrl = URL.createObjectURL(file);
+                                    ad.selectedThumbnailIdx = null; // Deselect suggested frame
                                     
                                     window.AppController.showToast('Custom thumbnail uploaded successfully! ✅', 'success');
                                     this.renderCreativeAds();
                                 } catch (err) {
-                                    window.AppController.showToast(`Thumbnail upload failed: ${err.message}`, 'danger');
+                                    window.AppController.showToast(`Thumbnail upload failed: ${err.message}`, 'error');
                                 }
                             }
-                        });
-                    }
-                    
-                    if (removeThumbBtn) {
-                        removeThumbBtn.addEventListener('click', () => {
-                            this.campaignData.step3.ads[index].thumbnail = '';
-                            this.campaignData.step3.ads[index].thumbnailFile = '';
-                            this.campaignData.step3.ads[index].thumbnailPreviewUrl = '';
-                            window.AppController.showToast('Custom thumbnail removed', 'info');
-                            this.renderCreativeAds();
                         });
                     }
                 }
