@@ -8,10 +8,39 @@ const facebookService = require('../services/facebook');
 const { getStorage, saveStorage } = require('../services/storage');
 const oauthCache = new Map();
 
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
     try {
+        const fetch = require('node-fetch');
         const storage = getStorage();
-        res.json(storage.accounts || []);
+        let accounts = storage.accounts || [];
+        let updated = false;
+
+        for (let i = 0; i < accounts.length; i++) {
+            const acc = accounts[i];
+            if (!acc.currency && acc.accessToken && acc.accountId) {
+                try {
+                    const rawId = acc.accountId.startsWith('act_') ? acc.accountId : `act_${acc.accountId}`;
+                    const url = `https://graph.facebook.com/v25.0/${rawId}?fields=currency&access_token=${acc.accessToken}`;
+                    const response = await fetch(url);
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.currency) {
+                            acc.currency = data.currency;
+                            updated = true;
+                            console.log(`Updated account ${acc.accountId} with currency: ${data.currency}`);
+                        }
+                    }
+                } catch (err) {
+                    console.error(`Failed to fetch currency for account ${acc.accountId}:`, err.message);
+                }
+            }
+        }
+
+        if (updated) {
+            saveStorage(storage);
+        }
+
+        res.json(accounts);
     } catch (error) {
         res.status(500).json({ error: 'Failed to read accounts', details: error.message });
     }

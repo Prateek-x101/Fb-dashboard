@@ -219,6 +219,45 @@
             const numAdsets = document.getElementById('num-adsets');
             if (numAdsets) numAdsets.addEventListener('change', () => this.updateAudienceCards());
 
+            // Dynamic count updates for exclusions
+            const updateExclusionsCount = () => {
+                const locationCount = document.querySelectorAll('#location-exclude-tags .location-tag').length;
+                const customCount = document.querySelectorAll('#custom-exclude-tags .audience-tag').length;
+                const lookalikeCount = document.querySelectorAll('#lookalike-exclude-tags .audience-tag').length;
+                const total = locationCount + customCount + lookalikeCount;
+
+                const locLabel = document.getElementById('location-exclude-label');
+                if (locLabel) locLabel.innerHTML = `🚫 Exclude Locations <span style="background: var(--accent-red); color: white; padding: 2px 8px; border-radius: 20px; font-size: 0.75rem; margin-left: 6px;">${locationCount}</span>`;
+
+                const customLabel = document.getElementById('custom-exclude-label');
+                if (customLabel) customLabel.innerHTML = `❌ Exclude Custom Audiences <span style="background: var(--accent-red); color: white; padding: 2px 8px; border-radius: 20px; font-size: 0.75rem; margin-left: 6px;">${customCount}</span>`;
+
+                const lookalikeLabel = document.getElementById('lookalike-exclude-label');
+                if (lookalikeLabel) lookalikeLabel.innerHTML = `❌ Exclude Lookalike Audiences <span style="background: var(--accent-red); color: white; padding: 2px 8px; border-radius: 20px; font-size: 0.75rem; margin-left: 6px;">${lookalikeCount}</span>`;
+
+                return { total, locationCount, customCount, lookalikeCount };
+            };
+
+            // Bind click listeners on exclusion boxes to show counts
+            ['location-exclude-tags', 'custom-exclude-tags', 'lookalike-exclude-tags'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    el.addEventListener('click', () => {
+                        setTimeout(() => {
+                            const { total, locationCount, customCount, lookalikeCount } = updateExclusionsCount();
+                            window.AppController.showToast(`Selected Exclusions: Total: ${total} (Locations: ${locationCount}, Custom: ${customCount}, Lookalike: ${lookalikeCount})`, 'info');
+                        }, 80);
+                    });
+                }
+            });
+
+            // Initial count calculation when entering Step 2 or on action clicks
+            document.addEventListener('click', (e) => {
+                if (e.target.closest('#btn-next-step') || e.target.closest('.step-indicator') || e.target.closest('.tag-remove') || e.target.closest('.interest-dropdown div')) {
+                    setTimeout(updateExclusionsCount, 250);
+                }
+            });
+
             const btnAddAdset = document.getElementById('btn-add-adset');
             if (btnAddAdset) {
                 btnAddAdset.addEventListener('click', () => {
@@ -482,10 +521,12 @@
             const symbol = this.getCurrencySymbol(account);
             document.querySelectorAll('.currency-symbol').forEach(el => { el.textContent = symbol; });
             const budgetInput = document.getElementById('budget-amount');
-            if (budgetInput && symbol === '$' && parseFloat(budgetInput.value) > 100) {
-                budgetInput.value = '50';
-            } else if (budgetInput && symbol === '₹' && parseFloat(budgetInput.value) < 100) {
-                budgetInput.value = '500';
+            if (budgetInput) {
+                if (symbol === '$') {
+                    budgetInput.value = '4';
+                } else if (symbol === '₹') {
+                    budgetInput.value = '400';
+                }
             }
 
             // Fetch pixels
@@ -561,7 +602,7 @@
         // ── Audience cards (interests only) ──────────────────────────────
         updateAudienceCards: function() {
             const container = document.getElementById('audience-container');
-            const num = parseInt(document.getElementById('num-adsets')?.value || 3, 10);
+            const num = parseInt(document.getElementById('num-adsets')?.value || 5, 10);
             if (!container) return;
             container.innerHTML = '';
             for (let i = 0; i < num; i++) this._createAudienceCard(container, i, num);
@@ -1378,7 +1419,7 @@
             
             // Re-render empty audience cards
             const numInput = document.getElementById('num-adsets');
-            if (numInput) numInput.value = '3';
+            if (numInput) numInput.value = '5';
             this.updateAudienceCards();
 
             // Hide creation status

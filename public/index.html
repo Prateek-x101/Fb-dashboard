@@ -241,7 +241,7 @@
                                 </div>
                             </div>
                             <div class="form-group">
-                                <label>🚫 Exclude Locations</label>
+                                <label id="location-exclude-label">🚫 Exclude Locations</label>
                                 <div style="position:relative;">
                                     <div class="form-control tags-input" id="location-exclude-tags" style="min-height:44px;flex-wrap:wrap;">
                                         <input type="text" id="loc-exclude-search" placeholder="Search country, state, city…" style="background:transparent;border:none;color:white;outline:none;flex:1;min-width:100px;">
@@ -283,7 +283,7 @@
                                 </div>
                             </div>
                             <div class="form-group">
-                                <label>❌ Exclude Custom Audiences</label>
+                                <label id="custom-exclude-label">❌ Exclude Custom Audiences</label>
                                 <div style="position:relative;">
                                     <div class="form-control tags-input" id="custom-exclude-tags" style="min-height:44px;flex-wrap:wrap;">
                                         <input type="text" id="custom-exclude-search" placeholder="Search custom audiences…" style="background:transparent;border:none;color:white;outline:none;flex:1;min-width:120px;">
@@ -304,7 +304,7 @@
                                 </div>
                             </div>
                             <div class="form-group">
-                                <label>❌ Exclude Lookalike Audiences</label>
+                                <label id="lookalike-exclude-label">❌ Exclude Lookalike Audiences</label>
                                 <div style="position:relative;">
                                     <div class="form-control tags-input" id="lookalike-exclude-tags" style="min-height:44px;flex-wrap:wrap;">
                                         <input type="text" id="lookalike-exclude-search" placeholder="Search lookalike audiences…" style="background:transparent;border:none;color:white;outline:none;flex:1;min-width:120px;">
@@ -323,7 +323,7 @@
                         </div>
                         <div class="flex gap-2 align-center">
                             <label style="color:var(--text-secondary);font-size:0.85rem;">Sets:</label>
-                            <input type="number" class="form-control" style="width:65px;" value="3" min="1" max="20" id="num-adsets">
+                            <input type="number" class="form-control" style="width:65px;" value="5" min="1" max="20" id="num-adsets">
                         </div>
                     </div>
 
