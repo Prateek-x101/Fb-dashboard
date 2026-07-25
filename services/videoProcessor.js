@@ -39,7 +39,7 @@ async function ensureBinaries() {
     }
 }
 
-// Download video using yt-dlp in HD
+// Download video using yt-dlp in HD (Optimized Speed)
 async function downloadVideo(url, outputFilename) {
     await ensureBinaries();
     
@@ -50,12 +50,17 @@ async function downloadVideo(url, outputFilename) {
     
     const tempOutputPath = path.join(uploadsDir, `temp_${outputFilename}`);
     
-    console.log(`Downloading video from ${url} in highest quality...`);
+    console.log(`Downloading video from ${url}...`);
     
-    // Command args: download in best format that is mp4 or merge to mp4, no playlist
+    // Optimized yt-dlp parameters:
+    // -f best[ext=mp4]/best: directly grab single pre-merged stream (avoid separate stream download & merge phase)
+    // --concurrent-fragments 5: parallel chunks download (speeds up network throughput)
     const args = [
         '--no-playlist',
-        '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        '-f', 'best[ext=mp4]/best',
+        '--concurrent-fragments', '5',
+        '--no-warnings',
+        '--no-check-certificates',
         '-o', tempOutputPath,
         url
     ];
@@ -68,11 +73,9 @@ async function downloadVideo(url, outputFilename) {
                 return reject(new Error(`Failed to download video from URL: ${error.message}`));
             }
             
-            // yt-dlp might append .mp4 or other extensions if it merged
-            // Let's resolve the actual downloaded file name
+            // Resolve actual filename
             let actualPath = tempOutputPath;
             if (!fs.existsSync(actualPath)) {
-                // Check if yt-dlp appended extension or changed it
                 const files = fs.readdirSync(uploadsDir);
                 const matched = files.find(f => f.startsWith(`temp_${path.parse(outputFilename).name}`));
                 if (matched) {
@@ -82,13 +85,13 @@ async function downloadVideo(url, outputFilename) {
                 }
             }
             
-            console.log(`Video downloaded successfully to temporary path: ${actualPath}`);
+            console.log(`Video downloaded successfully to: ${actualPath}`);
             resolve(actualPath);
         });
     });
 }
 
-// Reprocess video using FFmpeg: scale/pad to canvas, strip metadata, refresh MD5
+// Reprocess video using FFmpeg: scale/pad to canvas, strip metadata, refresh MD5 (Optimized Speed)
 async function processVideo(inputPath, outputFilename, canvasType = 'original') {
     const uploadsDir = path.join(__dirname, '..', 'uploads');
     const finalOutputPath = path.join(uploadsDir, outputFilename);
@@ -106,12 +109,8 @@ async function processVideo(inputPath, outputFilename, canvasType = 'original') 
     console.log(`Processing video with FFmpeg. Canvas mode: ${canvasType}. Output: ${finalOutputPath}`);
     
     // Command parameters:
-    // -y: overwrite output file
-    // -map_metadata -1: strip all metadata
-    // -c:v libx264 -crf 20: compress using standard H.264
-    // -preset fast: encode quickly
-    // -c:a aac -b:a 128k: compress audio using standard AAC
-    
+    // -preset ultrafast: encode video instantly
+    // -map_metadata -1: clear metadata
     let args = [];
     if (filterString) {
         args = [
@@ -120,7 +119,7 @@ async function processVideo(inputPath, outputFilename, canvasType = 'original') 
             '-vf', filterString,
             '-c:v', 'libx264',
             '-crf', '20',
-            '-preset', 'fast',
+            '-preset', 'ultrafast',
             '-map_metadata', '-1',
             '-c:a', 'aac',
             '-b:a', '128k',
@@ -133,7 +132,7 @@ async function processVideo(inputPath, outputFilename, canvasType = 'original') 
             '-i', inputPath,
             '-c:v', 'libx264',
             '-crf', '20',
-            '-preset', 'fast',
+            '-preset', 'ultrafast',
             '-map_metadata', '-1',
             '-c:a', 'aac',
             '-b:a', '128k',
@@ -158,7 +157,7 @@ async function processVideo(inputPath, outputFilename, canvasType = 'original') 
                 return reject(new Error(`Failed to clean/process video creative: ${error.message}`));
             }
             
-            console.log(`FFmpeg processing finished. Video is clean and hashed: ${finalOutputPath}`);
+            console.log(`FFmpeg processing finished: ${finalOutputPath}`);
             resolve({
                 filePath: finalOutputPath,
                 filename: outputFilename
