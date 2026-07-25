@@ -104,26 +104,32 @@ ${baseText}`;
             ? `\nKeywords already used in other audiences — DO NOT repeat any of these: ${alreadyUsedKeywords.join(', ')}`
             : '';
 
-        const prompt = `You are a Facebook Ads targeting expert. Analyze the complete product information below and generate ${audienceCount} DISTINCT, product-relevant audience segments using Facebook's full targeting options.
+        const prompt = `You are a Facebook Ads targeting expert. Study the product information below carefully — understand the product category, materials, use cases, price point, and likely buyer — then generate ${audienceCount} DISTINCT audience segments.
 
-Complete product information:
+PRODUCT INFORMATION:
 ${websiteContent}
 ${usedList}
 
-Rules:
-- Generate exactly ${audienceCount} audience objects. Never return fewer than 3.
-- Each audience targets a clearly different customer profile relevant to this product
-- Each audience must contain 5 to 8 highly relevant targeting items drawn from multiple types:
-  • "interest" — hobbies, pages, topics (e.g. "Online shopping", "Yoga", "Luxury goods")
-  • "behavior" — purchase habits, device use, travel patterns (e.g. "Online shoppers", "Frequent travelers", "Small business owners")
-  • "demographic" — life stage, education, relationship status (e.g. "Parents", "College graduates", "New homeowners", "Newly engaged")
-  • "job_title" — profession or job role (e.g. "Software Engineer", "Fashion designer", "Marketing Manager")
-- Mix types within each audience — do NOT use only interests
-- Do not invent generic audiences unrelated to the product. Derive targeting from the product's category, materials/features, use cases, price/positioning, and likely buyer intent.
-- NO targeting item should appear in more than one audience — every item must be unique across ALL ${audienceCount} audiences
-- Use real Facebook Ads Manager targeting keywords that actually exist
-- Return ONLY valid JSON — no markdown, no extra text
-- Format: [{"audienceName":"Short label","targeting":[{"type":"interest|behavior|demographic|job_title","name":"keyword"},...]},...]`;
+STRICT RULES:
+
+1. KEYWORD FORMAT — keywords must be SHORT (1–4 words max), exactly as they appear in Facebook Ads Manager search. Wrong: "Frequent online fashion shoppers". Right: "Online shopping", "Fast fashion", "Women's clothing". Wrong: "People who travel internationally". Right: "International travel", "Frequent travelers".
+
+2. KEYWORD RELEVANCE — every single keyword inside an audience must directly relate to that audience's theme AND to the product. If the audience is "Women's Fashion Shoppers", every keyword must be about women's fashion or shopping. Never add unrelated fillers.
+
+3. KEYWORD TYPES — use all four types, mixed within each audience:
+   • "interest" — Facebook interest pages/topics: "Online shopping", "Leggings", "Yoga", "Luxury goods"
+   • "behavior" — FB purchase/device behaviors: "Online shoppers", "Engaged shoppers", "Small business owners"
+   • "demographic" — life stage/education: "Parents", "College graduates", "Newly engaged", "New homeowners"
+   • "job_title" — job role: "Fashion designer", "Marketing Manager", "Software Engineer"
+
+4. COVERAGE — 5 to 8 keywords per audience, drawn from at least 2 different types.
+
+5. NO DUPLICATES — no keyword may appear in more than one audience across all ${audienceCount} audiences.
+
+6. REAL FACEBOOK KEYWORDS ONLY — use common, well-known FB interest names. Prefer single-word or two-word keywords when possible ("Clothing", "Leggings", "Yoga", "Travel", "Lingerie"). Avoid inventing phrases.
+
+7. Return ONLY valid JSON — no markdown, no extra text.
+   Format: [{"audienceName":"Short label","targeting":[{"type":"interest|behavior|demographic|job_title","name":"keyword"},...]},...]`;
 
         const response = await fetch(url, {
             method: 'POST',

@@ -171,7 +171,7 @@ const facebookService = {
                     const normalizedName = normalizeTargetingName(name);
                     const sigWords = normalizedName.split(' ').filter(w => w.length > 2);
 
-                    // Helper: score a candidate pool against the target keyword
+                    // Score a candidate pool against the target keyword — returns best match or null
                     function bestFromPool(pool) {
                         // 1. Exact
                         let m = pool.find(c => normalizeTargetingName(c.name) === normalizedName);
@@ -204,30 +204,61 @@ const facebookService = {
                         return null;
                     }
 
-                    // Primary search — full keyword
-                    const data = await fetch(targetingSearchUrl(name, type, token)).then(r => r.json());
-                    const primary = Array.isArray(data.data) ? data.data : [];
-                    let match = bestFromPool(primary);
-
-                    // Secondary search — use the most distinctive single word if multi-word and no match yet
-                    if (!match && sigWords.length > 1) {
-                        // Pick the longest word (usually most specific)
-                        const pivot = sigWords.reduce((a, b) => b.length > a.length ? b : a, sigWords[0]);
-                        const data2 = await fetch(targetingSearchUrl(pivot, type, token)).then(r => r.json());
-                        const secondary = Array.isArray(data2.data) ? data2.data : [];
-                        match = bestFromPool(secondary);
+                    // Fetch + score one search query, return best match or null
+                    async function searchAndMatch(searchName, searchType) {
+                        try {
+                            const d = await fetch(targetingSearchUrl(searchName, searchType, token)).then(r => r.json());
+                            return bestFromPool(Array.isArray(d.data) ? d.data : []);
+                        } catch { return null; }
                     }
 
-                    // Last resort: first result from primary pool only if it shares ≥1 significant word
-                    if (!match && primary.length > 0) {
-                        const firstCn = normalizeTargetingName(primary[0].name);
-                        if (sigWords.some(w => firstCn.includes(w))) {
-                            match = primary[0];
-                        }
+                    // Round 1 — full keyword, declared type
+                    let match = await searchAndMatch(name, type);
+                    let matchedType = type;
+
+                    // Round 2 — multi-word: retry with longest significant word, same type
+                    if (!match && sigWords.length > 1) {
+                        const pivot = sigWords.reduce((a, b) => b.length > a.length ? b : a, sigWords[0]);
+                        match = await searchAndMatch(pivot, type);
+                    }
+
+                    // Round 3 — type fallback: behavior/demographic/life_event → also try as interest
+                    //   (Facebook often lists the same concept under a different category)
+                    if (!match && type !== 'interest') {
+                        match = await searchAndMatch(name, 'interest');
+                        if (match) matchedType = 'interest';
+                    }
+
+                    // Round 4 — interest → also try behavior (e.g. "Online shoppers" is a behavior)
+                    if (!match && type === 'interest') {
+                        match = await searchAndMatch(name, 'behavior');
+                        if (match) matchedType = 'behavior';
+                    }
+
+                    // Round 5 — pivot word + interest fallback
+                    if (!match && sigWords.length > 1 && type !== 'interest') {
+                        const pivot = sigWords.reduce((a, b) => b.length > a.length ? b : a, sigWords[0]);
+                        match = await searchAndMatch(pivot, 'interest');
+                        if (match) matchedType = 'interest';
+                    }
+
+                    // Last resort — first result from full-keyword primary search only if ≥1 word matches
+                    if (!match) {
+                        try {
+                            const d = await fetch(targetingSearchUrl(name, type, token)).then(r => r.json());
+                            const primary = Array.isArray(d.data) ? d.data : [];
+                            if (primary.length > 0) {
+                                const firstCn = normalizeTargetingName(primary[0].name);
+                                if (sigWords.some(w => firstCn.includes(w))) {
+                                    match = primary[0];
+                                    matchedType = type;
+                                }
+                            }
+                        } catch { /* skip */ }
                     }
 
                     if (match?.id) {
-                        return { id: String(match.id), name: match.name, type };
+                        return { id: String(match.id), name: match.name, type: matchedType };
                     }
                     return null;
                 }

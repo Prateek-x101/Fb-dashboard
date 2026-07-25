@@ -974,52 +974,82 @@ async function fetchWebsiteDetails(websiteUrl) {
     }
 
     const firstMatch = (regex) => {
-        const match = html.match(regex);
-        return match ? match[1].replace(/\s+/g, ' ').trim() : '';
+        const m = html.match(regex);
+        return m ? m[1].replace(/\s+/g, ' ').trim() : '';
     };
+
     const productName =
         firstMatch(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i) ||
         firstMatch(/<meta[^>]+name=["']twitter:title["'][^>]+content=["']([^"']+)["']/i) ||
         firstMatch(/<h1[^>]*>([\s\S]*?)<\/h1>/i).replace(/<[^>]+>/g, '') ||
         firstMatch(/<title[^>]*>([\s\S]*?)<\/title>/i).replace(/<[^>]+>/g, '') ||
         'Product';
+
     const metaDescription =
         firstMatch(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i) ||
         firstMatch(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i);
+
+    // Brand / store name
+    const brand =
+        firstMatch(/<meta[^>]+property=["']og:site_name["'][^>]+content=["']([^"']+)["']/i) ||
+        firstMatch(/<meta[^>]+name=["']twitter:site["'][^>]+content=["']([^"']+)["']/i) || '';
+
+    // Price
+    const priceAmount =
+        firstMatch(/<meta[^>]+property=["']product:price:amount["'][^>]+content=["']([^"']+)["']/i) ||
+        firstMatch(/["']price["']\s*:\s*["']([0-9.,]+)["']/i) || '';
+    const priceCurrency =
+        firstMatch(/<meta[^>]+property=["']product:price:currency["'][^>]+content=["']([^"']+)["']/i) || '';
+
+    // JSON-LD Product nodes
     const structuredProducts = [];
-    for (const match of html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    for (const m of html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
         try {
-            const parsed = JSON.parse(match[1].trim());
+            const parsed = JSON.parse(m[1].trim());
             const nodes = Array.isArray(parsed) ? parsed : [parsed];
             nodes.forEach(node => {
-                const type = node && node['@type'];
-                if (node && (type === 'Product' || (Array.isArray(type) && type.includes('Product')))) {
+                const t = node && node['@type'];
+                if (node && (t === 'Product' || (Array.isArray(t) && t.includes('Product')))) {
                     structuredProducts.push(node);
                 }
             });
-        } catch {
-            // Keep using visible page text when one JSON-LD block is invalid.
-        }
+        } catch { /* ignore malformed blocks */ }
     }
-    const content = html
+
+    // Pull bullet/feature list items from the page (product details, specs, benefits)
+    const listItems = [];
+    for (const m of html.matchAll(/<li[^>]*>([\s\S]*?)<\/li>/gi)) {
+        const text = m[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        if (text.length > 8 && text.length < 220) listItems.push(text);
+    }
+    const featuresBlock = listItems.length
+        ? `\nProduct features / bullet points:\n${listItems.slice(0, 25).map(l => `• ${l}`).join('\n')}`
+        : '';
+
+    // Clean page text — keep meaningful content, trim to 8 000 chars
+    const pageText = html
         .replace(/<script[\s\S]*?<\/script>/gi, '')
         .replace(/<style[\s\S]*?<\/style>/gi, '')
         .replace(/<[^>]+>/g, ' ')
         .replace(/\s+/g, ' ')
         .trim()
-        .slice(0, 12000);
+        .slice(0, 8000);
+
     const structuredDetails = structuredProducts.length
-        ? `\n\nStructured product data (JSON-LD):\n${JSON.stringify(structuredProducts.slice(0, 3), null, 2).slice(0, 12000)}`
+        ? `\nStructured product data (JSON-LD):\n${JSON.stringify(structuredProducts.slice(0, 3), null, 2).slice(0, 6000)}`
         : '';
 
     return {
         productName,
         content: [
             `URL: ${websiteUrl}`,
+            brand            ? `Brand/Store: ${brand}` : '',
             `Product name: ${productName}`,
-            metaDescription ? `Meta description: ${metaDescription}` : '',
+            metaDescription  ? `Description: ${metaDescription}` : '',
+            priceAmount      ? `Price: ${priceCurrency} ${priceAmount}`.trim() : '',
+            featuresBlock,
             structuredDetails,
-            `\nFull product page content:\n${content}`
+            `\nFull page content:\n${pageText}`
         ].filter(Boolean).join('\n')
     };
 }
