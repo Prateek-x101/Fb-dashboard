@@ -908,3 +908,124 @@ code {
   color: #ffffff !important;
 }
 
+
+/* ── Creative Ad Card — two-column layout ──────────────────────────────── */
+.creative-card-body {
+    display: grid;
+    grid-template-columns: 1fr 240px;
+    gap: 16px;
+    align-items: start;
+}
+
+.creative-left-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+}
+
+.creative-preview-panel {
+    position: relative;
+    background: #000;
+    border-radius: 12px;
+    overflow: hidden;
+    min-height: 380px;
+}
+
+.creative-media-preview {
+    width: 100%;
+    min-height: 380px;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.no-media-msg {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    color: rgba(255,255,255,0.35);
+    font-size: 0.88rem;
+    text-align: center;
+}
+.no-media-msg span { font-size: 2.2rem; }
+
+.creative-video-controls {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 14px 12px;
+    background: linear-gradient(transparent, rgba(0,0,0,0.82));
+    z-index: 3;
+}
+
+.ctrl-btn {
+    background: rgba(255,255,255,0.18);
+    border: none;
+    color: #fff;
+    border-radius: 50%;
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 1rem;
+    transition: background 0.2s;
+    flex-shrink: 0;
+}
+.ctrl-btn:hover { background: rgba(255,255,255,0.35); }
+
+/* Thumbnail section (left panel) */
+.creative-thumbnail-section {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 8px;
+    padding: 10px 12px;
+}
+
+.creative-thumb-img-wrap {
+    position: relative;
+    margin-top: 8px;
+    border-radius: 6px;
+    overflow: hidden;
+    line-height: 0;
+}
+.creative-thumb-preview-img {
+    width: 100%;
+    max-height: 130px;
+    object-fit: cover;
+    display: block;
+    border-radius: 6px;
+}
+.creative-thumb-img-wrap .creative-thumbnail-remove {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    padding: 2px 7px;
+    font-size: 0.7rem;
+    background: rgba(239,35,60,0.88);
+    border: none;
+    border-radius: 4px;
+    color: #fff;
+    cursor: pointer;
+    line-height: 1.5;
+}
+
+@media (max-width: 700px) {
+    .creative-card-body {
+        grid-template-columns: 1fr;
+    }
+    .creative-preview-panel {
+        min-height: 260px;
+    }
+    .creative-media-preview {
+        min-height: 260px;
+    }
+}

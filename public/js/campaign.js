@@ -940,7 +940,6 @@
                 // Auto-extract thumbnail from video frame
                 if (isVid) {
                     try {
-                        window.AppController.showToast('Extracting video thumbnail...', 'info');
                         const frameBlob = await this.extractVideoFrame(file);
                         if (frameBlob) {
                             const thumbName = file.name.replace(/\.[^/.]+$/, '_thumb.jpg');
@@ -1035,9 +1034,32 @@
             const preview = card.querySelector('.creative-media-preview');
             if (!preview || !item.previewUrl) return;
             const isVideo = /\.(mp4|mov|avi|webm)$/i.test(item.mediaFile || '');
-            preview.innerHTML = isVideo
-                ? `<video src="${item.previewUrl}" controls style="max-width:100%;max-height:160px;border-radius:8px;"></video>`
-                : `<img src="${item.previewUrl}" alt="${this.escapeHtml(item.mediaFile || 'Ad media')}" style="max-width:100%;max-height:160px;border-radius:8px;">`;
+            const controlsBar = card.querySelector('.creative-video-controls');
+
+            if (isVideo) {
+                preview.innerHTML = `<video src="${item.previewUrl}" muted playsinline style="position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;display:block;border-radius:0;"></video>`;
+                if (controlsBar) controlsBar.style.display = 'flex';
+
+                const video = preview.querySelector('video');
+                const playBtn = controlsBar?.querySelector('.ctrl-play-pause');
+                const muteBtn = controlsBar?.querySelector('.ctrl-mute');
+
+                if (playBtn && video) {
+                    playBtn.addEventListener('click', () => {
+                        if (video.paused) { video.play(); playBtn.textContent = '⏸'; }
+                        else { video.pause(); playBtn.textContent = '▶'; }
+                    });
+                }
+                if (muteBtn && video) {
+                    muteBtn.addEventListener('click', () => {
+                        video.muted = !video.muted;
+                        muteBtn.textContent = video.muted ? '🔇' : '🔊';
+                    });
+                }
+            } else {
+                preview.innerHTML = `<img src="${item.previewUrl}" alt="${this.escapeHtml(item.mediaFile || 'Ad media')}" style="position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;display:block;border-radius:0;">`;
+                if (controlsBar) controlsBar.style.display = 'none';
+            }
         },
 
         renderCreativeAds: function() {
@@ -1053,26 +1075,34 @@
                 card.setAttribute('data-media', ad.media || '');
                 card.setAttribute('data-media-file', ad.mediaFile || '');
                 card.style.background = 'rgba(0,0,0,0.15)';
-                
+
                 const isVideo = /\.(mp4|mov|avi|webm)$/i.test(ad.mediaFile || '');
-                let thumbnailHtml = '';
-                if (isVideo) {
-                    thumbnailHtml = `
-                        <div class="creative-thumbnail-section mt-2 mb-2" style="border-top:1px solid rgba(255,255,255,0.1); padding-top:10px;">
-                            <div class="flex justify-between align-center mb-1">
-                                <span style="font-size:0.85rem; color:var(--text-secondary);">🖼️ Custom Video Thumbnail (Optional)</span>
-                                <label class="btn btn-secondary btn-xs" style="cursor:pointer; font-size:0.75rem; padding: 2px 6px;">
-                                    📁 Upload Thumbnail
-                                    <input type="file" class="creative-thumbnail-input" accept="image/*" style="display:none;">
-                                </label>
-                            </div>
-                            <div class="creative-thumbnail-preview flex align-center justify-between mt-1" style="${ad.thumbnailFile ? 'display:flex;' : 'display:none;'}">
-                                <span class="creative-thumbnail-filename" style="font-size:0.8rem; color:var(--accent-cyan);">📎 ${this.escapeHtml(ad.thumbnailFile || '')}</span>
-                                <button type="button" class="btn btn-link btn-xs creative-thumbnail-remove" style="color:var(--danger-color); padding:0; margin-left:10px; font-size:0.75rem; text-decoration:none;">Remove</button>
-                            </div>
+
+                // Thumbnail preview image (if set)
+                const thumbImgHtml = ad.thumbnailPreviewUrl
+                    ? `<div class="creative-thumb-img-wrap">
+                           <img src="${ad.thumbnailPreviewUrl}" alt="Thumbnail" class="creative-thumb-preview-img">
+                           <button type="button" class="creative-thumbnail-remove" title="Remove thumbnail">✖</button>
+                       </div>`
+                    : (ad.thumbnailFile
+                        ? `<div class="creative-thumbnail-preview flex align-center justify-between mt-1">
+                               <span class="creative-thumbnail-filename" style="font-size:0.78rem;color:var(--accent-cyan);">📎 ${this.escapeHtml(ad.thumbnailFile)}</span>
+                               <button type="button" class="creative-thumbnail-remove" style="background:none;border:none;color:var(--danger-color);cursor:pointer;font-size:0.78rem;">Remove</button>
+                           </div>`
+                        : '');
+
+                const thumbnailHtml = isVideo ? `
+                    <div class="creative-thumbnail-section">
+                        <div class="flex justify-between align-center mb-1">
+                            <span style="font-size:0.82rem;color:var(--text-secondary);">🖼️ Thumbnail</span>
+                            <label class="btn btn-secondary btn-xs" style="cursor:pointer;">
+                                📁 ${ad.thumbnailFile ? 'Change' : 'Upload'}
+                                <input type="file" class="creative-thumbnail-input" accept="image/*" style="display:none;">
+                            </label>
                         </div>
-                    `;
-                }
+                        ${thumbImgHtml}
+                    </div>
+                ` : '';
 
                 card.innerHTML = `
                     <div class="flex justify-between align-center mb-2">
@@ -1084,13 +1114,28 @@
                             <button type="button" class="remove-card-btn creative-remove-ad"><span>✖</span></button>
                         </div>
                     </div>
-                    <div class="creative-media-preview mb-2" style="min-height:${ad.mediaFile ? '0' : '30px'};">
-                        ${ad.mediaFile ? `<span style="color:var(--text-secondary);">📎 ${this.escapeHtml(ad.mediaFile)}</span>` : '<span style="color:var(--text-secondary);">No media selected yet</span>'}
+                    <div class="creative-card-body">
+                        <div class="creative-left-panel">
+                            ${thumbnailHtml}
+                            <div style="display:flex;flex-direction:column;flex:1;">
+                                <label>Primary Text *</label>
+                                <textarea class="form-control creative-primary-text" rows="10" placeholder="Use Auto-fill from Website or write the primary text here...">${this.escapeHtml(ad.primaryText || '')}</textarea>
+                            </div>
+                        </div>
+                        <div class="creative-preview-panel">
+                            <div class="creative-media-preview">
+                                ${ad.mediaFile
+                                    ? ''
+                                    : '<div class="no-media-msg"><span>📁</span><p>No media selected</p></div>'}
+                            </div>
+                            <div class="creative-video-controls" style="display:none;">
+                                <button type="button" class="ctrl-btn ctrl-play-pause" title="Play / Pause">▶</button>
+                                <button type="button" class="ctrl-btn ctrl-mute" title="Mute / Unmute">🔇</button>
+                            </div>
+                        </div>
                     </div>
-                    ${thumbnailHtml}
-                    <label>Primary Text *</label>
-                    <textarea class="form-control creative-primary-text" rows="7" placeholder="Use Auto-fill from Website or write the primary text here...">${this.escapeHtml(ad.primaryText || '')}</textarea>
                 `;
+
                 container.appendChild(card);
                 if (ad.previewUrl) this.setCreativePreview(card, ad);
 
@@ -1101,43 +1146,37 @@
                 card.querySelector('.creative-primary-text').addEventListener('input', e => {
                     this.campaignData.step3.ads[index].primaryText = e.target.value;
                 });
-                
+
                 if (isVideo) {
                     const thumbInput = card.querySelector('.creative-thumbnail-input');
-                    const removeThumbBtn = card.querySelector('.creative-thumbnail-remove');
-                    
+                    const removeThumbBtns = card.querySelectorAll('.creative-thumbnail-remove');
+
                     if (thumbInput) {
                         thumbInput.addEventListener('change', async e => {
                             const file = e.target.files[0];
-                            if (file) {
-                                const formData = new FormData();
-                                formData.append('file', file);
-                                try {
-                                    window.AppController.showToast('Uploading custom thumbnail...', 'info');
-                                    const response = await window.API.uploadMedia(formData);
-                                    
-                                    this.campaignData.step3.ads[index].thumbnail = response.filePath;
-                                    this.campaignData.step3.ads[index].thumbnailFile = response.filename;
-                                    this.campaignData.step3.ads[index].thumbnailPreviewUrl = URL.createObjectURL(file);
-                                    
-                                    window.AppController.showToast('Custom thumbnail uploaded successfully! ✅', 'success');
-                                    this.renderCreativeAds();
-                                } catch (err) {
-                                    window.AppController.showToast(`Thumbnail upload failed: ${err.message}`, 'danger');
-                                }
+                            if (!file) return;
+                            const formData = new FormData();
+                            formData.append('file', file);
+                            try {
+                                const response = await window.API.uploadMedia(formData);
+                                this.campaignData.step3.ads[index].thumbnail = response.filePath;
+                                this.campaignData.step3.ads[index].thumbnailFile = response.filename;
+                                this.campaignData.step3.ads[index].thumbnailPreviewUrl = URL.createObjectURL(file);
+                                this.renderCreativeAds();
+                            } catch (err) {
+                                window.AppController.showToast(`Thumbnail upload failed: ${err.message}`, 'danger');
                             }
                         });
                     }
-                    
-                    if (removeThumbBtn) {
-                        removeThumbBtn.addEventListener('click', () => {
+
+                    removeThumbBtns.forEach(btn => {
+                        btn.addEventListener('click', () => {
                             this.campaignData.step3.ads[index].thumbnail = '';
                             this.campaignData.step3.ads[index].thumbnailFile = '';
                             this.campaignData.step3.ads[index].thumbnailPreviewUrl = '';
-                            window.AppController.showToast('Custom thumbnail removed', 'info');
                             this.renderCreativeAds();
                         });
-                    }
+                    });
                 }
             });
         },
