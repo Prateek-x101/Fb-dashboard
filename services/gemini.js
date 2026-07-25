@@ -103,7 +103,7 @@ ${baseText}`;
             ? `\nKeywords already used in other audiences — DO NOT repeat any of these: ${alreadyUsedKeywords.join(', ')}`
             : '';
 
-        const prompt = `You are a Facebook Ads targeting expert. Analyze the product/service from the website information below and generate ${numAudiences} DISTINCT Facebook interest-based audience segments.
+        const prompt = `You are a Facebook Ads targeting expert. Analyze the product/service from the website information below and generate ${numAudiences} DISTINCT audience segments using Facebook's full targeting options.
 
 Website info:
 ${websiteContent}
@@ -111,11 +111,17 @@ ${usedList}
 
 Rules:
 - Generate exactly ${numAudiences} audience objects
-- Each audience targets a clearly different interest/lifestyle group relevant to this product
-- Each audience must contain 5 to 8 Facebook interest keywords (real targeting categories)
-- NO keyword should appear in more than one audience — every keyword must be unique across ALL ${numAudiences} audiences
-- Return ONLY valid JSON — no extra text, no markdown code fences
-- Format: [{"audienceName":"Short label","interests":["keyword1","keyword2",...]},...]`;
+- Each audience targets a clearly different customer profile relevant to this product
+- Each audience must contain 5 to 8 targeting items drawn from multiple types:
+  • "interest" — hobbies, pages, topics (e.g. "Online shopping", "Yoga", "Luxury goods")
+  • "behavior" — purchase habits, device use, travel patterns (e.g. "Online shoppers", "Frequent travelers", "Small business owners")
+  • "demographic" — life stage, education, relationship status (e.g. "Parents", "College graduates", "New homeowners", "Newly engaged")
+  • "job_title" — profession or job role (e.g. "Software Engineer", "Fashion designer", "Marketing Manager")
+- Mix types within each audience — do NOT use only interests
+- NO targeting item should appear in more than one audience — every item must be unique across ALL ${numAudiences} audiences
+- Use real Facebook Ads Manager targeting keywords that actually exist
+- Return ONLY valid JSON — no markdown, no extra text
+- Format: [{"audienceName":"Short label","targeting":[{"type":"interest|behavior|demographic|job_title","name":"keyword"},...]},...]`;
 
         const response = await fetch(url, {
             method: 'POST',

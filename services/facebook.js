@@ -106,6 +106,58 @@ const facebookService = {
         return handleResponse(response);
     },
 
+    // Search interests, behaviors, demographics, life events and job titles in parallel
+    async searchAllTargeting(query, token) {
+        const searches = [
+            { url: `${BASE_URL}/search?type=adinterest&q=${encodeURIComponent(query)}&access_token=${token}`, type: 'interest' },
+            { url: `${BASE_URL}/search?type=adTargetingCategory&class=behaviors&q=${encodeURIComponent(query)}&access_token=${token}`, type: 'behavior' },
+            { url: `${BASE_URL}/search?type=adTargetingCategory&class=demographics&q=${encodeURIComponent(query)}&access_token=${token}`, type: 'demographic' },
+            { url: `${BASE_URL}/search?type=adTargetingCategory&class=life_events&q=${encodeURIComponent(query)}&access_token=${token}`, type: 'life_event' },
+            { url: `${BASE_URL}/search?type=adworkposition&q=${encodeURIComponent(query)}&access_token=${token}`, type: 'job_title' }
+        ];
+        const settled = await Promise.allSettled(
+            searches.map(s =>
+                fetch(s.url)
+                    .then(r => r.json())
+                    .then(data => (data.data || []).map(item => ({ id: item.id, name: item.name, type: s.type })))
+            )
+        );
+        const results = [];
+        settled.forEach(s => { if (s.status === 'fulfilled') results.push(...s.value); });
+        return results;
+    },
+
+    // Resolve a mixed array of {id?, name, type} items to full {id, name, type} using the right FB endpoint per type
+    async resolveAllTargeting(items, token) {
+        const resolved = items.filter(i => i.id).map(i => ({ id: i.id, name: i.name, type: i.type || 'interest' }));
+        const unresolved = items.filter(i => !i.id);
+
+        const typeToSearchUrl = (name, type) => {
+            const q = encodeURIComponent(name);
+            if (type === 'behavior')    return `${BASE_URL}/search?type=adTargetingCategory&class=behaviors&q=${q}&access_token=${token}`;
+            if (type === 'demographic') return `${BASE_URL}/search?type=adTargetingCategory&class=demographics&q=${q}&access_token=${token}`;
+            if (type === 'life_event')  return `${BASE_URL}/search?type=adTargetingCategory&class=life_events&q=${q}&access_token=${token}`;
+            if (type === 'job_title')   return `${BASE_URL}/search?type=adworkposition&q=${q}&access_token=${token}`;
+            return `${BASE_URL}/search?type=adinterest&q=${q}&access_token=${token}`;
+        };
+
+        const promises = unresolved.map(async item => {
+            try {
+                const url = typeToSearchUrl(item.name, item.type || 'interest');
+                const data = await fetch(url).then(r => r.json());
+                if (data.data && data.data.length > 0) {
+                    const match = data.data.find(d => d.name.toLowerCase() === item.name.toLowerCase()) || data.data[0];
+                    return { id: match.id, name: match.name, type: item.type || 'interest' };
+                }
+            } catch (e) { /* skip */ }
+            return null;
+        });
+        const newlyResolved = (await Promise.allSettled(promises))
+            .filter(r => r.status === 'fulfilled' && r.value)
+            .map(r => r.value);
+        return [...resolved, ...newlyResolved];
+    },
+
     async getAdAccounts(token) {
         const url = `${BASE_URL}/me/adaccounts?fields=name,account_id,account_status,currency&access_token=${token}`;
         const response = await fetch(url, { method: 'GET' });

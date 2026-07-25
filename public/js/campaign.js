@@ -17,6 +17,15 @@
         _accountEnhancements: {},   // { [accountId]: { key: bool, ... } }
         _currentAccountId: null,    // track which account is active
 
+        // Colour/label metadata for each targeting type
+        TYPE_META: {
+            interest:    { label: 'Interest',    color: '#4361ee' },
+            behavior:    { label: 'Behavior',    color: '#f77f00' },
+            demographic: { label: 'Demographic', color: '#2d9e5f' },
+            life_event:  { label: 'Life Event',  color: '#9b5de5' },
+            job_title:   { label: 'Job Title',   color: '#e63946' }
+        },
+
         init: function() {
             this.bindEvents();
             this.setDefaultDateTime();
@@ -758,13 +767,15 @@
                             dropdown.innerHTML = '';
                             if (Array.isArray(results) && results.length > 0) {
                                 results.forEach(r => {
+                                    const type = r.type || 'interest';
+                                    const meta = this.TYPE_META[type] || this.TYPE_META.interest;
                                     const item = document.createElement('div');
-                                    item.style.cssText = 'padding:0.65rem 1rem; cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.05);';
-                                    item.textContent = r.name || r;
+                                    item.style.cssText = 'padding:0.55rem 1rem; cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.05); display:flex; align-items:center; gap:0.5rem;';
+                                    item.innerHTML = `<span style="font-size:0.6rem;padding:1px 6px;border-radius:4px;background:${meta.color}25;color:${meta.color};white-space:nowrap;flex-shrink:0;">${meta.label}</span><span style="font-size:0.85rem;">${r.name || r}</span>`;
                                     item.addEventListener('mouseenter', () => item.style.background = 'rgba(67,97,238,0.2)');
                                     item.addEventListener('mouseleave', () => item.style.background = 'transparent');
                                     item.addEventListener('click', () => {
-                                        this._addInterestTag(card, idx, r.id || '', r.name || r);
+                                        this._addInterestTag(card, idx, r.id || '', r.name || r, type);
                                         dropdown.style.display = 'none';
                                         e.target.value = '';
                                     });
@@ -783,32 +794,30 @@
             });
         },
 
-        _addInterestTag: function(card, idx, id, name) {
+        _addInterestTag: function(card, idx, id, name, type = 'interest') {
             const tc = card.querySelector(`.interests-tags-${idx}`);
             const input = tc?.querySelector('.interest-search');
             if (!tc || !input) return;
+            const meta = this.TYPE_META[type] || this.TYPE_META.interest;
             const tag = document.createElement('span');
             tag.className = 'tag interest-tag';
             tag.setAttribute('data-id', id);
             tag.setAttribute('data-value', name);
-            tag.innerHTML = `${name} <span class="tag-remove" onclick="this.parentElement.remove()">✖</span>`;
+            tag.setAttribute('data-type', type);
+            tag.innerHTML = `<span style="font-size:0.58rem;padding:1px 5px;border-radius:3px;background:${meta.color}25;color:${meta.color};margin-right:3px;">${meta.label}</span>${name} <span class="tag-remove" onclick="this.parentElement.remove()">✖</span>`;
             tc.insertBefore(tag, input);
         },
 
-        _populateAudienceCard: function(card, idx, interests) {
+        _populateAudienceCard: function(card, idx, items) {
             const tc = card.querySelector(`.interests-tags-${idx}`);
             if (!tc) return;
             tc.querySelectorAll('.interest-tag').forEach(t => t.remove());
             const input = tc.querySelector('.interest-search');
-            interests.forEach(kw => {
-                const name = typeof kw === 'string' ? kw : (kw.name || kw);
-                const id = typeof kw === 'object' ? (kw.id || '') : '';
-                const tag = document.createElement('span');
-                tag.className = 'tag interest-tag';
-                tag.setAttribute('data-id', id);
-                tag.setAttribute('data-value', name);
-                tag.innerHTML = `${name} <span class="tag-remove" onclick="this.parentElement.remove()">✖</span>`;
-                tc.insertBefore(tag, input);
+            items.forEach(item => {
+                const name = typeof item === 'string' ? item : (item.name || item);
+                const id   = typeof item === 'object' ? (item.id   || '') : '';
+                const type = typeof item === 'object' ? (item.type || 'interest') : 'interest';
+                this._addInterestTag({ querySelector: sel => tc.closest('.audience-card')?.querySelector(sel) ?? tc.parentElement?.querySelector(sel) }, idx, id, name, type);
             });
         },
 

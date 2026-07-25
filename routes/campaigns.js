@@ -197,7 +197,6 @@ router.get('/interests', async (req, res) => {
         const { q } = req.query;
         let token = req.query.token;
 
-        // Auto-lookup token from first available account
         if (!token) {
             const storage = getStorage();
             const first = (storage.accounts || [])[0];
@@ -208,10 +207,11 @@ router.get('/interests', async (req, res) => {
         if (!q) return res.status(400).json({ error: 'Missing query' });
         if (!token) return res.status(400).json({ error: 'No account token available' });
 
-        const result = await facebookService.searchInterests(q, token);
-        res.json(result.data || []);
+        // Search across interests, behaviors, demographics, life events and job titles
+        const results = await facebookService.searchAllTargeting(q, token);
+        res.json(results);
     } catch (error) {
-        res.status(500).json({ error: 'Failed to search interests', details: error.message });
+        res.status(500).json({ error: 'Failed to search targeting', details: error.message });
     }
 });
 
@@ -262,45 +262,47 @@ router.post('/ai-audiences', async (req, res) => {
         const token = activeAccount.accessToken || settings.facebookAccessToken;
 
         if (token) {
+            const typeToSearchUrl = (name, type) => {
+                const q = encodeURIComponent(name);
+                if (type === 'behavior')    return `https://graph.facebook.com/v25.0/search?type=adTargetingCategory&class=behaviors&q=${q}&access_token=${token}`;
+                if (type === 'demographic') return `https://graph.facebook.com/v25.0/search?type=adTargetingCategory&class=demographics&q=${q}&access_token=${token}`;
+                if (type === 'life_event')  return `https://graph.facebook.com/v25.0/search?type=adTargetingCategory&class=life_events&q=${q}&access_token=${token}`;
+                if (type === 'job_title')   return `https://graph.facebook.com/v25.0/search?type=adworkposition&q=${q}&access_token=${token}`;
+                return `https://graph.facebook.com/v25.0/search?type=adinterest&q=${q}&access_token=${token}`;
+            };
+
             for (const aud of audiences) {
-                if (!aud.interests || !Array.isArray(aud.interests)) continue;
-                const validatedInterests = [];
-                for (const interestName of aud.interests) {
-                    const name = typeof interestName === 'string' ? interestName : interestName.name;
+                // Normalise: support new `targeting` array or legacy `interests` array from Gemini
+                const rawItems = Array.isArray(aud.targeting) && aud.targeting.length > 0
+                    ? aud.targeting
+                    : (aud.interests || []).map(i => ({ name: typeof i === 'string' ? i : i.name, type: 'interest' }));
+
+                if (!rawItems.length) continue;
+
+                const validatedItems = [];
+                for (const item of rawItems) {
+                    const name = item.name;
+                    const type = item.type || 'interest';
                     if (!name) continue;
                     try {
-                        const searchUrl = `https://graph.facebook.com/v25.0/search?type=adinterest&q=${encodeURIComponent(name)}&access_token=${token}`;
+                        const searchUrl = typeToSearchUrl(name, type);
                         const searchRes = await fetchSafeExternal(searchUrl);
                         if (searchRes.ok) {
                             const searchData = await searchRes.json();
                             if (searchData.data && searchData.data.length > 0) {
-                                // Pick exact match first, fallback to first result
                                 const match = searchData.data.find(d => d.name.toLowerCase() === name.toLowerCase()) || searchData.data[0];
-                                // Validate: try a lightweight targeting validation call
-                                const validateUrl = `https://graph.facebook.com/v25.0/act_${activeAccount.accountId}/targeting_validation?targeting_spec=${encodeURIComponent(JSON.stringify({ flexible_spec: [{ interests: [{ id: match.id, name: match.name }] }] }))}&access_token=${token}`;
-                                const valRes = await fetch(validateUrl);
-                                if (valRes.ok) {
-                                    const valData = await valRes.json();
-                                    // If validation returns success (no error), interest is usable
-                                    if (valData && !valData.error) {
-                                        validatedInterests.push({ id: match.id, name: match.name });
-                                    } else {
-                                        console.warn(`Interest "${name}" failed targeting validation, skipping`);
-                                    }
-                                } else {
-                                    // Validation endpoint failed — still include from search (safer to include than exclude)
-                                    validatedInterests.push({ id: match.id, name: match.name });
-                                }
+                                validatedItems.push({ id: match.id, name: match.name, type });
                             } else {
-                                console.warn(`Interest "${name}" not found in Facebook, skipping`);
+                                console.warn(`Targeting "${name}" (${type}) not found in Facebook, skipping`);
                             }
                         }
                     } catch (e) {
-                        console.warn(`Could not validate interest "${name}":`, e.message);
+                        console.warn(`Could not validate targeting "${name}":`, e.message);
                     }
                 }
-                aud.interests = validatedInterests;
-                console.log(`Audience "${aud.audienceName}": ${validatedInterests.length} valid interests out of original`);
+                aud.targeting = validatedItems;
+                delete aud.interests;
+                console.log(`Audience "${aud.audienceName}": ${validatedItems.length} validated targeting items`);
             }
         }
 
@@ -604,22 +606,34 @@ router.post('/create', async (req, res) => {
             };
             if (genders.length) targeting.genders = genders;
             if (Object.keys(excludedGeo).length > 0) targeting.excluded_geo_locations = excludedGeo;
-            if (audience.interests && audience.interests.length > 0) {
-                // If any interest is missing an ID, resolve it via search
-                const interestsToResolve = audience.interests.filter(i => !i.id).map(i => i.name);
-                let resolvedInterests = audience.interests.filter(i => i.id).map(i => ({ id: i.id, name: i.name }));
-                
-                if (interestsToResolve.length > 0) {
-                    try {
-                        const newlyResolved = await facebookService.resolveInterestNames(interestsToResolve, token);
-                        resolvedInterests = [...resolvedInterests, ...newlyResolved];
-                    } catch (resolveErr) {
-                        console.error('Failed to resolve interest names:', resolveErr.message);
-                    }
-                }
-                
-                if (resolvedInterests.length > 0) {
-                    targeting.flexible_spec = [{ interests: resolvedInterests }];
+            // Support new `targeting` array (mixed types) and legacy `interests` array
+            const rawTargeting = Array.isArray(audience.targeting) && audience.targeting.length > 0
+                ? audience.targeting
+                : (audience.interests || []).map(i => ({ ...i, type: 'interest' }));
+
+            if (rawTargeting.length > 0) {
+                try {
+                    const resolvedTargeting = await facebookService.resolveAllTargeting(rawTargeting, token);
+
+                    // Map each item to the correct Facebook flexible_spec field name
+                    const typeToField = {
+                        interest:    'interests',
+                        behavior:    'behaviors',
+                        demographic: 'demographics',
+                        life_event:  'life_events',
+                        job_title:   'work_positions',
+                        employer:    'work_employers',
+                        education_major: 'education_majors'
+                    };
+                    const flexSpec = {};
+                    resolvedTargeting.forEach(item => {
+                        const field = typeToField[item.type] || 'interests';
+                        if (!flexSpec[field]) flexSpec[field] = [];
+                        flexSpec[field].push({ id: item.id, name: item.name });
+                    });
+                    if (Object.keys(flexSpec).length > 0) targeting.flexible_spec = [flexSpec];
+                } catch (resolveErr) {
+                    console.error('Failed to resolve targeting items:', resolveErr.message);
                 }
             }
             if (audience.customAudiencesInclude?.length) targeting.custom_audiences = audience.customAudiencesInclude.map(id => ({ id }));
