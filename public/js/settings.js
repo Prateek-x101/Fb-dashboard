@@ -636,16 +636,17 @@
 
                 const failedTag = isFailed ? ' <span style="color:var(--danger-color);font-size:0.75rem;">(failed)</span>' : '';
 
-                if (isCreditLine) {
-                    // ── CREDIT LINE ACCOUNT ──────────────────────────────────
+                // Show "Remaining" hero for credit line accounts OR any account with a spend cap
+                if (isCreditLine || hasSpendCap) {
+                    // ── CREDIT LINE / SPEND-CAP ACCOUNT ─────────────────────
                     // Hero: Remaining (not balance)
                     rows += `<div style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
-                        <div style="color:var(--text-secondary);font-size:0.76rem;margin-bottom:3px;">Remaining</div>
+                        <div style="color:var(--text-secondary);font-size:0.76rem;margin-bottom:3px;">Current Balance</div>
                         <div style="font-size:1.25rem;font-weight:700;color:${remainingColor};">${cur} ${remainingFmt || '—'}${failedTag}</div>
-                        <div style="font-size:0.72rem;color:var(--text-secondary);margin-top:2px;">of ${cur} ${fmt(data.spend_cap)} spending limit</div>
-                        ${hasSpendCap ? `<div style="height:5px;background:rgba(255,255,255,0.1);border-radius:3px;margin-top:5px;overflow:hidden;">
+                        <div style="font-size:0.72rem;color:var(--text-secondary);margin-top:2px;">Remaining of ${cur} ${fmt(data.spend_cap)} spending limit</div>
+                        <div style="height:5px;background:rgba(255,255,255,0.1);border-radius:3px;margin-top:5px;overflow:hidden;">
                             <div style="height:100%;background:${remainingColor};border-radius:3px;width:${Math.max(0,Math.min(100,(remaining/(spendCapRaw/100))*100)).toFixed(1)}%;transition:width 0.4s;"></div>
-                        </div>` : ''}
+                        </div>
                     </div>`;
 
                     // Current Spend (today)
