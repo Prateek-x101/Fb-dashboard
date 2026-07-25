@@ -279,6 +279,26 @@
                 fileInput.addEventListener('change', (e) => { if (e.target.files.length) this.handleMediaUpload(Array.from(e.target.files)); e.target.value = ''; });
             }
 
+            // Campaign media URL list management
+            const btnCampaignAddRow = document.getElementById('btn-campaign-add-url-row');
+            const campaignUrlList = document.getElementById('campaign-media-url-list');
+            if (btnCampaignAddRow && campaignUrlList) {
+                btnCampaignAddRow.addEventListener('click', () => {
+                    const row = document.createElement('div');
+                    row.className = 'flex gap-2 mb-1 campaign-video-url-row';
+                    row.style.cssText = 'display:flex; gap:8px; margin-bottom:8px; align-items:center;';
+                    row.innerHTML = `
+                        <input type="text" class="form-control campaign-video-url-input" placeholder="Or paste video link (FB Ads Library, YouTube, Insta, Pinterest…)" style="flex:1;">
+                        <button type="button" class="btn btn-secondary btn-sm btn-remove-campaign-url-row" style="padding:4px 8px;">🗑️</button>
+                    `;
+                    campaignUrlList.appendChild(row);
+
+                    row.querySelector('.btn-remove-campaign-url-row').addEventListener('click', () => {
+                        row.remove();
+                    });
+                });
+            }
+
             const btnCampaignMediaDownload = document.getElementById('btn-campaign-media-url-download');
             if (btnCampaignMediaDownload) {
                 btnCampaignMediaDownload.addEventListener('click', () => this.handleVideoUrlDownload());
@@ -769,54 +789,77 @@
         },
 
         handleVideoUrlDownload: async function() {
-            const urlInput = document.getElementById('campaign-media-url-input');
+            const urlListContainer = document.getElementById('campaign-media-url-list');
             const canvasSelect = document.getElementById('campaign-media-url-canvas');
             const btnDownload = document.getElementById('btn-campaign-media-url-download');
             
-            if (!urlInput || !btnDownload) return;
+            if (!urlListContainer || !btnDownload) return;
             
-            const url = urlInput.value.trim();
+            const inputs = urlListContainer.querySelectorAll('.campaign-video-url-input');
+            const urls = Array.from(inputs).map(inp => inp.value.trim()).filter(Boolean);
             const canvasType = canvasSelect?.value || 'original';
             
-            if (!url) {
-                window.AppController.showToast('Please paste a video URL.', 'warning');
+            if (!urls.length) {
+                window.AppController.showToast('Please paste at least one video URL.', 'warning');
                 return;
             }
             
             try {
                 btnDownload.disabled = true;
-                btnDownload.textContent = '⏳ Downloading & Clean...';
-                window.AppController.showToast('Downloading and cleaning video... 📥', 'info');
+                btnDownload.textContent = '⏳ Downloading...';
+                window.AppController.showToast(`Downloading and cleaning ${urls.length} video(s) in parallel... 📥`, 'info');
                 
-                const result = await window.API.downloadVideoFromUrl(url, canvasType);
-                
-                const item = {
-                    mediaFile: result.filename,
-                    media: result.filePath,
-                    previewUrl: '/uploads/' + result.filename
-                };
-                
-                // Add to Step 3 creatives
-                const blankIndex = this.campaignData.step3.ads.findIndex(ad => !ad.media && !ad.mediaFile);
-                if (blankIndex !== -1) {
-                    this.campaignData.step3.ads[blankIndex] = {
-                        ...this.campaignData.step3.ads[blankIndex],
-                        media: item.media,
-                        mediaFile: item.mediaFile,
-                        previewUrl: item.previewUrl
-                    };
-                } else {
-                    this.addCreativeAd(item, false);
-                }
+                const promises = urls.map(async (url) => {
+                    const result = await window.API.downloadVideoFromUrl(url, canvasType);
+                    return result;
+                });
+
+                const results = await Promise.allSettled(promises);
+                let successCount = 0;
+
+                results.forEach((res) => {
+                    if (res.status === 'fulfilled' && res.value) {
+                        const val = res.value;
+                        successCount++;
+                        const item = {
+                            mediaFile: val.filename,
+                            media: val.filePath,
+                            previewUrl: '/uploads/' + val.filename
+                        };
+                        
+                        // Add to Step 3 creatives
+                        const blankIndex = this.campaignData.step3.ads.findIndex(ad => !ad.media && !ad.mediaFile);
+                        if (blankIndex !== -1) {
+                            this.campaignData.step3.ads[blankIndex] = {
+                                ...this.campaignData.step3.ads[blankIndex],
+                                media: item.media,
+                                mediaFile: item.mediaFile,
+                                previewUrl: item.previewUrl
+                            };
+                        } else {
+                            this.addCreativeAd(item, false);
+                        }
+                    } else {
+                        console.error('Video download failed:', res.reason);
+                    }
+                });
                 
                 this.renderCreativeAds();
-                urlInput.value = '';
-                window.AppController.showToast('Video downloaded, re-encoded, and added successfully! 📹', 'success');
+                
+                // Clear inputs back to single empty row
+                urlListContainer.innerHTML = `
+                    <div class="flex gap-2 mb-1 campaign-video-url-row" style="display:flex; gap:8px; margin-bottom:8px; align-items:center;">
+                        <input type="text" class="form-control campaign-video-url-input" placeholder="Or paste video link (FB Ads Library, YouTube, Insta, Pinterest…)" style="flex:1;">
+                        <button type="button" class="btn btn-secondary btn-sm btn-remove-campaign-url-row" style="display:none; padding:4px 8px;">🗑️</button>
+                    </div>
+                `;
+
+                window.AppController.showToast(`Successfully processed ${successCount} of ${urls.length} video(s)! 📹`, 'success');
             } catch (err) {
                 window.AppController.showToast('Download failed: ' + err.message, 'error');
             } finally {
                 btnDownload.disabled = false;
-                btnDownload.textContent = '📥 Download & Clean';
+                btnDownload.textContent = '📥 Download & Clean All';
             }
         },
 

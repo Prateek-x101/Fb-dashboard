@@ -56,48 +56,90 @@
                 });
             }
 
+            // Add row button
+            const btnAddRow = document.getElementById('btn-shopify-add-url-row');
+            const urlListContainer = document.getElementById('shopify-import-video-url-list');
+            if (btnAddRow && urlListContainer) {
+                btnAddRow.addEventListener('click', () => {
+                    const row = document.createElement('div');
+                    row.className = 'flex gap-2 mb-1 shopify-video-url-row';
+                    row.style.cssText = 'display:flex; gap:8px; margin-bottom:8px; align-items:center;';
+                    row.innerHTML = `
+                        <input type="text" class="form-control shopify-video-url-input" placeholder="Paste link (FB Ads Library, YouTube, Insta, Pinterest…)" style="flex:1;">
+                        <button type="button" class="btn btn-secondary btn-sm btn-remove-url-row" style="padding:4px 8px;">🗑️</button>
+                    `;
+                    urlListContainer.appendChild(row);
+
+                    // Bind remove row button
+                    row.querySelector('.btn-remove-url-row').addEventListener('click', () => {
+                        row.remove();
+                    });
+                });
+            }
+
             // Video URL Download
             const btnUrlDownload = document.getElementById('btn-shopify-import-video-url-download');
-            const urlInput = document.getElementById('shopify-import-video-url-input');
-            if (btnUrlDownload && urlInput) {
+            if (btnUrlDownload && urlListContainer) {
                 btnUrlDownload.addEventListener('click', async () => {
-                    const url = urlInput.value.trim();
-                    if (!url) {
-                        window.AppController.showToast('Please paste a video URL.', 'warning');
+                    const inputs = urlListContainer.querySelectorAll('.shopify-video-url-input');
+                    const urls = Array.from(inputs).map(inp => inp.value.trim()).filter(Boolean);
+
+                    if (!urls.length) {
+                        window.AppController.showToast('Please paste at least one video URL.', 'warning');
                         return;
                     }
+
                     try {
                         btnUrlDownload.disabled = true;
                         btnUrlDownload.textContent = '⏳ Downloading...';
-                        window.AppController.showToast('Downloading and cleaning video... 📥', 'info');
+                        window.AppController.showToast(`Downloading and cleaning ${urls.length} video(s) in parallel... 📥`, 'info');
 
-                        // Call download API with 'original' canvas format
-                        const result = await window.API.downloadVideoFromUrl(url, 'original');
-                        
-                        // Push to floatingVideos list
-                        this.floatingVideos.push({
-                            filePath: result.filePath,
-                            filename: result.filename
+                        const promises = urls.map(async (url) => {
+                            const result = await window.API.downloadVideoFromUrl(url, 'original');
+                            return result;
                         });
 
-                        // Render preview
-                        const previewContainer = document.getElementById('shopify-import-video-preview');
-                        if (previewContainer) {
-                            const video = document.createElement('video');
-                            video.src = '/uploads/' + result.filename;
-                            video.controls = true;
-                            video.style.cssText = 'max-height:80px; border-radius:4px; border:1px solid var(--glass-border);';
-                            previewContainer.appendChild(video);
-                            previewContainer.style.display = 'flex';
-                        }
+                        const results = await Promise.allSettled(promises);
+                        let successCount = 0;
 
-                        urlInput.value = '';
-                        window.AppController.showToast('Video downloaded and cleaned successfully! 📹', 'success');
+                        results.forEach((res) => {
+                            if (res.status === 'fulfilled' && res.value) {
+                                const val = res.value;
+                                successCount++;
+                                this.floatingVideos.push({
+                                    filePath: val.filePath,
+                                    filename: val.filename
+                                });
+
+                                // Render preview
+                                const previewContainer = document.getElementById('shopify-import-video-preview');
+                                if (previewContainer) {
+                                    const video = document.createElement('video');
+                                    video.src = '/uploads/' + val.filename;
+                                    video.controls = true;
+                                    video.style.cssText = 'max-height:80px; border-radius:4px; border:1px solid var(--glass-border);';
+                                    previewContainer.appendChild(video);
+                                    previewContainer.style.display = 'flex';
+                                }
+                            } else {
+                                console.error('Video download failed:', res.reason);
+                            }
+                        });
+
+                        // Clear inputs back to single empty row
+                        urlListContainer.innerHTML = `
+                            <div class="flex gap-2 mb-1 shopify-video-url-row" style="display:flex; gap:8px; margin-bottom:8px; align-items:center;">
+                                <input type="text" class="form-control shopify-video-url-input" placeholder="Paste link (FB Ads Library, YouTube, Insta, Pinterest…)" style="flex:1;">
+                                <button type="button" class="btn btn-secondary btn-sm btn-remove-url-row" style="display:none; padding:4px 8px;">🗑️</button>
+                            </div>
+                        `;
+
+                        window.AppController.showToast(`Successfully processed ${successCount} of ${urls.length} video(s)! 📹`, 'success');
                     } catch (err) {
                         window.AppController.showToast('Failed to download video: ' + err.message, 'error');
                     } finally {
                         btnUrlDownload.disabled = false;
-                        btnUrlDownload.textContent = '📥 Download';
+                        btnUrlDownload.textContent = '📥 Download All';
                     }
                 });
             }
