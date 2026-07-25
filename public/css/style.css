@@ -901,3 +901,10 @@ code {
   animation: spin 0.7s linear infinite; flex-shrink: 0;
 }
 .cm2-empty { padding: 36px 16px; color: var(--text-secondary); font-size: 0.85rem; text-align: center; line-height: 1.7; }
+
+/* Custom Option Styling to prevent OS white-screen/inherit colors issues */
+#cm-page-filter option {
+  background-color: #1a1a2e !important;
+  color: #ffffff !important;
+}
+

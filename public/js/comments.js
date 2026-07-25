@@ -212,8 +212,11 @@ const InboxManager = {
     async loadThread(item) {
         const msgs = document.getElementById('cm2-messages');
         try {
+            const pageParam = item.pageId ? `&pageId=${item.pageId}` : '';
+            const pageTokenParam = item.pageToken ? `&pageToken=${encodeURIComponent(item.pageToken)}` : '';
+            const igParam = item.igAccountId ? `&igAccountId=${item.igAccountId}` : '';
             const data = await window.API.request(
-                `/api/comments/conversation?type=${item.type}&id=${item.id}&accountId=${item.accountId}`
+                `/api/comments/conversation?type=${item.type}&id=${item.id}&accountId=${item.accountId}${pageParam}${pageTokenParam}${igParam}`
             );
             if (item.type === 'messenger' || item.type === 'instagram') {
                 this.renderMessages(data.messages || [], item);
@@ -321,14 +324,30 @@ const InboxManager = {
             if (item.type === 'messenger' || item.type === 'instagram') {
                 await window.API.request('/api/comments/send', {
                     method: 'POST',
-                    body: JSON.stringify({ type: item.type, recipientId: item.recipientId, message: text, accountId: item.accountId })
+                    body: JSON.stringify({ 
+                        type: item.type, 
+                        recipientId: item.recipientId, 
+                        message: text, 
+                        accountId: item.accountId,
+                        pageId: item.pageId,
+                        pageToken: item.pageToken,
+                        igAccountId: item.igAccountId
+                    })
                 });
             } else {
                 // Comment reply
                 const commentId = this.replyToId || item.id;
                 await window.API.request('/api/comments/reply', {
                     method: 'POST',
-                    body: JSON.stringify({ type: item.type, commentId, postId: item.id, message: text, accountId: item.accountId })
+                    body: JSON.stringify({ 
+                        type: item.type, 
+                        commentId, 
+                        postId: item.id, 
+                        message: text, 
+                        accountId: item.accountId,
+                        pageId: item.pageId,
+                        pageToken: item.pageToken
+                    })
                 });
             }
             inp.value = ''; inp.style.height = 'auto';

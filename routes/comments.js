@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const fetch = require('node-fetch');
 const { getStorage } = require('../services/storage');
+const facebookService = require('../services/facebook');
 
 const BASE = 'https://graph.facebook.com/v25.0';
 
@@ -34,7 +35,6 @@ function avatarColor(name) {
     return colors[Math.abs(h) % colors.length];
 }
 
-// ── GET /api/comments/inbox ───────────────────────────────────────────────────
 // type = all | messenger | instagram | fb-comments | ig-comments
 router.get('/inbox', async (req, res) => {
     const storage = getStorage();
@@ -44,154 +44,175 @@ router.get('/inbox', async (req, res) => {
     const items = [];
 
     await Promise.all(accounts.map(async (acc) => {
-        if (filterPageId && acc.pageId !== filterPageId) return;
         const token = acc.accessToken;
+        if (!token) return;
 
-        // ── Messenger DMs ─────────────────────────────────────────────────────
-        if ((type === 'all' || type === 'messenger') && acc.pageId) {
-            try {
-                const pageToken = await getPageToken(acc.pageId, token);
-                const fields = 'id,participants{name,id},messages.limit(1){message,from,created_time},unread_count,updated_time';
-                const url = `${BASE}/${acc.pageId}/conversations?platform=messenger&fields=${encodeURIComponent(fields)}&limit=30&access_token=${pageToken}`;
-                const r = await fetch(url);
-                const d = await r.json();
-                if (d.data) {
-                    d.data.forEach(conv => {
-                        const participants = conv.participants?.data || [];
-                        const customer = participants.find(p => p.id !== acc.pageId) || participants[0];
-                        const lastMsg = conv.messages?.data?.[0];
-                        items.push({
-                            type: 'messenger',
-                            id: conv.id,
-                            name: customer?.name || 'Unknown',
-                            preview: lastMsg?.message || '(attachment)',
-                            time: conv.updated_time || lastMsg?.created_time,
-                            unread: conv.unread_count || 0,
-                            source: acc.label || 'Page',
-                            accountId: acc.id,
-                            pageId: acc.pageId,
-                            recipientId: customer?.id,
-                            pageToken,
-                            avatarColor: avatarColor(customer?.name || '?')
-                        });
-                    });
-                }
-            } catch (e) { console.warn('Messenger inbox failed:', e.message); }
-        }
+        try {
+            // Get all Pages connected to this user account access token
+            const pagesResult = await facebookService.getConnectedInstagram(token);
+            const pages = pagesResult.data || [];
 
-        // ── Instagram DMs ─────────────────────────────────────────────────────
-        if ((type === 'all' || type === 'instagram') && acc.instagramAccountId) {
-            try {
-                const fields = 'id,participants{username,name,id},messages.limit(1){text,from,created_time},unread_count,updated_time';
-                const url = `${BASE}/${acc.instagramAccountId}/conversations?platform=instagram&fields=${encodeURIComponent(fields)}&limit=30&access_token=${token}`;
-                const r = await fetch(url);
-                const d = await r.json();
-                if (d.data) {
-                    d.data.forEach(conv => {
-                        const participants = conv.participants?.data || [];
-                        const customer = participants.find(p => p.id !== acc.instagramAccountId) || participants[0];
-                        const lastMsg = conv.messages?.data?.[0];
-                        const name = customer?.name || customer?.username || 'Unknown';
-                        items.push({
-                            type: 'instagram',
-                            id: conv.id,
-                            name,
-                            preview: lastMsg?.text || '(attachment)',
-                            time: conv.updated_time || lastMsg?.created_time,
-                            unread: conv.unread_count || 0,
-                            source: `@${acc.instagramUsername || 'Instagram'}`,
-                            accountId: acc.id,
-                            igAccountId: acc.instagramAccountId,
-                            recipientId: customer?.id,
-                            avatarColor: avatarColor(name)
-                        });
-                    });
+            for (const page of pages) {
+                // If filterPageId is set, only process if page.id matches filterPageId
+                if (filterPageId && page.id !== filterPageId) {
+                    continue;
                 }
-            } catch (e) { console.warn('Instagram DM inbox failed:', e.message); }
-        }
 
-        // ── Facebook page comments ────────────────────────────────────────────
-        if ((type === 'all' || type === 'fb-comments') && acc.pageId) {
-            try {
-                const pageToken = await getPageToken(acc.pageId, token);
-                const fields = 'id,message,story,full_picture,created_time,comments.summary(true).limit(3){id,message,from,created_time}';
-                const url = `${BASE}/${acc.pageId}/posts?fields=${encodeURIComponent(fields)}&limit=25&access_token=${pageToken}`;
-                const r = await fetch(url);
-                const d = await r.json();
-                if (d.data) {
-                    d.data.forEach(post => {
-                        const count = post.comments?.summary?.total_count || 0;
-                        if (count === 0) return;
-                        const latestComments = post.comments?.data || [];
-                        const last = latestComments[latestComments.length - 1];
-                        const commenters = latestComments.slice(0, 2).map(c => c.from?.name?.split(' ')[0] || 'User').join(', ');
-                        items.push({
-                            type: 'fb-comments',
-                            id: post.id,
-                            name: commenters || 'Comment',
-                            caption: post.message || post.story || '(no caption)',
-                            preview: last?.message || '',
-                            time: last?.created_time || post.created_time,
-                            unread: 0,
-                            commentCount: count,
-                            picture: post.full_picture || null,
-                            source: acc.label || 'Page',
-                            accountId: acc.id,
-                            pageId: acc.pageId,
-                            pageToken: pageToken,
-                            avatarColor: avatarColor(commenters)
-                        });
-                    });
-                }
-            } catch (e) { console.warn('FB comments failed:', e.message); }
-        }
+                const pageId = page.id;
+                const pageName = page.name;
+                const pageToken = page.access_token || token;
+                const instagramAccountId = page.instagram_business_account?.id;
+                const instagramUsername = page.instagram_business_account?.username;
 
-        // ── Instagram post comments ───────────────────────────────────────────
-        if ((type === 'all' || type === 'ig-comments') && acc.instagramAccountId) {
-            try {
-                const fields = 'id,caption,media_type,thumbnail_url,media_url,timestamp,comments_count';
-                const url = `${BASE}/${acc.instagramAccountId}/media?fields=${fields}&limit=25&access_token=${token}`;
-                const r = await fetch(url);
-                const d = await r.json();
-                if (d.data) {
-                    await Promise.all(d.data.filter(m => m.comments_count > 0).map(async (media) => {
-                        let lastComment = null, commenterName = '';
-                        try {
-                            const cr = await fetch(`${BASE}/${media.id}/comments?fields=id,text,username,timestamp&limit=3&access_token=${token}`);
-                            const cd = await cr.json();
-                            const comments = cd.data || [];
-                            lastComment = comments[comments.length - 1];
-                            commenterName = comments.slice(0, 2).map(c => c.username).join(', ');
-                        } catch (_) {}
-                        items.push({
-                            type: 'ig-comments',
-                            id: media.id,
-                            name: commenterName || 'Comment',
-                            caption: media.caption || '(no caption)',
-                            preview: lastComment?.text || '',
-                            time: lastComment?.timestamp || media.timestamp,
-                            unread: 0,
-                            commentCount: media.comments_count,
-                            picture: media.thumbnail_url || media.media_url || null,
-                            source: `@${acc.instagramUsername || 'Instagram'}`,
-                            accountId: acc.id,
-                            igAccountId: acc.instagramAccountId,
-                            avatarColor: avatarColor(commenterName)
-                        });
-                    }));
+                // ── Messenger DMs ─────────────────────────────────────────────────────
+                if (type === 'all' || type === 'messenger') {
+                    try {
+                        const fields = 'id,participants{name,id},messages.limit(1){message,from,created_time},unread_count,updated_time';
+                        const url = `${BASE}/${pageId}/conversations?platform=messenger&fields=${encodeURIComponent(fields)}&limit=30&access_token=${pageToken}`;
+                        const r = await fetch(url);
+                        const d = await r.json();
+                        if (d.data) {
+                            d.data.forEach(conv => {
+                                const participants = conv.participants?.data || [];
+                                const customer = participants.find(p => p.id !== pageId) || participants[0];
+                                const lastMsg = conv.messages?.data?.[0];
+                                items.push({
+                                    type: 'messenger',
+                                    id: conv.id,
+                                    name: customer?.name || 'Unknown',
+                                    preview: lastMsg?.message || '(attachment)',
+                                    time: conv.updated_time || lastMsg?.created_time,
+                                    unread: conv.unread_count || 0,
+                                    source: pageName,
+                                    accountId: acc.id,
+                                    pageId: pageId,
+                                    recipientId: customer?.id,
+                                    pageToken,
+                                    avatarColor: avatarColor(customer?.name || '?')
+                                });
+                            });
+                        }
+                    } catch (e) { console.warn(`Messenger inbox failed for page ${pageId}:`, e.message); }
                 }
-            } catch (e) { console.warn('IG comments failed:', e.message); }
+
+                // ── Instagram DMs ─────────────────────────────────────────────────────
+                if ((type === 'all' || type === 'instagram') && instagramAccountId) {
+                    try {
+                        const fields = 'id,participants{username,name,id},messages.limit(1){text,from,created_time},unread_count,updated_time';
+                        const url = `${BASE}/${instagramAccountId}/conversations?platform=instagram&fields=${encodeURIComponent(fields)}&limit=30&access_token=${token}`;
+                        const r = await fetch(url);
+                        const d = await r.json();
+                        if (d.data) {
+                            d.data.forEach(conv => {
+                                const participants = conv.participants?.data || [];
+                                const customer = participants.find(p => p.id !== instagramAccountId) || participants[0];
+                                const lastMsg = conv.messages?.data?.[0];
+                                const name = customer?.name || customer?.username || 'Unknown';
+                                items.push({
+                                    type: 'instagram',
+                                    id: conv.id,
+                                    name,
+                                    preview: lastMsg?.text || '(attachment)',
+                                    time: conv.updated_time || lastMsg?.created_time,
+                                    unread: conv.unread_count || 0,
+                                    source: `@${instagramUsername}`,
+                                    accountId: acc.id,
+                                    igAccountId: instagramAccountId,
+                                    recipientId: customer?.id,
+                                    avatarColor: avatarColor(name)
+                                });
+                            });
+                        }
+                    } catch (e) { console.warn(`Instagram DM inbox failed for IG ${instagramAccountId}:`, e.message); }
+                }
+
+                // ── Facebook page comments ────────────────────────────────────────────
+                if (type === 'all' || type === 'fb-comments') {
+                    try {
+                        const fields = 'id,message,story,full_picture,created_time,comments.summary(true).limit(3){id,message,from,created_time}';
+                        const url = `${BASE}/${pageId}/posts?fields=${encodeURIComponent(fields)}&limit=25&access_token=${pageToken}`;
+                        const r = await fetch(url);
+                        const d = await r.json();
+                        if (d.data) {
+                            d.data.forEach(post => {
+                                const count = post.comments?.summary?.total_count || 0;
+                                if (count === 0) return;
+                                const latestComments = post.comments?.data || [];
+                                const last = latestComments[latestComments.length - 1];
+                                const commenters = latestComments.slice(0, 2).map(c => c.from?.name?.split(' ')[0] || 'User').join(', ');
+                                items.push({
+                                    type: 'fb-comments',
+                                    id: post.id,
+                                    name: commenters || 'Comment',
+                                    caption: post.message || post.story || '(no caption)',
+                                    preview: last?.message || '',
+                                    time: last?.created_time || post.created_time,
+                                    unread: 0,
+                                    commentCount: count,
+                                    picture: post.full_picture || null,
+                                    source: pageName,
+                                    accountId: acc.id,
+                                    pageId: pageId,
+                                    pageToken: pageToken,
+                                    avatarColor: avatarColor(commenters)
+                                });
+                            });
+                        }
+                    } catch (e) { console.warn(`FB comments failed for page ${pageId}:`, e.message); }
+                }
+
+                // ── Instagram post comments ───────────────────────────────────────────
+                if ((type === 'all' || type === 'ig-comments') && instagramAccountId) {
+                    try {
+                        const fields = 'id,caption,media_type,thumbnail_url,media_url,timestamp,comments_count';
+                        const url = `${BASE}/${instagramAccountId}/media?fields=${fields}&limit=25&access_token=${token}`;
+                        const r = await fetch(url);
+                        const d = await r.json();
+                        if (d.data) {
+                            await Promise.all(d.data.filter(m => m.comments_count > 0).map(async (media) => {
+                                let lastComment = null, commenterName = '';
+                                try {
+                                    const cr = await fetch(`${BASE}/${media.id}/comments?fields=id,text,username,timestamp&limit=3&access_token=${token}`);
+                                    const cd = await cr.json();
+                                    const comments = cd.data || [];
+                                    lastComment = comments[comments.length - 1];
+                                    commenterName = comments.slice(0, 2).map(c => c.username).join(', ');
+                                } catch (_) {}
+                                items.push({
+                                    type: 'ig-comments',
+                                    id: media.id,
+                                    name: commenterName || 'Comment',
+                                    caption: media.caption || '(no caption)',
+                                    preview: lastComment?.text || '',
+                                    time: lastComment?.timestamp || media.timestamp,
+                                    unread: 0,
+                                    commentCount: media.comments_count,
+                                    picture: media.thumbnail_url || media.media_url || null,
+                                    source: `@${instagramUsername}`,
+                                    accountId: acc.id,
+                                    igAccountId: instagramAccountId,
+                                    avatarColor: avatarColor(commenterName || '?')
+                                });
+                            }));
+                        }
+                    } catch (e) { console.warn(`Instagram post comments failed for IG ${instagramAccountId}:`, e.message); }
+                }
+            }
+        } catch (err) {
+            console.error(`Failed to fetch pages/comments for account:`, err.message);
         }
     }));
 
-    items.sort((a, b) => new Date(b.time) - new Date(a.time));
-    res.json({ data: items });
+    // Sort items by time descending so newest comments/messages show first
+    items.sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0));
+
+    res.json({ success: true, data: items });
 });
 
 // ── GET /api/comments/conversation ───────────────────────────────────────────
 // type = messenger | instagram | fb-comments | ig-comments
 router.get('/conversation', async (req, res) => {
-    const { type, id, accountId } = req.query;
+    const { type, id, accountId, pageId, pageToken, igAccountId } = req.query;
     const storage = getStorage();
     const acc = (storage.accounts || []).find(a => a.id === accountId);
     if (!acc) return res.status(404).json({ error: 'Account not found' });
@@ -199,9 +220,10 @@ router.get('/conversation', async (req, res) => {
 
     try {
         if (type === 'messenger') {
-            const pageToken = await getPageToken(acc.pageId, token);
+            const resolvedPageId = pageId || acc.pageId;
+            const resolvedPageToken = pageToken || await getPageToken(resolvedPageId, token);
             const fields = 'message,from,created_time,attachments{mime_type,file_url,image_data}';
-            const url = `${BASE}/${id}/messages?fields=${encodeURIComponent(fields)}&limit=50&access_token=${pageToken}`;
+            const url = `${BASE}/${id}/messages?fields=${encodeURIComponent(fields)}&limit=50&access_token=${resolvedPageToken}`;
             const r = await fetch(url);
             const d = await r.json();
             if (d.error) return res.status(400).json({ error: d.error.message });
@@ -211,12 +233,13 @@ router.get('/conversation', async (req, res) => {
                 text: m.message || '',
                 from: m.from || {},
                 time: m.created_time,
-                isPage: m.from?.id === acc.pageId,
+                isPage: m.from?.id === resolvedPageId,
                 attachments: m.attachments?.data || []
             }));
-            res.json({ messages, pageId: acc.pageId });
+            res.json({ messages, pageId: resolvedPageId });
         }
         else if (type === 'instagram') {
+            const resolvedIgAccountId = igAccountId || acc.instagramAccountId;
             const fields = 'text,from,created_time,attachments';
             const url = `${BASE}/${id}/messages?fields=${encodeURIComponent(fields)}&limit=50&access_token=${token}`;
             const r = await fetch(url);
@@ -227,22 +250,23 @@ router.get('/conversation', async (req, res) => {
                 text: m.text || '',
                 from: m.from || {},
                 time: m.created_time,
-                isPage: m.from?.id === acc.instagramAccountId,
+                isPage: m.from?.id === resolvedIgAccountId,
                 attachments: m.attachments?.data || []
             }));
-            res.json({ messages, igAccountId: acc.instagramAccountId });
+            res.json({ messages, igAccountId: resolvedIgAccountId });
         }
         else if (type === 'fb-comments') {
-            const pageToken = await getPageToken(acc.pageId, token);
+            const resolvedPageId = pageId || acc.pageId;
+            const resolvedPageToken = pageToken || await getPageToken(resolvedPageId, token);
             const fields = 'id,message,from,created_time,like_count,comments{id,message,from,created_time,like_count}';
-            const r = await fetch(`${BASE}/${id}/comments?fields=${encodeURIComponent(fields)}&limit=100&access_token=${pageToken}`);
+            const r = await fetch(`${BASE}/${id}/comments?fields=${encodeURIComponent(fields)}&limit=100&access_token=${resolvedPageToken}`);
             const d = await r.json();
             if (d.error) return res.status(400).json({ error: d.error.message });
-            res.json({ comments: d.data || [], pageToken });
+            res.json({ comments: d.data || [], pageToken: resolvedPageToken });
         }
         else if (type === 'ig-comments') {
-            const fields = 'id,text,username,timestamp,like_count,replies{id,text,username,timestamp}';
-            const r = await fetch(`${BASE}/${id}/comments?fields=${fields}&limit=100&access_token=${token}`);
+            const fields = 'id,text,from,created_time,like_count,replies{id,text,from,created_time}';
+            const r = await fetch(`${BASE}/${id}/comments?fields=${encodeURIComponent(fields)}&limit=100&access_token=${token}`);
             const d = await r.json();
             if (d.error) return res.status(400).json({ error: d.error.message });
             res.json({ comments: (d.data || []).map(c => ({
@@ -259,31 +283,53 @@ router.get('/conversation', async (req, res) => {
 // ── POST /api/comments/send ───────────────────────────────────────────────────
 // Send a DM (Messenger or Instagram)
 router.post('/send', async (req, res) => {
-    const { type, recipientId, message, accountId, conversationId } = req.body;
+    const { type, recipientId, message, accountId, pageId, pageToken, igAccountId } = req.body;
     const storage = getStorage();
     const acc = (storage.accounts || []).find(a => a.id === accountId);
     if (!acc) return res.status(404).json({ error: 'Account not found' });
     const token = acc.accessToken;
     try {
         if (type === 'messenger') {
-            const pageToken = await getPageToken(acc.pageId, token);
+            const resolvedPageId = pageId || acc.pageId;
+            const resolvedPageToken = pageToken || await getPageToken(resolvedPageId, token);
+            
+            // Try HUMAN_AGENT tag first to support messaging up to 7 days
             const body = JSON.stringify({
                 recipient: { id: recipientId },
                 message: { text: message },
-                messaging_type: 'RESPONSE'
+                messaging_type: 'MESSAGE_TAG',
+                tag: 'HUMAN_AGENT'
             });
-            const r = await fetch(`${BASE}/${acc.pageId}/messages?access_token=${pageToken}`, {
+            
+            console.log(`Attempting HUMAN_AGENT message to ${recipientId} via page ${resolvedPageId}...`);
+            let r = await fetch(`${BASE}/${resolvedPageId}/messages?access_token=${resolvedPageToken}`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' }, body
             });
-            const d = await r.json();
+            let d = await r.json();
+            
+            // If HUMAN_AGENT tag isn't approved/supported on the account/app, fallback to standard RESPONSE
+            if (d.error) {
+                console.warn("HUMAN_AGENT tag failed, retrying with standard RESPONSE:", d.error.message);
+                const fallbackBody = JSON.stringify({
+                    recipient: { id: recipientId },
+                    message: { text: message },
+                    messaging_type: 'RESPONSE'
+                });
+                r = await fetch(`${BASE}/${resolvedPageId}/messages?access_token=${resolvedPageToken}`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: fallbackBody
+                });
+                d = await r.json();
+            }
+
             if (d.error) return res.status(400).json({ error: d.error.message });
             res.json({ success: true, messageId: d.message_id });
         } else if (type === 'instagram') {
+            const resolvedIgAccountId = igAccountId || acc.instagramAccountId;
             const body = JSON.stringify({
                 recipient: { id: recipientId },
                 message: { text: message }
             });
-            const r = await fetch(`${BASE}/${acc.instagramAccountId}/messages?access_token=${token}`, {
+            const r = await fetch(`${BASE}/${resolvedIgAccountId}/messages?access_token=${token}`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' }, body
             });
             const d = await r.json();
@@ -298,7 +344,7 @@ router.post('/send', async (req, res) => {
 // ── POST /api/comments/reply ──────────────────────────────────────────────────
 // Reply to a comment (FB or IG)
 router.post('/reply', async (req, res) => {
-    const { type, commentId, postId, message, accountId } = req.body;
+    const { type, commentId, postId, message, accountId, pageId, pageToken } = req.body;
     const storage = getStorage();
     const acc = (storage.accounts || []).find(a => a.id === accountId);
     if (!acc) return res.status(404).json({ error: 'Account not found' });
@@ -311,8 +357,9 @@ router.post('/reply', async (req, res) => {
             if (d.error) return res.status(400).json({ error: d.error.message });
             res.json({ success: true, id: d.id });
         } else {
-            const pageToken = await getPageToken(acc.pageId, token);
-            const body = new URLSearchParams({ message, access_token: pageToken });
+            const resolvedPageId = pageId || acc.pageId;
+            const resolvedPageToken = pageToken || await getPageToken(resolvedPageId, token);
+            const body = new URLSearchParams({ message, access_token: resolvedPageToken });
             const r = await fetch(`${BASE}/${commentId}/comments`, { method: 'POST', body });
             const d = await r.json();
             if (d.error) return res.status(400).json({ error: d.error.message });
