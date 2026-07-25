@@ -89,6 +89,11 @@
             }
         },
         
+        downloadVideoFromUrl: (url, canvasType = 'original') => API.request('/api/media/download-url', {
+            method: 'POST',
+            body: JSON.stringify({ url, canvasType })
+        }),
+        
         // Saved Audiences
         getSavedAudiences: () => API.request('/api/settings/saved-audiences'),
         saveSavedAudience: (data) => API.request('/api/settings/saved-audiences', { method: 'POST', body: JSON.stringify(data) }),

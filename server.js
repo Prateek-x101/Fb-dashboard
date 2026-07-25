@@ -52,6 +52,36 @@ app.post('/api/media/upload', upload.single('file'), (req, res) => {
     }
 });
 
+// Route to download video from URL and clean/process it using FFmpeg
+app.post('/api/media/download-url', async (req, res) => {
+    try {
+        const { url, canvasType } = req.body; // canvasType is '9:16', '1:1', or 'original'
+        if (!url) {
+            return res.status(400).json({ error: 'Missing target URL' });
+        }
+
+        const videoProcessor = require('./services/videoProcessor');
+        const outputFilename = `downloaded-${Date.now()}.mp4`;
+
+        console.log(`Received download request for url: ${url}, canvasType: ${canvasType || 'original'}`);
+        
+        // 1. Download video
+        const tempPath = await videoProcessor.downloadVideo(url, outputFilename);
+        
+        // 2. Reprocess video (scale, pad, strip, re-encode)
+        const result = await videoProcessor.processVideo(tempPath, outputFilename, canvasType || 'original');
+        
+        res.json({
+            success: true,
+            filePath: result.filePath,
+            filename: result.filename
+        });
+    } catch (error) {
+        console.error("Failed to download and process video url:", error.message);
+        res.status(500).json({ error: 'Video download or processing failed', details: error.message });
+    }
+});
+
 // Health check
 app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });

@@ -279,6 +279,11 @@
                 fileInput.addEventListener('change', (e) => { if (e.target.files.length) this.handleMediaUpload(Array.from(e.target.files)); e.target.value = ''; });
             }
 
+            const btnCampaignMediaDownload = document.getElementById('btn-campaign-media-url-download');
+            if (btnCampaignMediaDownload) {
+                btnCampaignMediaDownload.addEventListener('click', () => this.handleVideoUrlDownload());
+            }
+
             const btnAutoFill = document.getElementById('btn-auto-fill-copy');
             if (btnAutoFill) btnAutoFill.addEventListener('click', () => this.autoFillCreativeCopy());
             const btnAddAd = document.getElementById('btn-add-creative-ad');
@@ -760,6 +765,58 @@
                 window.AppController.showToast('AI generation failed: ' + error.message, 'error');
             } finally {
                 if (btn) { btn.disabled = false; btn.textContent = '🤖 AI Generate All'; }
+            }
+        },
+
+        handleVideoUrlDownload: async function() {
+            const urlInput = document.getElementById('campaign-media-url-input');
+            const canvasSelect = document.getElementById('campaign-media-url-canvas');
+            const btnDownload = document.getElementById('btn-campaign-media-url-download');
+            
+            if (!urlInput || !btnDownload) return;
+            
+            const url = urlInput.value.trim();
+            const canvasType = canvasSelect?.value || 'original';
+            
+            if (!url) {
+                window.AppController.showToast('Please paste a video URL.', 'warning');
+                return;
+            }
+            
+            try {
+                btnDownload.disabled = true;
+                btnDownload.textContent = '⏳ Downloading & Clean...';
+                window.AppController.showToast('Downloading and cleaning video... 📥', 'info');
+                
+                const result = await window.API.downloadVideoFromUrl(url, canvasType);
+                
+                const item = {
+                    mediaFile: result.filename,
+                    media: result.filePath,
+                    previewUrl: '/uploads/' + result.filename
+                };
+                
+                // Add to Step 3 creatives
+                const blankIndex = this.campaignData.step3.ads.findIndex(ad => !ad.media && !ad.mediaFile);
+                if (blankIndex !== -1) {
+                    this.campaignData.step3.ads[blankIndex] = {
+                        ...this.campaignData.step3.ads[blankIndex],
+                        media: item.media,
+                        mediaFile: item.mediaFile,
+                        previewUrl: item.previewUrl
+                    };
+                } else {
+                    this.addCreativeAd(item, false);
+                }
+                
+                this.renderCreativeAds();
+                urlInput.value = '';
+                window.AppController.showToast('Video downloaded, re-encoded, and added successfully! 📹', 'success');
+            } catch (err) {
+                window.AppController.showToast('Download failed: ' + err.message, 'error');
+            } finally {
+                btnDownload.disabled = false;
+                btnDownload.textContent = '📥 Download & Clean';
             }
         },
 

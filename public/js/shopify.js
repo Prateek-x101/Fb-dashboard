@@ -44,6 +44,63 @@
             if (btnCreateAdConfirm) {
                 btnCreateAdConfirm.addEventListener('click', () => this.confirmAdCreationOptions());
             }
+
+            // Video URL Paste UI toggling
+            const btnUrlToggle = document.getElementById('btn-shopify-import-video-url-toggle');
+            const urlContainer = document.getElementById('shopify-import-video-url-container');
+            if (btnUrlToggle && urlContainer) {
+                btnUrlToggle.addEventListener('click', () => {
+                    const isHidden = urlContainer.style.display === 'none';
+                    urlContainer.style.display = isHidden ? 'block' : 'none';
+                    btnUrlToggle.textContent = isHidden ? '❌ Close Link' : '🔗 Paste Link';
+                });
+            }
+
+            // Video URL Download
+            const btnUrlDownload = document.getElementById('btn-shopify-import-video-url-download');
+            const urlInput = document.getElementById('shopify-import-video-url-input');
+            if (btnUrlDownload && urlInput) {
+                btnUrlDownload.addEventListener('click', async () => {
+                    const url = urlInput.value.trim();
+                    if (!url) {
+                        window.AppController.showToast('Please paste a video URL.', 'warning');
+                        return;
+                    }
+                    try {
+                        btnUrlDownload.disabled = true;
+                        btnUrlDownload.textContent = '⏳ Downloading...';
+                        window.AppController.showToast('Downloading and cleaning video... 📥', 'info');
+
+                        // Call download API with 'original' canvas format
+                        const result = await window.API.downloadVideoFromUrl(url, 'original');
+                        
+                        // Push to floatingVideos list
+                        this.floatingVideos.push({
+                            filePath: result.filePath,
+                            filename: result.filename
+                        });
+
+                        // Render preview
+                        const previewContainer = document.getElementById('shopify-import-video-preview');
+                        if (previewContainer) {
+                            const video = document.createElement('video');
+                            video.src = '/uploads/' + result.filename;
+                            video.controls = true;
+                            video.style.cssText = 'max-height:80px; border-radius:4px; border:1px solid var(--glass-border);';
+                            previewContainer.appendChild(video);
+                            previewContainer.style.display = 'flex';
+                        }
+
+                        urlInput.value = '';
+                        window.AppController.showToast('Video downloaded and cleaned successfully! 📹', 'success');
+                    } catch (err) {
+                        window.AppController.showToast('Failed to download video: ' + err.message, 'error');
+                    } finally {
+                        btnUrlDownload.disabled = false;
+                        btnUrlDownload.textContent = '📥 Download';
+                    }
+                });
+            }
         },
 
         loadStoresSelect: async function() {
