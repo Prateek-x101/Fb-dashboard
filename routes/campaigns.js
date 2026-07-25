@@ -423,9 +423,9 @@ router.post('/create', async (req, res) => {
                 const videoRes = await facebookService.uploadVideo(accountId, token, ad.media);
                 videoId = videoRes.id || null;
                 if (!videoId) throw new Error(`Facebook did not return a video ID for ${ad.name}.`);
-                videoThumbnailUrl = await facebookService.getVideoThumbnailWithRetry(videoId, token);
+                videoThumbnailUrl = '';
                 
-                // If a custom thumbnail file is provided, upload it to Meta
+                // If a thumbnail file is provided, upload it to Meta
                 if (ad.thumbnail) {
                     try {
                         const thumbRes = await facebookService.uploadImage(accountId, token, ad.thumbnail);
@@ -433,19 +433,6 @@ router.post('/create', async (req, res) => {
                         thumbnailHash = firstKey ? thumbRes.images[firstKey].hash : null;
                     } catch (thumbErr) {
                         console.error('Failed to upload custom video thumbnail to FB:', thumbErr.message);
-                    }
-                } else if (videoThumbnailUrl) {
-                    // Auto-extract thumbnail: download generated thumbnail from FB and upload to get an image_hash
-                    try {
-                        console.log(`Auto-extracting thumbnail from video: downloading ${videoThumbnailUrl}...`);
-                        const tempFilePath = await downloadUrlToTempFile(videoThumbnailUrl);
-                        const thumbRes = await facebookService.uploadImage(accountId, token, tempFilePath);
-                        const firstKey = Object.keys(thumbRes.images || {})[0];
-                        thumbnailHash = firstKey ? thumbRes.images[firstKey].hash : null;
-                        try { fs.unlinkSync(tempFilePath); } catch (e) {}
-                        console.log('Auto-extracted thumbnail uploaded successfully to FB! Hash:', thumbnailHash);
-                    } catch (thumbErr) {
-                        console.error('Failed to auto-extract and upload video thumbnail to FB:', thumbErr.message);
                     }
                 }
             } else {
@@ -747,11 +734,7 @@ router.post('/create', async (req, res) => {
                 if (ad.imageHash) creativeParams.object_story_spec.link_data.image_hash = ad.imageHash;
                 if (ad.videoId) {
                     const adMediaInfo = uploadedMedia.find(item => item.media === ad.media);
-                    let thumbnailUrl = adMediaInfo ? adMediaInfo.videoThumbnailUrl : null;
-                    if (!thumbnailUrl) {
-                        thumbnailUrl = await facebookService.getVideoThumbnailWithRetry(ad.videoId, token);
-                        if (adMediaInfo) adMediaInfo.videoThumbnailUrl = thumbnailUrl;
-                    }
+                    let thumbnailUrl = null;
                     creativeParams.object_story_spec.video_data = {
                         video_id: ad.videoId,
                         message: textVariation,

@@ -178,6 +178,31 @@
             }
         },
 
+        extractVideoFrame: function(file) {
+            return new Promise((resolve) => {
+                const video = document.createElement('video');
+                video.preload = 'metadata';
+                video.muted = true;
+                video.playsInline = true;
+                const blobUrl = URL.createObjectURL(file);
+                video.src = blobUrl;
+                const cleanup = () => URL.revokeObjectURL(blobUrl);
+                const capture = () => {
+                    try {
+                        const canvas = document.createElement('canvas');
+                        canvas.width = video.videoWidth || 1280;
+                        canvas.height = video.videoHeight || 720;
+                        canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+                        canvas.toBlob(blob => { cleanup(); resolve(blob); }, 'image/jpeg', 0.88);
+                    } catch(e) { cleanup(); resolve(null); }
+                };
+                video.addEventListener('seeked', capture, { once: true });
+                video.addEventListener('loadeddata', () => { video.currentTime = Math.min(1, video.duration * 0.05 || 1); }, { once: true });
+                video.addEventListener('error', () => { cleanup(); resolve(null); }, { once: true });
+                setTimeout(() => { cleanup(); resolve(null); }, 12000);
+            });
+        },
+
         handleVideoUpload: async function(e) {
             const files = e.target.files;
             const previewContainer = document.getElementById('shopify-import-video-preview');
@@ -195,9 +220,30 @@
                     const formData = new FormData();
                     formData.append('file', file);
                     const response = await window.API.uploadMedia(formData);
+                    
+                    let thumbnailPath = '';
+                    let thumbnailFile = '';
+
+                    try {
+                        window.AppController.showToast('Extracting video thumbnail...', 'info');
+                        const frameBlob = await this.extractVideoFrame(file);
+                        if (frameBlob) {
+                            const thumbName = file.name.replace(/\.[^/.]+$/, '_thumb.jpg');
+                            const thumbForm = new FormData();
+                            thumbForm.append('file', new File([frameBlob], thumbName, { type: 'image/jpeg' }));
+                            const thumbResp = await window.API.uploadMedia(thumbForm);
+                            thumbnailPath = thumbResp.filePath || thumbResp.filename;
+                            thumbnailFile = thumbResp.filename || thumbName;
+                        }
+                    } catch(e) {
+                        console.log('Shopify video thumbnail extraction skipped:', e.message);
+                    }
+
                     return {
                         filePath: response.filePath,
-                        filename: response.filename
+                        filename: response.filename,
+                        thumbnail: thumbnailPath,
+                        thumbnailFile: thumbnailFile
                     };
                 });
 
@@ -216,7 +262,7 @@
                     });
                     previewContainer.style.display = 'flex';
                 }
-                window.AppController.showToast(`${this.floatingVideos.length} video(s) uploaded successfully to server! 📹`, 'success');
+                window.AppController.showToast(`${this.floatingVideos.length} video(s) uploaded successfully with thumbnail extracted! 📹`, 'success');
             } catch (err) {
                 window.AppController.showToast('Videos upload failed: ' + err.message, 'error');
             }
@@ -516,7 +562,9 @@
                     title: result.title,
                     productUrl: result.productUrl,
                     videoPath: this.floatingVideos[0]?.filePath || null,
-                    videoFilename: this.floatingVideos[0]?.filename || null
+                    videoFilename: this.floatingVideos[0]?.filename || null,
+                    thumbnail: this.floatingVideos[0]?.thumbnail || null,
+                    thumbnailFile: this.floatingVideos[0]?.thumbnailFile || null
                 };
 
                 // Hide preview and clear URL
@@ -751,7 +799,10 @@
                 prefilledMedia = {
                     media: this.importedProduct.videoPath,
                     mediaFile: this.importedProduct.videoFilename,
-                    previewUrl: '/uploads/' + this.importedProduct.videoFilename
+                    previewUrl: '/uploads/' + this.importedProduct.videoFilename,
+                    thumbnail: this.importedProduct.thumbnail || '',
+                    thumbnailFile: this.importedProduct.thumbnailFile || '',
+                    thumbnailPreviewUrl: this.importedProduct.thumbnail ? '/uploads/' + this.importedProduct.thumbnailFile : ''
                 };
             }
 

@@ -6,10 +6,27 @@ const facebookService = require('../services/facebook');
 
 const BASE = 'https://graph.facebook.com/v25.0';
 
+// Helper for fetch with timeout
+async function fetchWithTimeout(url, options = {}) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), 12000); // 12 seconds timeout
+    try {
+        const response = await fetch(url, {
+            ...options,
+            signal: controller.signal
+        });
+        clearTimeout(id);
+        return response;
+    } catch (error) {
+        clearTimeout(id);
+        throw error;
+    }
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 async function getPageToken(pageId, userToken) {
     try {
-        const r = await fetch(`${BASE}/${pageId}?fields=access_token&access_token=${userToken}`);
+        const r = await fetchWithTimeout(`${BASE}/${pageId}?fields=access_token&access_token=${userToken}`);
         const d = await r.json();
         return d.access_token || userToken;
     } catch (_) { return userToken; }
@@ -77,7 +94,7 @@ router.get('/inbox', async (req, res) => {
                         try {
                             const fields = 'id,participants{name,id},messages.limit(1){message,from,created_time},unread_count,updated_time';
                             const url = `${BASE}/${pageId}/conversations?platform=messenger&fields=${encodeURIComponent(fields)}&limit=30&access_token=${pageToken}`;
-                            const r = await fetch(url);
+                            const r = await fetchWithTimeout(url);
                             const d = await r.json();
                             if (d.error) {
                                 errors.push({
@@ -115,7 +132,7 @@ router.get('/inbox', async (req, res) => {
                         try {
                             const fields = 'id,participants{username,name,id},messages.limit(1){text,from,created_time},unread_count,updated_time';
                             const url = `${BASE}/${instagramAccountId}/conversations?platform=instagram&fields=${encodeURIComponent(fields)}&limit=30&access_token=${token}`;
-                            const r = await fetch(url);
+                            const r = await fetchWithTimeout(url);
                             const d = await r.json();
                             if (d.error) {
                                 errors.push({
@@ -154,7 +171,7 @@ router.get('/inbox', async (req, res) => {
                         try {
                             const fields = 'id,message,story,full_picture,created_time,comments.summary(true).limit(3){id,message,from,created_time}';
                             const url = `${BASE}/${pageId}/posts?fields=${encodeURIComponent(fields)}&limit=25&access_token=${pageToken}`;
-                            const r = await fetch(url);
+                            const r = await fetchWithTimeout(url);
                             const d = await r.json();
                             if (d.error) {
                                 errors.push({
@@ -196,7 +213,7 @@ router.get('/inbox', async (req, res) => {
                         try {
                             const fields = 'id,caption,media_type,thumbnail_url,media_url,timestamp,comments_count';
                             const url = `${BASE}/${instagramAccountId}/media?fields=${fields}&limit=25&access_token=${token}`;
-                            const r = await fetch(url);
+                            const r = await fetchWithTimeout(url);
                             const d = await r.json();
                             if (d.error) {
                                 errors.push({
@@ -207,7 +224,7 @@ router.get('/inbox', async (req, res) => {
                                 await Promise.all(d.data.filter(m => m.comments_count > 0).map(async (media) => {
                                     let lastComment = null, commenterName = '';
                                     try {
-                                        const cr = await fetch(`${BASE}/${media.id}/comments?fields=id,text,username,timestamp&limit=3&access_token=${token}`);
+                                        const cr = await fetchWithTimeout(`${BASE}/${media.id}/comments?fields=id,text,username,timestamp&limit=3&access_token=${token}`);
                                         const cd = await cr.json();
                                         const comments = cd.data || [];
                                         lastComment = comments[comments.length - 1];
@@ -244,10 +261,24 @@ router.get('/inbox', async (req, res) => {
         }
     }));
 
-    // Sort items by time descending so newest comments/messages show first
-    items.sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0));
+    // Deduplicate items by conversation/post ID
+    const seen = new Set();
+    const uniqueItems = [];
+    for (const item of items) {
+        if (item && item.id) {
+            if (!seen.has(item.id)) {
+                seen.add(item.id);
+                uniqueItems.push(item);
+            }
+        } else {
+            uniqueItems.push(item);
+        }
+    }
 
-    res.json({ success: true, data: items, errors });
+    // Sort items by time descending so newest comments/messages show first
+    uniqueItems.sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0));
+
+    res.json({ success: true, data: uniqueItems, errors });
 });
 
 // ── GET /api/comments/conversation ───────────────────────────────────────────
