@@ -1,0 +1,168 @@
+{ "name": "test — Summer, Frequent international travelers, Tourism — Content-1 Reel", "url_tags": "utm_medium={{ad.name}}&utm_campaign={{campaign.name}}&utm_content={{adset.name}}", "contextual_multi_ads": { "enroll_status": "OPT_IN" }, "degrees_of_freedom_spec": { "creative_features_spec": { "standard_enhancements": { "enroll_status": "OPT_IN" }, "inline_comment": { "enroll_status": "OPT_IN" }, "text_optimizations": { "enroll_status": "OPT_IN" }, "cta_optimization": { "enroll_status": "OPT_IN" } } }, "object_story_spec": { "page_id": "527650353767159", "video_data": { "video_id": "1563628312172033", "message": "Ready to upgrade your warm-weather wardrobe instantly? 🌴 The Men's Linen Blend 2-Piece Casual Set is designed for effortless style and all-day ease, combining a matching shirt and pants to keep you looking sharp whether you are heading to the beach or out for a casual dinner. 🌅\n \n✔️ Complete two-piece matching set for an effortless, put-together look\n✔️ Breathable linen blend fabric to keep you cool and fresh\n✔️ Relaxed loose fit offering unrestricted comfort and movement\n✔️ Functional side pockets for convenient everyday carry\n \nIdeal for vacations, lounging, weekend outings, or warm summer days. Stay cool, comfortable, and stylish wherever you go. ✨\n \nGrab your 5% instant discount today with code TODAYDEAL at checkout! 🛍️\n \nhttps://www.sassyclothes.co.in/products/mens-linen-blend-2-piece-casual-set", "title": "Mens Linen Blend 2-Piece Casual Set", "link_description": "", "call_to_action": { "type": "SHOP_NOW", "value": { "link": "https://www.sassyclothes.co.in/products/mens-linen-blend-2-piece-casual-set?utm_medium={{ad.name}}&utm_campaign={{campaign.name}}&utm_content={{adset.name}}" } } } } } ↻ Retry from
+
+1 st ye erro aya or 2 gemini ne jaise hi primary text bnay sab blank ho gaya tha sar reveiw or thumnail 3 gemini ko minimuim 3 to bnane hi interet audience wise or usko full prodcut detail bhejo uske baad use inetrets and all ect lelo relevancy
+
+fix all kindly logically
+
+15 minutes ago
+Main teen issues ko trace kar raha hoon: Facebook creative payload ka invalid cta_optimization, Gemini ke baad UI state reset hona, aur AI audience generation ka minimum/product-context flow. Pehle exact code paths aur uploaded screenshot verify karke targeted fix karunga.
+
+
+Show less
+
+Opened image_1785016106329.png
+
+Searched for "cta_optimization|degree…"
+
+Found files
+Inspecting code and strategies
+
+Inspecting code and strategies
+Screenshot se Facebook ka exact error confirm hai: cta_optimization valid enhancement list mein nahi hai. Ab main creative payload builder aur Gemini audience/copy state ko line-level par inspect karke ek coherent fix laga raha hoon, jisme product ka complete context Gemini ko milega aur kam se kam 3 audience ideas guaranteed hongi.
+
+
+Show less
+
+Searched for "degrees_of_freedom|crea…"
+
+Opened campaigns.js
+
+Opened campaigns.js
+
+Opened gemini.js
+
+Opened campaign.js
+Continuing Technical Inspection
+
+Continuing Technical Inspection
+Ab frontend ke un sections ko dekh raha hoon jahan Gemini response form fields mein apply hota hai aur ads re-render hote hain. Blank state ka likely cause re-render ke dauran existing primaryText, thumbnail preview, ya uploaded media references ka overwrite hona hai; ise preserve karne ke liye state merge fix karunga, reset nahi.
+
+
+Show less
+
+Opened campaign.js
+
+Opened campaign.js
+
+Opened campaign.js
+
+Opened campaign.js
+
+Opened index.html
+Examining API payload
+
+Examining API payload
+
+Opened campaign.js
+
+Opened campaigns.js
+
+Searched for "fetchWebsiteDetails|ass…"
+
+Viewed code changes
+Creating product detail context
+
+Creating product detail context
+Teen fixes implement kar raha hoon: invalid CTA enhancement ko Meta payload se permanently remove karna, DOM se media/thumbnail state preserve karna, aur Gemini ko structured/full product context ke saath minimum 3 distinct audience segments generate karwana. Audience generation ke baad Meta validation unresolved items ko silently blank nahi karegi—UI mein usable result/state preserve rahega.
+
+
+Show less
+
+Opened campaigns.js
+
+Opened facebook.js
+
+Opened campaign.js
+
+Opened campaign.js
+
+Searched for "enhanceCta|cta_optimiza…"
+Clarifying ad collection and rendering
+
+Clarifying ad collection and rendering
+Considering retry options
+
+Considering retry options
+Root cause mil gaya: review/step transition ke waqt collectCreativeAdsFromDOM() sirf media, filename aur primary text save kar raha tha — isliye thumbnail preview aur baaki creative state discard ho rahi thi. Saath hi screenshot ke valid Meta enum mein cta_optimization hi nahi hai; product_extensions bhi wahi unsupported family ka field hai, isliye dono ko request se hata raha hoon.
+
+
+Show less
+
+Opened accounts.js
+Exploring audience targeting options
+
+Exploring audience targeting options
+
+Opened api.js
+Considering request robustness
+
+Considering request robustness
+
+Edited accounts.js
+
+Edited gemini.js
+
+Edited campaign.js
+Refining card generation
+
+Refining card generation
+Patch ka ek hissa apply ho gaya, lekin routes/campaigns.js mein context mismatch ki wajah se backend changes apply nahi hue. Main ab us file ko chhote exact hunks mein update kar raha hoon, phir syntax/tests aur live preview verify karunga.
+
+
+Show less
+
+Processed text
+
+Processed text
+
+Viewed code changes
+
+Edited campaigns.js
+
+Edited campaigns.js
+
+Edited campaigns.js
+
+Edited campaigns.js
+Examining creative rendering and UI updates
+
+Examining creative rendering and UI updates
+Considering audience and relevancy
+
+Considering audience and relevancy
+Core backend patch apply ho gaya. Ab main do final logic gaps close kar raha hoon: AI Generate All mein visible minimum 3 audience cards ensure karna, aur Gemini agar 3 se kam audience return kare to usse silently accept na karna. Isse user ko incomplete/blank targeting result nahi milega.
+
+
+Show less
+
+Edited gemini.js
+
+Edited campaign.js
+Core fixes complete hain. Ab main final static checks, workflow restart, health endpoint, aur browser preview verify kar raha hoon—saath hi diff inspect karke ensure karunga ki retry payload mein cta_optimization/product_extensions bilkul nahi ja rahe aur creative state preserve ho rahi hai.
+
+
+Show less
+
+Ran routes/campaigns.js
+
+Searched for "cta_optimization|produc…"
+
+Viewed code changes
+
+Refreshed logs
+Evaluating backend functionality
+
+Evaluating backend functionality
+Pichle workflow logs purane failed request ke hain; naye code changes abhi restart ke baad hi execute honge. Main workflow restart karke fresh creative payload verify kar raha hoon, aur individual AI button ko bhi minimum-3 audience behavior ke saath consistent kar raha hoon.
+
+
+Show less
+
+Edited campaign.js
+Clarifying feature validity
+
+Clarifying feature validity
+Updating mapping and features
+
+Updating mapping and features
+Fresh logs se ek aur important point confirm hua: Meta ke error mein allowed creative feature keys ki exact list di hui hai, aur inline_comment, standard_enhancements, text_optimizations bhi us current list ke names nahi hain. Main payload ko ab sirf Meta ke current allowed keys (standard_enhancements_catalog, text_overlay_translation) tak limit kar ra
