@@ -1386,7 +1386,7 @@
             if (statusDiv) statusDiv.style.display = 'none';
         },
 
-        startCampaignWizardWithData: function(campaignName, url, productTitle) {
+        startCampaignWizardWithData: function(campaignName, url, productTitle, prefilledMedia = null) {
             this.resetWizard();
             
             const nameInput = document.getElementById('campaign-name');
@@ -1411,6 +1411,17 @@
                 aboRadio.checked = true;
             } else if (cboRadio) {
                 cboRadio.checked = true;
+            }
+
+            // If a pre-filled video/image is passed, populate it immediately in step 3
+            if (prefilledMedia && prefilledMedia.media) {
+                // Clear any empty template ads
+                this.campaignData.step3.ads = [];
+                this.addCreativeAd({
+                    media: prefilledMedia.media,
+                    mediaFile: prefilledMedia.mediaFile,
+                    previewUrl: prefilledMedia.previewUrl
+                }, true);
             }
             
             this.updateStepUI();

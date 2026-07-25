@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const geminiService = require('../services/gemini');
-
+const fetch = require('node-fetch');
 const { getStorage, saveStorage } = require('../services/storage');
 
 function generateCleanHandle(title) {
@@ -103,6 +103,150 @@ router.delete('/stores/:id', (req, res) => {
         res.status(500).json({ error: 'Failed to delete Shopify store config', details: error.message });
     }
 });
+
+// Helper: Upload file to Shopify Files using GraphQL
+async function uploadFileToShopify(shopUrl, accessToken, localFilePath, filename) {
+    const FormData = require('form-data');
+    const graphqlUrl = `https://${shopUrl}/admin/api/2024-04/graphql.json`;
+    
+    // 1. stagedUploadsCreate mutation to get signed upload URL
+    const stagedQuery = {
+        query: `mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
+            stagedUploadsCreate(input: $input) {
+                stagedTargets {
+                    url
+                    resourceUrl
+                    parameters {
+                        name
+                        value
+                    }
+                }
+                userErrors {
+                    field
+                    message
+                }
+            }
+        }`,
+        variables: {
+            input: [{
+                resource: "VIDEO",
+                filename: filename,
+                mimeType: "video/mp4",
+                fileSize: String(fs.statSync(localFilePath).size)
+            }]
+        }
+    };
+
+    const stagedRes = await fetch(graphqlUrl, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-Shopify-Access-Token': accessToken
+        },
+        body: JSON.stringify(stagedQuery)
+    });
+    const stagedData = await stagedRes.json();
+    if (stagedData.errors || stagedData.data?.stagedUploadsCreate?.userErrors?.length) {
+        throw new Error(`stagedUploadsCreate failed: ${JSON.stringify(stagedData)}`);
+    }
+
+    const target = stagedData.data.stagedUploadsCreate.stagedTargets[0];
+    
+    // 2. Post file to S3
+    const formData = new FormData();
+    target.parameters.forEach(p => {
+        formData.append(p.name, p.value);
+    });
+    formData.append('file', fs.createReadStream(localFilePath));
+
+    const s3Res = await fetch(target.url, {
+        method: 'POST',
+        body: formData
+    });
+    if (!s3Res.ok) {
+        const s3Text = await s3Res.text();
+        throw new Error(`S3 upload failed: ${s3Text}`);
+    }
+
+    // 3. fileCreate mutation to register video in Shopify Files
+    const createQuery = {
+        query: `mutation fileCreate($files: [FileCreateInput!]!) {
+            fileCreate(files: $files) {
+                files {
+                    id
+                    status
+                }
+                userErrors {
+                    field
+                    message
+                }
+            }
+        }`,
+        variables: {
+            files: [{
+                alt: "Floating Video",
+                contentType: "VIDEO",
+                originalSource: target.resourceUrl
+            }]
+        }
+    };
+
+    const registerRes = await fetch(graphqlUrl, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-Shopify-Access-Token': accessToken
+        },
+        body: JSON.stringify(createQuery)
+    });
+    const registerData = await registerRes.json();
+    if (registerData.errors || registerData.data?.fileCreate?.userErrors?.length) {
+        throw new Error(`fileCreate failed: ${JSON.stringify(registerData)}`);
+    }
+
+    const fileId = registerData.data.fileCreate.files[0]?.id;
+    return fileId;
+}
+
+// Helper: Query definition of custom.floating_videos metafield to detect if it's file_reference or list.file_reference
+async function getFloatingVideoMetafieldType(shopUrl, accessToken) {
+    try {
+        const graphqlUrl = `https://${shopUrl}/admin/api/2024-04/graphql.json`;
+        const res = await fetch(graphqlUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Shopify-Access-Token': accessToken
+            },
+            body: JSON.stringify({
+                query: `query {
+                    metafieldDefinitions(first: 50, ownerType: PRODUCT) {
+                        edges {
+                            node {
+                                namespace
+                                key
+                                type {
+                                    name
+                                }
+                            }
+                        }
+                    }
+                }`
+            })
+        });
+        if (res.ok) {
+            const data = await res.json();
+            const defs = data.data?.metafieldDefinitions?.edges || [];
+            const match = defs.find(e => e.node.namespace === 'custom' && e.node.key === 'floating_videos');
+            if (match) {
+                return match.node.type.name; // e.g. "file_reference" or "list.file_reference"
+            }
+        }
+    } catch (e) {
+        console.error('Failed to query metafield definitions:', e.message);
+    }
+    return 'file_reference'; // fallback
+}
 
 // Helper: Fetch collections from User's Shopify Store
 async function fetchUserCollections(shopUrl, accessToken) {
@@ -218,7 +362,7 @@ Based on the details, identify which collections match this product. Return ONLY
 // 5. Import Product to user's Shopify store
 router.post('/import', async (req, res) => {
     try {
-        const { storeId, product, skuPrefix, price, comparePrice, collectionIds } = req.body;
+        const { storeId, product, skuPrefix, price, comparePrice, collectionIds, floatingVideoPath, floatingVideoFilename } = req.body;
         if (!storeId || !product || !skuPrefix) {
             return res.status(400).json({ error: 'Missing required parameters for Shopify import.' });
         }
@@ -266,12 +410,34 @@ router.post('/import', async (req, res) => {
             const opt3 = v.option3 ? '-' + v.option3.replace(/[^a-zA-Z0-9]/g, '').trim() : '';
             const generatedSku = `${skuPrefix}-${opt1}${opt2}${opt3}`.replace(/-+/g, '-').replace(/-$/, '');
 
+            // Use the variant's custom price if it's passed as a string/number from frontend, 
+            // otherwise fallback to global price, otherwise fallback to original scraped price (scraped values are in cents, so we divide by 100)
+            let finalPrice = '';
+            if (v.price !== undefined && v.price !== null && v.price !== '') {
+                if (typeof v.price === 'number') {
+                    finalPrice = (v.price / 100).toFixed(2);
+                } else {
+                    finalPrice = String(v.price);
+                }
+            }
+            if (price) finalPrice = String(price); // Global override
+
+            let finalComparePrice = null;
+            if (v.compare_at_price !== undefined && v.compare_at_price !== null && v.compare_at_price !== '') {
+                if (typeof v.compare_at_price === 'number') {
+                    finalComparePrice = (v.compare_at_price / 100).toFixed(2);
+                } else {
+                    finalComparePrice = String(v.compare_at_price);
+                }
+            }
+            if (comparePrice) finalComparePrice = String(comparePrice); // Global override
+
             return {
                 option1: v.option1 || null,
                 option2: v.option2 || null,
                 option3: v.option3 || null,
-                price: String(price || (v.price / 100).toFixed(2)),
-                compare_at_price: comparePrice ? String(comparePrice) : (v.compare_at_price ? String((v.compare_at_price / 100).toFixed(2)) : null),
+                price: finalPrice,
+                compare_at_price: finalComparePrice,
                 sku: generatedSku,
                 taxable: false
             };
@@ -282,6 +448,31 @@ router.post('/import', async (req, res) => {
             const src = imgUrl.startsWith('//') ? 'https:' + imgUrl : imgUrl;
             return { src };
         });
+
+        // Handle optional floating video upload
+        const metafields = [];
+        if (floatingVideoPath && fs.existsSync(floatingVideoPath)) {
+            try {
+                console.log(`Uploading Floating Video file to Shopify: ${floatingVideoPath}`);
+                const fileId = await uploadFileToShopify(store.shopUrl, store.accessToken, floatingVideoPath, floatingVideoFilename || path.basename(floatingVideoPath));
+                console.log(`Video uploaded successfully! Shopify File ID: ${fileId}`);
+                
+                // Get the exact metafield definition type
+                const metafieldType = await getFloatingVideoMetafieldType(store.shopUrl, store.accessToken);
+                console.log(`Detected custom.floating_videos metafield type: ${metafieldType}`);
+                
+                const value = metafieldType.includes('list') ? JSON.stringify([fileId]) : fileId;
+                
+                metafields.push({
+                    namespace: 'custom',
+                    key: 'floating_videos',
+                    value: value,
+                    type: metafieldType
+                });
+            } catch (err) {
+                console.error('Failed to upload floating video to Shopify Files:', err.message);
+            }
+        }
 
         // Create product payload with clean handle and store vendor name
         const productPayload = {
@@ -295,7 +486,8 @@ router.post('/import', async (req, res) => {
                 variants: variants,
                 options: options,
                 status: "active",
-                handle: generateCleanHandle(product.title)
+                handle: generateCleanHandle(product.title),
+                metafields: metafields.length > 0 ? metafields : undefined
             }
         };
 
@@ -394,6 +586,49 @@ router.post('/import', async (req, res) => {
         res.json({ success: true, productId: createdProductId, title: createdProduct.title, productUrl });
     } catch (error) {
         res.status(500).json({ error: 'Failed to import product to Shopify', details: error.message });
+    }
+});
+
+// 6. AI description enhancer/recreator
+router.post('/ai-description', async (req, res) => {
+    try {
+        const { action, description, productTitle } = req.body;
+        if (!description || !action) {
+            return res.status(400).json({ error: 'Description and action are required.' });
+        }
+
+        const storage = getStorage();
+        const geminiApiKey = storage.settings?.geminiApiKey;
+        const geminiModel = storage.settings?.geminiModel || 'gemini-1.5-flash';
+
+        if (!geminiApiKey) {
+            return res.status(400).json({ error: 'Gemini API Key is not configured. Please add it in Settings.' });
+        }
+
+        let prompt = '';
+        if (action === 'enhance') {
+            prompt = `You are a professional e-commerce copywriter. Enhance and polish the following product description HTML for the product "${productTitle || ''}". 
+Improve the copy, make it persuasive and professional, fix grammatical errors, and ensure it looks clean and attractive when rendered. 
+Do NOT completely rewrite the entire structure or discard key product details unless they are spammy or irrelevant. 
+Return ONLY the enhanced HTML code. Do not include any markdown block formatting (like \`\`\`html or \`\`\`), backticks, or introduction/explanation.`;
+        } else if (action === 'recreate') {
+            prompt = `You are a professional e-commerce copywriter. Recreate a brand-new, extremely high-converting and beautifully structured product description in HTML for the product "${productTitle || ''}".
+Use modern copywriting techniques (hook, problem, solution, benefit bullet points, specifications, and trust badges or satisfaction guarantee).
+Make it visually appealing with clean HTML formatting (use elements like <h3>, <p>, <ul>, <li>, and <strong>). Do not include any CSS styles or scripts.
+The original description is:
+"${description}"
+
+Return ONLY the recreated HTML code. Do not include any markdown block formatting (like \`\`\`html or \`\`\`), backticks, or introduction/explanation.`;
+        } else {
+            return res.status(400).json({ error: 'Invalid action. Must be "enhance" or "recreate".' });
+        }
+
+        const resultHtml = await geminiService.generateResponseText(geminiApiKey, geminiModel, `${prompt}\n\nInput HTML/Description:\n${description}`);
+        const cleanHtml = resultHtml.replace(/```html/g, '').replace(/```/g, '').trim();
+
+        res.json({ success: true, description: cleanHtml });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to generate AI description', details: error.message });
     }
 });
 

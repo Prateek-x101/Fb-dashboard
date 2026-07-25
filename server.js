@@ -32,6 +32,7 @@ const upload = multer({ storage: storage });
 // Middleware
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Routes
 app.use('/api/accounts', accountRoutes);
