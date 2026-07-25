@@ -1630,7 +1630,12 @@
 
         extractHeadlineName: function(title) {
             if (!title) return '';
-            
+
+            // 0. Decode HTML entities (e.g. &amp; → &, &quot; → ", &#039; → ')
+            const txt = document.createElement('textarea');
+            txt.innerHTML = title;
+            title = txt.value;
+
             // 1. Remove all emojis
             let clean = title.replace(/[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDC00-\uDFFF]/g, '');
             
