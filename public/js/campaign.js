@@ -40,7 +40,7 @@
 
         setDefaultDateTime: function() {
             const startInput = document.getElementById('schedule-start');
-            if (startInput && !startInput.value) {
+            if (startInput) {
                 const now = new Date();
                 const pad = n => String(n).padStart(2, '0');
                 
@@ -56,7 +56,19 @@
                     date = tomorrow.getDate();
                 }
                 
-                startInput.value = `${year}-${pad(month)}-${pad(date)}T23:55`;
+                const defaultVal = `${year}-${pad(month)}-${pad(date)} 23:55`;
+                
+                if (window.flatpickr) {
+                    window.flatpickr(startInput, {
+                        enableTime: true,
+                        dateFormat: "Y-m-d H:i",
+                        time_24hr: true,
+                        defaultDate: defaultVal,
+                        allowInput: true
+                    });
+                } else {
+                    startInput.value = `${year}-${pad(month)}-${pad(date)}T23:55`;
+                }
             }
         },
 

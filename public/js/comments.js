@@ -65,18 +65,21 @@ const InboxManager = {
 
     // ── Load inbox list ───────────────────────────────────────────────────────
     async loadInbox() {
-        if (this.loading) return;
         this.loading = true;
         const list = document.getElementById('cm-list');
         if (list) list.innerHTML = `<div class="cm2-loading"><div class="cm2-spinner"></div> Loading…</div>`;
-
-        // For "all" tab: load messenger + instagram (DMs only)
+ 
         const type = this.currentTab === 'all' ? 'all' : this.currentTab;
         const pageId = document.getElementById('cm-page-filter')?.value || '';
         const url = `/api/comments/inbox?type=${type}&pageId=${pageId}`;
+ 
+        const reqTime = Date.now();
+        this._lastReqTime = reqTime;
 
         try {
             const data = await window.API.request(url);
+            if (this._lastReqTime !== reqTime) return;
+
             this.items = data.data || [];
             
             if (data.errors && data.errors.length > 0) {
@@ -86,9 +89,12 @@ const InboxManager = {
             
             this.renderList();
         } catch (e) {
+            if (this._lastReqTime !== reqTime) return;
             if (list) list.innerHTML = `<div class="cm2-empty">⚠️ ${this.esc(e.message)}</div>`;
         } finally {
-            this.loading = false;
+            if (this._lastReqTime === reqTime) {
+                this.loading = false;
+            }
         }
     },
 
@@ -137,8 +143,8 @@ const InboxManager = {
             else if (item.type === 'instagram' || item.type === 'ig-comments') badgeSvg = instagramSvg;
             else if (item.type === 'fb-comments') badgeSvg = facebookSvg;
 
-            const profilePicHtml = (item.type === 'messenger' && item.recipientId)
-                ? `<img src="https://graph.facebook.com/${item.recipientId}/picture?type=square" onerror="this.style.display='none'; this.nextElementSibling.style.display='inline';" style="width: 100%; height: 100%; object-fit: cover; border-radius: 50%;">`
+            const profilePicHtml = (item.type === 'messenger' && item.recipientId && item.pageToken)
+                ? `<img src="https://graph.facebook.com/${item.recipientId}/picture?type=square&access_token=${item.pageToken}" onerror="this.style.display='none'; this.nextElementSibling.style.display='inline';" style="width: 100%; height: 100%; object-fit: cover; border-radius: 50%;">`
                 : '';
 
             return `<div class="cm2-item${this.currentItem === item ? ' selected' : ''}" data-idx="${idx}" onclick="InboxManager.openItem(${idx})">
