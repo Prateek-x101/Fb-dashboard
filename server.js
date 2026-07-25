@@ -7,6 +7,7 @@ const accountRoutes = require('./routes/accounts');
 const campaignRoutes = require('./routes/campaigns');
 const settingRoutes = require('./routes/settings');
 const shopifyRoutes = require('./routes/shopify');
+const commentsRoutes = require('./routes/comments');
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -39,6 +40,7 @@ app.use('/api/accounts', accountRoutes);
 app.use('/api/campaigns', campaignRoutes);
 app.use('/api/settings', settingRoutes);
 app.use('/api/shopify', shopifyRoutes);
+app.use('/api/comments', commentsRoutes);
 
 // Media upload endpoint
 app.post('/api/media/upload', upload.single('file'), (req, res) => {

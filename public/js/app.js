@@ -32,6 +32,9 @@
                     
                     // Show target section, hide others
                     const targetSection = item.getAttribute('data-section');
+                    if (targetSection === 'section-comments' && window.CommentsManager) {
+                        setTimeout(() => window.CommentsManager.onShow(), 50);
+                    }
                     document.querySelectorAll('.section').forEach(sec => {
                         sec.classList.remove('active');
                     });

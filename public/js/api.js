@@ -100,6 +100,13 @@
         saveSavedAudience: (data) => API.request('/api/settings/saved-audiences', { method: 'POST', body: JSON.stringify(data) }),
         deleteSavedAudience: (id) => API.request(`/api/settings/saved-audiences/${id}`, { method: 'DELETE' }),
 
+        // Comments
+        getCommentsFeed: (filter) => API.request(`/api/comments/feed?filter=${filter || 'all'}`),
+        getCommentsThread: (type, postId, accountId) => API.request(`/api/comments/thread?type=${type}&postId=${postId}&accountId=${accountId}`),
+        replyToComment: (data) => API.request('/api/comments/reply', { method: 'POST', body: JSON.stringify(data) }),
+        likeComment: (data) => API.request('/api/comments/like', { method: 'POST', body: JSON.stringify(data) }),
+        deleteComment: (commentId, accountId) => API.request(`/api/comments/${commentId}?accountId=${accountId}`, { method: 'DELETE' }),
+
         // Shopify Importer
         getShopifyStores: () => API.request('/api/shopify/stores'),
         addShopifyStore: (data) => API.request('/api/shopify/stores', { method: 'POST', body: JSON.stringify(data) }),

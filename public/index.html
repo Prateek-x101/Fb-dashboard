@@ -20,6 +20,7 @@
             <li><a href="#" class="nav-item" data-section="section-campaign"><span>➕</span> Create Campaign</a></li>
             <li><a href="#" class="nav-item" data-section="section-shopify"><span>🛍️</span> Shopify Importer</a></li>
             <li><a href="#" class="nav-item" data-section="section-accounts"><span>👥</span> Accounts</a></li>
+            <li><a href="#" class="nav-item" data-section="section-comments"><span>💬</span> Comments</a></li>
             <li><a href="#" class="nav-item" data-section="section-settings"><span>⚙️</span> Settings</a></li>
         </ul>
 
@@ -484,6 +485,33 @@
             </div>
         </section>
 
+        <!-- SECTION: Comments -->
+        <section id="section-comments" class="section cm-section">
+            <div class="cm-header">
+                <div class="cm-tabs">
+                    <button class="cm-tab active" data-filter="all">All</button>
+                    <button class="cm-tab" data-filter="pages">🔵 Pages</button>
+                    <button class="cm-tab" data-filter="instagram">📸 Instagram</button>
+                </div>
+                <button class="btn btn-secondary btn-sm" id="cm-refresh" title="Refresh">🔄 Refresh</button>
+            </div>
+            <div class="cm-layout">
+                <!-- Left: Post list -->
+                <div class="cm-post-list-panel">
+                    <div id="cm-post-list">
+                        <div class="cm-empty">Click Refresh to load comments.</div>
+                    </div>
+                </div>
+                <!-- Right: Thread view -->
+                <div class="cm-thread-panel" id="cm-thread-panel">
+                    <div class="cm-thread-empty">
+                        <div style="font-size:3rem;margin-bottom:1rem;">💬</div>
+                        <p>Select a post from the left to view its comments</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
         <!-- SECTION 4: Settings -->
         <section id="section-settings" class="section">
             <h2 class="mb-3">⚙️ System Settings</h2>
@@ -874,5 +902,6 @@
     <script src="/js/campaign.js"></script>
     <script src="/js/settings.js"></script>
     <script src="/js/shopify.js"></script>
+    <script src="/js/comments.js"></script>
 </body>
 </html>
