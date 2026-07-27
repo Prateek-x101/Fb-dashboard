@@ -746,7 +746,9 @@ router.post('/create', async (req, res) => {
                 let creativeId = checkpoint.creatives.find(item => item.key === creativeKey)?.id;
                 let adId = checkpoint.ads.find(item => item.key === creativeKey)?.id;
                 const textVariation = ad.primaryText || '';
-                const destinationUrl = appendUtmParams(step2.url);
+                // url_tags on the creative already appends UTM params — use the plain URL here
+                // to avoid duplicate query parameters in the final destination URL.
+                const destinationUrl = step2.url || '';
                 // Build degrees_of_freedom_spec from selected enhancements
                 const dofFeatures = {};
                 // Only use keys from Meta's current creative_features_spec
