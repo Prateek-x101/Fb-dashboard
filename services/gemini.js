@@ -176,6 +176,88 @@ STRICT RULES:
         return data.candidates[0].content.parts[0].text;
     },
 
+    // Analyze video frames with Gemini Vision: pick best product images + generate listing
+    async analyzeProductFromFrames(apiKey, model, framesBase64) {
+        const url = `${BASE_URL}/models/${normalizeModel(model)}:generateContent?key=${apiKey}`;
+
+        const parts = [
+            {
+                text: `You are a professional e-commerce product analyst. You will receive ${framesBase64.length} video frames extracted from a product video.
+
+Your tasks:
+1. Select the best product frames — choose frames that clearly show the product, are sharp/in-focus, well-lit, and show the product from different useful angles. Skip blurry, motion-blurred, text-only, or near-duplicate frames. Select 4 to 10 frames max.
+2. Generate a professional Shopify product listing from those selected frames.
+
+Return ONLY valid JSON in this exact shape (no markdown, no backticks):
+{
+  "selectedIndices": [0, 2, 5],
+  "title": "Product title (clear, professional, no promotional fluff, 3-7 words)",
+  "description": "<p>Professional HTML product description...</p><ul><li>Feature 1</li><li>Feature 2</li></ul>",
+  "tags": ["tag1", "tag2", "tag3"],
+  "suggestedPrice": "29.99"
+}`
+            }
+        ];
+
+        for (const b64 of framesBase64) {
+            parts.push({ inlineData: { mimeType: 'image/jpeg', data: b64 } });
+        }
+
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts }] })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error ? data.error.message : 'Gemini Vision API Error');
+
+        const rawText = data.candidates[0].content.parts[0].text.trim();
+        const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) throw new Error('No JSON found in Gemini Vision response');
+        const result = JSON.parse(jsonMatch[0]);
+        if (!Array.isArray(result.selectedIndices)) result.selectedIndices = [];
+        return result;
+    },
+
+    // Use Gemini Vision to assign each selected image to the most visually matching variant value
+    async assignImagesToVariants(apiKey, model, framesBase64, variantOption, variantValues) {
+        const url = `${BASE_URL}/models/${normalizeModel(model)}:generateContent?key=${apiKey}`;
+
+        const parts = [
+            {
+                text: `You are a product image classifier. You will receive ${framesBase64.length} product images (0-indexed).
+
+The product has a variant option called "${variantOption}" with these possible values: ${variantValues.join(', ')}.
+
+For EACH image, determine which variant value it most likely represents based on visual characteristics (color, style, design, pattern, etc.). If an image is ambiguous, assign it to the closest matching value.
+
+Return ONLY valid JSON (no markdown, no backticks):
+{
+  "assignments": {"0": "${variantValues[0]}", "1": "${variantValues[1] || variantValues[0]}"}
+}
+
+Keys are image indices as strings. Every index from 0 to ${framesBase64.length - 1} must appear. Values must be one of: ${variantValues.join(', ')}`
+            }
+        ];
+
+        for (const b64 of framesBase64) {
+            parts.push({ inlineData: { mimeType: 'image/jpeg', data: b64 } });
+        }
+
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts }] })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error ? data.error.message : 'Gemini Vision API Error');
+
+        const rawText = data.candidates[0].content.parts[0].text.trim();
+        const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) throw new Error('No JSON found in Gemini Vision response');
+        return JSON.parse(jsonMatch[0]);
+    },
+
     async testConnection(apiKey, model) {
         const url = `${BASE_URL}/models/${normalizeModel(model)}:generateContent?key=${apiKey}`;
         const response = await fetch(url, {

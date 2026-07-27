@@ -166,7 +166,59 @@ async function processVideo(inputPath, outputFilename, canvasType = 'original') 
     });
 }
 
+// Extract evenly-spaced frames from a video for AI analysis
+async function extractFrames(videoPath, maxFrames = 20) {
+    const framesDir = path.join(path.dirname(videoPath), `frames_${Date.now()}`);
+    fs.mkdirSync(framesDir, { recursive: true });
+
+    // 1 frame every 2 seconds, scaled to 720px wide, max `maxFrames` frames
+    const args = [
+        '-y', '-i', videoPath,
+        '-vf', 'fps=0.5,scale=720:-2',
+        '-vframes', String(maxFrames),
+        '-q:v', '4',
+        '-f', 'image2',
+        path.join(framesDir, 'frame_%03d.jpg')
+    ];
+
+    await new Promise((resolve, reject) => {
+        execFile(ffmpegPath, args, (err, stdout, stderr) => {
+            if (err) {
+                console.error('Frame extraction stderr:', stderr);
+                return reject(new Error('Frame extraction failed: ' + err.message));
+            }
+            resolve();
+        });
+    });
+
+    const files = fs.readdirSync(framesDir)
+        .filter(f => f.endsWith('.jpg'))
+        .sort();
+
+    return files.map((f, i) => ({
+        index: i,
+        filename: f,
+        filePath: path.join(framesDir, f),
+        framesDir,
+        base64: fs.readFileSync(path.join(framesDir, f)).toString('base64')
+    }));
+}
+
+// Clean up extracted frame files and their temp directory
+function cleanupFrames(frames) {
+    const dirs = new Set();
+    for (const frame of frames) {
+        try { if (fs.existsSync(frame.filePath)) fs.unlinkSync(frame.filePath); } catch {}
+        if (frame.framesDir) dirs.add(frame.framesDir);
+    }
+    for (const dir of dirs) {
+        try { if (fs.existsSync(dir)) fs.rmdirSync(dir); } catch {}
+    }
+}
+
 module.exports = {
     downloadVideo,
-    processVideo
+    processVideo,
+    extractFrames,
+    cleanupFrames
 };

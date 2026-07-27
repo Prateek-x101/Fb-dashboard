@@ -3,9 +3,16 @@ const router = express.Router();
 const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const multer = require('multer');
 const geminiService = require('../services/gemini');
 const fetch = require('node-fetch');
 const { getStorage, saveStorage } = require('../services/storage');
+
+// Multer for video uploads in this route
+const videoUpload = multer({
+    dest: path.join(__dirname, '..', 'uploads'),
+    limits: { fileSize: 500 * 1024 * 1024 } // 500MB
+});
 
 function generateCleanHandle(title) {
     if (!title) return '';
@@ -445,9 +452,20 @@ router.post('/import', async (req, res) => {
         });
 
         // Formulate images (append https: if start with //)
-        const images = (product.images || []).map(imgUrl => {
+        // Formulate images: support external URLs and local /uploads/ files (send as base64 attachment)
+        const images = (product.images || []).map((imgUrl, idx) => {
+            if (imgUrl.startsWith('/uploads/')) {
+                const filePath = path.join(__dirname, '..', imgUrl.replace(/^\//, ''));
+                if (fs.existsSync(filePath)) {
+                    return {
+                        attachment: fs.readFileSync(filePath).toString('base64'),
+                        filename: path.basename(filePath),
+                        position: idx + 1
+                    };
+                }
+            }
             const src = imgUrl.startsWith('//') ? 'https:' + imgUrl : imgUrl;
-            return { src };
+            return { src, position: idx + 1 };
         });
 
         // Handle optional floating videos upload
@@ -547,7 +565,20 @@ router.post('/import', async (req, res) => {
                     tv.option3 === createdVar.option3
                 );
 
-                if (targetVar && targetVar.featured_image && targetVar.featured_image.src) {
+                // Support direct image index assignment (used by video-to-listing flow)
+                if (targetVar && targetVar.variant_image_index !== undefined && createdImages[targetVar.variant_image_index]) {
+                    const matchedImage = createdImages[targetVar.variant_image_index];
+                    const updateUrl = `https://${store.shopUrl}/admin/api/2024-04/variants/${createdVar.id}.json`;
+                    updatePromises.push(
+                        fetch(updateUrl, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': store.accessToken },
+                            body: JSON.stringify({ variant: { id: createdVar.id, image_id: matchedImage.id } })
+                        }).then(async r => {
+                            if (!r.ok) console.warn(`Failed to link image for variant ${createdVar.id}: ${await r.text()}`);
+                        })
+                    );
+                } else if (targetVar && targetVar.featured_image && targetVar.featured_image.src) {
                     const targetImageSrc = targetVar.featured_image.src;
                     const targetClean = targetImageSrc.split('?')[0];
                     const targetFilename = targetClean.substring(targetClean.lastIndexOf('/') + 1);
@@ -674,6 +705,90 @@ Return ONLY the recreated HTML code. Do not include any markdown block formattin
         res.json({ success: true, description: cleanHtml });
     } catch (error) {
         res.status(500).json({ error: 'Failed to generate AI description', details: error.message });
+    }
+});
+
+// 7. Video → AI Listing Generator
+router.post('/video-to-listing', videoUpload.single('video'), async (req, res) => {
+    let frames = [];
+    try {
+        if (!req.file) return res.status(400).json({ error: 'No video file uploaded.' });
+
+        const storage = getStorage();
+        const geminiApiKey = storage.settings?.geminiApiKey;
+        const geminiModel = storage.settings?.geminiModel || 'gemini-1.5-flash';
+        if (!geminiApiKey) return res.status(400).json({ error: 'Gemini API Key is not configured. Please add it in Settings.' });
+
+        console.log(`Video→Listing: extracting frames from ${req.file.path}`);
+        const videoProcessor = require('../services/videoProcessor');
+        frames = await videoProcessor.extractFrames(req.file.path, 20);
+
+        if (!frames.length) throw new Error('No frames could be extracted from this video.');
+        console.log(`Video→Listing: ${frames.length} frames extracted. Analyzing with Gemini Vision...`);
+
+        const framesBase64 = frames.map(f => f.base64);
+        const analysis = await geminiService.analyzeProductFromFrames(geminiApiKey, geminiModel, framesBase64);
+
+        // Save only selected frames to uploads/ for serving
+        const uploadsDir = path.join(__dirname, '..', 'uploads');
+        const selectedIndices = (analysis.selectedIndices && analysis.selectedIndices.length)
+            ? analysis.selectedIndices
+            : frames.map((_, i) => i).slice(0, 8);
+
+        const savedFrames = [];
+        for (const idx of selectedIndices) {
+            if (frames[idx]) {
+                const destFilename = `vl_${Date.now()}_${idx}.jpg`;
+                const destPath = path.join(uploadsDir, destFilename);
+                fs.copyFileSync(frames[idx].filePath, destPath);
+                savedFrames.push({ index: idx, filename: destFilename, url: '/uploads/' + destFilename });
+            }
+        }
+
+        res.json({
+            success: true,
+            frames: savedFrames,
+            listing: {
+                title: analysis.title || '',
+                description: analysis.description || '',
+                tags: analysis.tags || [],
+                suggestedPrice: analysis.suggestedPrice || ''
+            }
+        });
+    } catch (error) {
+        console.error('Video→Listing error:', error.message);
+        res.status(500).json({ error: 'Failed to generate listing from video', details: error.message });
+    } finally {
+        const videoProcessor = require('../services/videoProcessor');
+        if (frames.length) { try { videoProcessor.cleanupFrames(frames); } catch {} }
+        if (req.file?.path && fs.existsSync(req.file.path)) { try { fs.unlinkSync(req.file.path); } catch {} }
+    }
+});
+
+// 8. Assign extracted images to variant values using Gemini Vision
+router.post('/assign-variant-images', async (req, res) => {
+    try {
+        const { frameFilenames, variantOption, variantValues } = req.body;
+        if (!frameFilenames?.length || !variantOption || !variantValues?.length) {
+            return res.status(400).json({ error: 'Missing frameFilenames, variantOption, or variantValues.' });
+        }
+
+        const storage = getStorage();
+        const geminiApiKey = storage.settings?.geminiApiKey;
+        const geminiModel = storage.settings?.geminiModel || 'gemini-1.5-flash';
+        if (!geminiApiKey) return res.status(400).json({ error: 'Gemini API Key is not configured. Please add it in Settings.' });
+
+        const uploadsDir = path.join(__dirname, '..', 'uploads');
+        const framesBase64 = frameFilenames.map(filename => {
+            const filePath = path.join(uploadsDir, filename);
+            return fs.readFileSync(filePath).toString('base64');
+        });
+
+        const result = await geminiService.assignImagesToVariants(geminiApiKey, geminiModel, framesBase64, variantOption, variantValues);
+        res.json({ success: true, assignments: result.assignments || {} });
+    } catch (error) {
+        console.error('Assign variant images error:', error.message);
+        res.status(500).json({ error: 'Failed to assign images to variants', details: error.message });
     }
 });
 
