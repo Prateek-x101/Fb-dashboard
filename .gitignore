@@ -3,3 +3,5 @@ config/storage.local.json
 config/storage.json
 uploads/*
 screenshots/*
+bin/yt-dlp
+bin/yt-dlp.exe

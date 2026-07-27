@@ -1102,6 +1102,7 @@
                 const results = await Promise.allSettled(promises);
                 let successCount = 0;
 
+                const failReasons = [];
                 results.forEach((res) => {
                     if (res.status === 'fulfilled' && res.value) {
                         const val = res.value;
@@ -1125,7 +1126,9 @@
                             this.addCreativeAd(item, false);
                         }
                     } else {
-                        console.error('Video download failed:', res.reason);
+                        const reason = res.reason?.message || res.reason || 'Unknown error';
+                        console.error('Video download failed:', reason);
+                        failReasons.push(reason);
                     }
                 });
                 
@@ -1139,7 +1142,12 @@
                     </div>
                 `;
 
-                window.AppController.showToast(`Successfully processed ${successCount} of ${urls.length} video(s)! 📹`, 'success');
+                if (successCount > 0) {
+                    window.AppController.showToast(`Successfully processed ${successCount} of ${urls.length} video(s)! 📹`, 'success');
+                } else {
+                    const errMsg = failReasons.length ? failReasons[0] : 'Download failed — check your URL and try again.';
+                    window.AppController.showToast(`❌ Download failed: ${errMsg}`, 'error');
+                }
             } catch (err) {
                 window.AppController.showToast('Download failed: ' + err.message, 'error');
             } finally {
