@@ -110,13 +110,67 @@ const InboxManager = {
                         <span style="flex:1">⚠️ <strong>Permission missing</strong> for: ${accounts}.<br>
                         Your access token was created before Instagram DM permission was added to your app.
                         Re-connect the account to get a fresh token with updated scopes.</span>
-                        <button onclick="document.getElementById('btn-connect-facebook')?.click(); document.getElementById('cm-reauth-banner')?.remove();"
+                        <button id="cm-reauth-btn"
                             style="background:rgba(220,80,30,0.8);border:none;color:#fff;padding:6px 12px;border-radius:6px;cursor:pointer;white-space:nowrap;font-size:0.82rem;">
                             🔄 Re-connect Account
                         </button>
                     `;
                     const list = document.getElementById('cm-list');
                     list?.parentNode?.insertBefore(banner, list);
+
+                    // Wire the Re-connect button — same OAuth popup flow as Settings page
+                    const reauthBtn = document.getElementById('cm-reauth-btn');
+                    if (reauthBtn) {
+                        reauthBtn.addEventListener('click', () => {
+                            reauthBtn.disabled = true;
+                            reauthBtn.textContent = '⏳ Connecting...';
+
+                            localStorage.removeItem('fb_auth_token');
+                            localStorage.removeItem('fb_auth_error');
+                            localStorage.removeItem('fb_auth_handled');
+
+                            const w = 600, h = 650;
+                            const popup = window.open(
+                                '/api/accounts/auth/facebook',
+                                'facebook_login',
+                                `width=${w},height=${h},left=${(screen.width-w)/2},top=${(screen.height-h)/2},status=no,resizable=yes,scrollbars=yes`
+                            );
+
+                            const poll = setInterval(async () => {
+                                const token = localStorage.getItem('fb_auth_token');
+                                const error = localStorage.getItem('fb_auth_error');
+                                if (token) {
+                                    clearInterval(poll);
+                                    if (localStorage.getItem('fb_auth_handled')) return;
+                                    localStorage.setItem('fb_auth_handled', 'true');
+                                    localStorage.removeItem('fb_auth_token');
+                                    setTimeout(() => localStorage.removeItem('fb_auth_handled'), 2000);
+                                    if (popup && !popup.closed) popup.close();
+                                    window.AppController?.showToast('Re-connected! Refreshing messages...', 'success');
+                                    document.getElementById('cm-reauth-banner')?.remove();
+                                    // Reload accounts then refresh inbox
+                                    try {
+                                        await window.API.request('/api/accounts');
+                                    } catch(e) { /* ignore */ }
+                                    CommentManager.loadItems();
+                                } else if (error) {
+                                    clearInterval(poll);
+                                    if (localStorage.getItem('fb_auth_handled')) return;
+                                    localStorage.setItem('fb_auth_handled', 'true');
+                                    localStorage.removeItem('fb_auth_error');
+                                    setTimeout(() => localStorage.removeItem('fb_auth_handled'), 2000);
+                                    if (popup && !popup.closed) popup.close();
+                                    window.AppController?.showToast('Re-connect failed: ' + error, 'error');
+                                    reauthBtn.disabled = false;
+                                    reauthBtn.textContent = '🔄 Re-connect Account';
+                                } else if (!popup || popup.closed) {
+                                    clearInterval(poll);
+                                    reauthBtn.disabled = false;
+                                    reauthBtn.textContent = '🔄 Re-connect Account';
+                                }
+                            }, 500);
+                        });
+                    }
                 }
 
                 if (otherErrors.length > 0) {
