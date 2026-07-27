@@ -769,19 +769,20 @@
         <section id="section-shopify" class="section">
             <h2 class="mb-3">🛍️ Shopify Product Importer</h2>
 
-            <!-- Video → AI Listing Generator -->
+            <!-- Video/Image → AI Listing Generator -->
             <div class="glass-card mb-3" style="border-color:rgba(139,92,246,0.35);">
-                <h3 class="mb-3" style="color:#a78bfa;">🎬 Video → AI Listing Generator</h3>
-                <p style="color:var(--text-secondary); font-size:0.88rem; margin-bottom:16px;">Upload a product video — AI extracts the best frames and generates a complete Shopify listing automatically. Optionally add variants (Color, Size…) and AI will assign images to each variant.</p>
+                <h3 class="mb-3" style="color:#a78bfa;">🎬 Media → AI Listing Generator</h3>
+                <p style="color:var(--text-secondary); font-size:0.88rem; margin-bottom:16px;">Upload product videos and/or images — AI analyzes them, detects variants (colors, designs…), and generates a complete Shopify listing automatically.</p>
 
                 <div class="grid-2 mb-3">
                     <div class="form-group">
-                        <label>Upload Product Video</label>
-                        <input type="file" class="form-control" id="vtl-video-input" accept="video/mp4,video/mov,video/quicktime,video/webm">
+                        <label>Upload Videos &amp; Images <span style="color:var(--text-secondary); font-size:0.78rem;">(multiple supported)</span></label>
+                        <input type="file" class="form-control" id="vtl-video-input" accept="video/mp4,video/mov,video/quicktime,video/webm,image/jpeg,image/png,image/webp,image/gif" multiple>
+                        <div id="vtl-file-preview" style="display:none; flex-wrap:wrap; gap:6px; margin-top:8px;"></div>
                     </div>
                     <div class="form-group" style="display:flex; align-items:flex-end;">
                         <button class="btn btn-primary" id="btn-vtl-generate" style="background:linear-gradient(135deg,#7c3aed,#a78bfa); border-color:#7c3aed; width:100%;">
-                            ✨ Extract Frames & Generate Listing
+                            ✨ Extract &amp; Analyze with AI
                         </button>
                     </div>
                 </div>
@@ -1161,6 +1162,46 @@
             </div>
         </div>
     </div>
+    <!-- Modal: VTL Variant Detection Popup -->
+    <div class="modal-overlay" id="modal-vtl-variants">
+        <div class="glass-card modal-content" style="max-width:600px; max-height:90vh; overflow-y:auto;">
+            <div class="modal-header">
+                <h3>🎨 AI Detected Product Attributes</h3>
+                <button class="modal-close" data-dismiss="modal">✖</button>
+            </div>
+            <p style="color:var(--text-secondary); font-size:0.88rem; margin-bottom:16px;">
+                Gemini analyzed your media and detected these product attributes. Review what variants you'd like to create — check the ones you want, edit values if needed, and add extra options like Size.
+            </p>
+
+            <!-- AI Detected notice -->
+            <div id="vtl-popup-detected-notice" style="background:rgba(139,92,246,0.12); border:1px solid rgba(139,92,246,0.3); border-radius:8px; padding:12px; margin-bottom:16px; display:none;">
+                <p style="color:#a78bfa; font-size:0.85rem; margin:0 0 6px 0; font-weight:600;">🤖 AI detected these attributes from your media:</p>
+                <div id="vtl-popup-detected-tags" style="display:flex; flex-wrap:wrap; gap:6px;"></div>
+            </div>
+
+            <!-- Variant options builder -->
+            <div id="vtl-popup-options-list" style="display:flex; flex-direction:column; gap:10px; margin-bottom:16px;">
+                <!-- Rows injected by JS -->
+            </div>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-vtl-popup-add-option" style="margin-bottom:16px;">➕ Add Another Variant Option</button>
+
+            <!-- No variants option -->
+            <div style="border-top:1px solid rgba(255,255,255,0.08); padding-top:14px; margin-bottom:4px;">
+                <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:0.88rem; color:var(--text-secondary);">
+                    <input type="checkbox" id="vtl-popup-no-variants" style="width:15px; height:15px;">
+                    <span>No variants needed — single product listing only</span>
+                </label>
+            </div>
+
+            <div class="mt-3 flex gap-2" style="display:flex; gap:10px; justify-content:flex-end; margin-top:20px;">
+                <button class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                <button class="btn btn-primary" id="btn-vtl-popup-confirm" style="background:linear-gradient(135deg,#7c3aed,#a78bfa); border-color:#7c3aed;">
+                    ✅ Generate Listing
+                </button>
+            </div>
+        </div>
+    </div>
+
     <div class="toast-container" id="toast-container"></div>
 
     <!-- Scripts -->

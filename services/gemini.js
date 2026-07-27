@@ -183,11 +183,12 @@ STRICT RULES:
 
         const parts = [
             {
-                text: `You are a professional e-commerce product analyst. You will receive ${framesBase64.length} video frames extracted from a product video.
+                text: `You are a professional e-commerce product analyst. You will receive ${framesBase64.length} product images (extracted from video frames or uploaded directly).
 
 Your tasks:
-1. Select the best product frames — choose frames that clearly show the product, are sharp/in-focus, well-lit, and show different useful angles. Skip blurry, motion-blurred, text-only, or near-duplicate frames. Select 4 to 10 frames max.
-2. Generate a Shopify product listing from those frames.
+1. Select the best product images — choose images that clearly show the product, are sharp/in-focus, well-lit, and show different useful angles. Skip blurry, motion-blurred, text-only, or near-duplicate frames. Select 4 to 10 images max.
+2. Detect product attributes visible in the images (colors, designs, styles, patterns, etc.) — these will be used to suggest product variants.
+3. Generate a Shopify product listing from those images.
 
 CRITICAL — The description HTML MUST follow this EXACT format and structure (use this as a template):
 
@@ -210,9 +211,17 @@ CRITICAL — The description HTML MUST follow this EXACT format and structure (u
 Rules:
 - Section headers use: <span style="color: #e67e23;"><strong>HEADER</strong></span>
 - Feature names use <strong>ALL CAPS NAME</strong> followed by " - " then the description
-- Write 4-6 strong, benefit-led feature paragraphs based on what you see in the product frames
+- Write 4-6 strong, benefit-led feature paragraphs based on what you see in the product images
 - Fill SPEC section based on what you can see (colors, materials, style)
 - Keep NOTES section exactly as shown
+
+For detectedAttributes: analyze all images and identify the distinct visual variants present.
+- If you see multiple colors (e.g., red dress, blue dress, green dress), list them as a "Color" attribute.
+- If you see multiple designs/patterns, list them as a "Design" attribute.
+- If you see size markings or multiple sizes, list as "Size" attribute.
+- Only include attributes that are ACTUALLY VISIBLE in the images. Do not invent attributes.
+- Each attribute should have a name and an array of values you can actually see/detect.
+- Also suggest any additional common variant types for this product category that users may want to add (e.g., for clothing suggest Size even if not visible).
 
 Return ONLY valid JSON (no markdown, no backticks):
 {
@@ -220,7 +229,11 @@ Return ONLY valid JSON (no markdown, no backticks):
   "title": "Product title (clear, 3-7 words, no promotional fluff)",
   "description": "<p><span style=\\"color: #e67e23;\\"><strong>FEATURES</strong></span></p>...",
   "tags": ["tag1", "tag2", "tag3"],
-  "suggestedPrice": "29.99"
+  "suggestedPrice": "29.99",
+  "detectedAttributes": [
+    {"name": "Color", "values": ["Red", "Blue", "Green"], "detected": true},
+    {"name": "Size", "values": ["S", "M", "L", "XL"], "detected": false, "suggestion": true}
+  ]
 }`
             }
         ];

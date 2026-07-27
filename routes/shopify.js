@@ -708,39 +708,72 @@ Return ONLY the recreated HTML code. Do not include any markdown block formattin
     }
 });
 
-// 7. Video → AI Listing Generator
-router.post('/video-to-listing', videoUpload.single('video'), async (req, res) => {
-    let frames = [];
+// Helper: check if a mimetype or filename is an image
+function isImageFile(file) {
+    const mime = file.mimetype || '';
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    return mime.startsWith('image/') || ['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(ext);
+}
+
+// 7. Media (Video + Images) → AI Listing Generator
+router.post('/video-to-listing', videoUpload.array('files', 20), async (req, res) => {
+    let allExtractedFrames = []; // frames from video extraction (for cleanup)
+    let uploadedFilePaths = [];  // uploaded file paths (for cleanup)
     try {
-        if (!req.file) return res.status(400).json({ error: 'No video file uploaded.' });
+        const files = req.files || [];
+        if (!files.length) return res.status(400).json({ error: 'No files uploaded.' });
 
         const storage = getStorage();
         const geminiApiKey = storage.settings?.geminiApiKey;
         const geminiModel = storage.settings?.geminiModel || 'gemini-1.5-flash';
         if (!geminiApiKey) return res.status(400).json({ error: 'Gemini API Key is not configured. Please add it in Settings.' });
 
-        console.log(`Video→Listing: extracting frames from ${req.file.path}`);
+        uploadedFilePaths = files.map(f => f.path);
         const videoProcessor = require('../services/videoProcessor');
-        frames = await videoProcessor.extractFrames(req.file.path, 20);
+        const uploadsDir = path.join(__dirname, '..', 'uploads');
 
-        if (!frames.length) throw new Error('No frames could be extracted from this video.');
-        console.log(`Video→Listing: ${frames.length} frames extracted. Analyzing with Gemini Vision...`);
+        // Build a unified list of frames: {base64, filePath, sourceType, originalIndex}
+        const allFrames = [];
 
-        const framesBase64 = frames.map(f => f.base64);
+        for (const file of files) {
+            if (isImageFile(file)) {
+                // Image file: read directly as base64
+                const imgBase64 = fs.readFileSync(file.path).toString('base64');
+                allFrames.push({ base64: imgBase64, filePath: file.path, sourceType: 'image' });
+                console.log(`Media→Listing: added image file ${file.originalname}`);
+            } else {
+                // Video file: extract frames
+                console.log(`Media→Listing: extracting frames from video ${file.originalname}`);
+                const videoFrames = await videoProcessor.extractFrames(file.path, 20);
+                videoFrames.forEach(f => allFrames.push({ ...f, sourceType: 'video' }));
+                allExtractedFrames.push(...videoFrames);
+            }
+        }
+
+        if (!allFrames.length) throw new Error('No usable frames or images could be extracted from the uploaded files.');
+        console.log(`Media→Listing: ${allFrames.length} total frames/images. Analyzing with Gemini Vision...`);
+
+        const framesBase64 = allFrames.map(f => f.base64);
         const analysis = await geminiService.analyzeProductFromFrames(geminiApiKey, geminiModel, framesBase64);
 
-        // Save only selected frames to uploads/ for serving
-        const uploadsDir = path.join(__dirname, '..', 'uploads');
+        // Save only selected frames/images to uploads/ for serving
         const selectedIndices = (analysis.selectedIndices && analysis.selectedIndices.length)
             ? analysis.selectedIndices
-            : frames.map((_, i) => i).slice(0, 8);
+            : allFrames.map((_, i) => i).slice(0, 8);
 
         const savedFrames = [];
         for (const idx of selectedIndices) {
-            if (frames[idx]) {
+            if (allFrames[idx]) {
+                const frame = allFrames[idx];
                 const destFilename = `vl_${Date.now()}_${idx}.jpg`;
                 const destPath = path.join(uploadsDir, destFilename);
-                fs.copyFileSync(frames[idx].filePath, destPath);
+                if (frame.sourceType === 'image') {
+                    // Copy image directly
+                    fs.copyFileSync(frame.filePath, destPath);
+                } else {
+                    // Copy extracted video frame
+                    fs.copyFileSync(frame.filePath, destPath);
+                }
                 savedFrames.push({ index: idx, filename: destFilename, url: '/uploads/' + destFilename });
             }
         }
@@ -753,15 +786,19 @@ router.post('/video-to-listing', videoUpload.single('video'), async (req, res) =
                 description: analysis.description || '',
                 tags: analysis.tags || [],
                 suggestedPrice: analysis.suggestedPrice || ''
-            }
+            },
+            detectedAttributes: analysis.detectedAttributes || []
         });
     } catch (error) {
-        console.error('Video→Listing error:', error.message);
-        res.status(500).json({ error: 'Failed to generate listing from video', details: error.message });
+        console.error('Media→Listing error:', error.message);
+        res.status(500).json({ error: 'Failed to generate listing from media', details: error.message });
     } finally {
         const videoProcessor = require('../services/videoProcessor');
-        if (frames.length) { try { videoProcessor.cleanupFrames(frames); } catch {} }
-        if (req.file?.path && fs.existsSync(req.file.path)) { try { fs.unlinkSync(req.file.path); } catch {} }
+        if (allExtractedFrames.length) { try { videoProcessor.cleanupFrames(allExtractedFrames); } catch {} }
+        // Clean up uploaded files
+        for (const filePath of uploadedFilePaths) {
+            if (filePath && fs.existsSync(filePath)) { try { fs.unlinkSync(filePath); } catch {} }
+        }
     }
 });
 

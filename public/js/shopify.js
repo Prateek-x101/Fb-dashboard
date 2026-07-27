@@ -891,6 +891,9 @@
 
         // ── Video → AI Listing ────────────────────────────────────────────────
 
+        // Pending analysis result (used to pass data into popup confirm)
+        vtlPendingAnalysis: null,
+
         initVideoToListing: function() {
             const btnGenerate = document.getElementById('btn-vtl-generate');
             const btnAssign   = document.getElementById('btn-vtl-assign-variants');
@@ -898,6 +901,7 @@
             const variantsCb  = document.getElementById('vtl-has-variants');
             const variantsCfg = document.getElementById('vtl-variants-config');
             const btnAddOpt   = document.getElementById('btn-vtl-add-option');
+            const fileInput   = document.getElementById('vtl-video-input');
 
             if (btnGenerate) btnGenerate.addEventListener('click', () => this.vtlGenerate());
             if (btnAssign)   btnAssign.addEventListener('click', () => this.vtlAssignVariants());
@@ -907,6 +911,51 @@
                 if (variantsCb.checked) this.vtlAddOptionRow(true); // add first row if empty
             });
             if (btnAddOpt)   btnAddOpt.addEventListener('click', () => this.vtlAddOptionRow(false));
+
+            // File preview when files are selected
+            if (fileInput) {
+                fileInput.addEventListener('change', () => this.vtlRenderFilePreviews(fileInput));
+            }
+
+            // Variant popup: add option button
+            const btnPopupAddOpt = document.getElementById('btn-vtl-popup-add-option');
+            if (btnPopupAddOpt) btnPopupAddOpt.addEventListener('click', () => this.vtlPopupAddOptionRow());
+
+            // Variant popup: confirm button
+            const btnPopupConfirm = document.getElementById('btn-vtl-popup-confirm');
+            if (btnPopupConfirm) btnPopupConfirm.addEventListener('click', () => this.vtlPopupConfirm());
+
+            // Variant popup: no-variants checkbox
+            const noVariantsCb = document.getElementById('vtl-popup-no-variants');
+            if (noVariantsCb) {
+                noVariantsCb.addEventListener('change', () => {
+                    const optList = document.getElementById('vtl-popup-options-list');
+                    const addBtn  = document.getElementById('btn-vtl-popup-add-option');
+                    if (optList) optList.style.opacity = noVariantsCb.checked ? '0.35' : '1';
+                    if (optList) optList.style.pointerEvents = noVariantsCb.checked ? 'none' : 'auto';
+                    if (addBtn) addBtn.style.display = noVariantsCb.checked ? 'none' : 'inline-block';
+                });
+            }
+        },
+
+        // Show thumbnail/name previews for selected files
+        vtlRenderFilePreviews: function(fileInput) {
+            const previewDiv = document.getElementById('vtl-file-preview');
+            if (!previewDiv || !fileInput.files) return;
+            previewDiv.innerHTML = '';
+            if (!fileInput.files.length) { previewDiv.style.display = 'none'; return; }
+
+            Array.from(fileInput.files).forEach(file => {
+                const item = document.createElement('div');
+                item.style.cssText = 'display:flex; align-items:center; gap:6px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:6px; padding:4px 8px; font-size:0.78rem; color:var(--text-secondary);';
+
+                const isVideo = file.type.startsWith('video/');
+                const icon = isVideo ? '🎬' : '🖼️';
+                const sizeMB = (file.size / 1024 / 1024).toFixed(1);
+                item.textContent = `${icon} ${file.name} (${sizeMB}MB)`;
+                previewDiv.appendChild(item);
+            });
+            previewDiv.style.display = 'flex';
         },
 
         // Add a variant option row to the dynamic list
@@ -965,68 +1014,227 @@
             const results    = document.getElementById('vtl-results');
 
             if (!fileInput?.files?.length) {
-                window.AppController.showToast('Please select a video file first.', 'warning');
+                window.AppController.showToast('Please select at least one video or image file first.', 'warning');
                 return;
             }
+
+            const files = Array.from(fileInput.files);
+            const videoCount = files.filter(f => f.type.startsWith('video/')).length;
+            const imageCount = files.filter(f => f.type.startsWith('image/')).length;
 
             try {
                 btnGen.disabled = true;
                 results.style.display = 'none';
                 processing.style.display = 'block';
-                procMsg.textContent = 'Uploading video and extracting frames…';
+
+                const parts = [];
+                if (videoCount) parts.push(`${videoCount} video${videoCount > 1 ? 's' : ''}`);
+                if (imageCount) parts.push(`${imageCount} image${imageCount > 1 ? 's' : ''}`);
+                procMsg.textContent = `Uploading ${parts.join(' & ')} to server…`;
 
                 const formData = new FormData();
-                formData.append('video', fileInput.files[0]);
+                files.forEach(f => formData.append('files', f));
 
-                procMsg.textContent = 'Gemini Vision is analyzing frames and generating listing…';
+                procMsg.textContent = 'Gemini Vision is analyzing your media and detecting variants…';
                 const response = await fetch('/api/shopify/video-to-listing', { method: 'POST', body: formData });
                 const data = await response.json();
                 if (!response.ok) throw new Error(data.error || 'Failed to generate listing');
 
-                this.vtlFrames = data.frames.map(f => ({ ...f, selected: true }));
-                this.vtlVariantAssignments = {};
-
-                // Render frames grid
-                const grid = document.getElementById('vtl-frames-grid');
-                grid.innerHTML = '';
-                this.vtlFrames.forEach((frame, i) => {
-                    const div = document.createElement('div');
-                    div.style.cssText = 'position:relative; cursor:pointer; border-radius:8px; overflow:hidden; border:2px solid rgba(139,92,246,0.6); transition:all 0.2s;';
-                    div.setAttribute('data-vtl-frame-idx', i);
-                    div.innerHTML = `
-                        <img src="${frame.url}" style="width:120px; height:90px; object-fit:cover; display:block;">
-                        <div class="vtl-frame-check" style="position:absolute;top:4px;right:4px;background:#7c3aed;color:white;border-radius:50%;width:20px;height:20px;display:flex;align-items:center;justify-content:center;font-size:11px;">✓</div>
-                    `;
-                    div.addEventListener('click', () => this.vtlToggleFrame(i, div));
-                    grid.appendChild(div);
-                });
-
-                // Fill generated listing fields
-                document.getElementById('vtl-title').value = data.listing.title || '';
-                document.getElementById('vtl-price').value = data.listing.suggestedPrice || '';
-                document.getElementById('vtl-compare-price').value = '';
-                document.getElementById('vtl-tags').value = Array.isArray(data.listing.tags) ? data.listing.tags.join(', ') : (data.listing.tags || '');
-                document.getElementById('vtl-description').value = data.listing.description || '';
-
-                // Reset variant config
-                const cb = document.getElementById('vtl-has-variants');
-                if (cb) cb.checked = false;
-                const cfg = document.getElementById('vtl-variants-config');
-                if (cfg) cfg.style.display = 'none';
-                const optList = document.getElementById('vtl-options-list');
-                if (optList) optList.innerHTML = '';
-                const asgn = document.getElementById('vtl-variant-assignments');
-                if (asgn) { asgn.style.display = 'none'; asgn.innerHTML = ''; }
-
                 processing.style.display = 'none';
-                results.style.display = 'block';
-                window.AppController.showToast('Listing generated! Review and proceed to import. 🎉', 'success');
+
+                // Store the pending analysis result and show variant popup
+                this.vtlPendingAnalysis = data;
+                this.vtlShowVariantPopup(data.detectedAttributes || []);
+
             } catch (err) {
                 processing.style.display = 'none';
                 window.AppController.showToast('Error: ' + err.message, 'error');
             } finally {
                 btnGen.disabled = false;
             }
+        },
+
+        // Show variant detection popup with AI-detected attributes pre-filled
+        vtlShowVariantPopup: function(detectedAttributes) {
+            const optList      = document.getElementById('vtl-popup-options-list');
+            const detectedDiv  = document.getElementById('vtl-popup-detected-notice');
+            const detectedTags = document.getElementById('vtl-popup-detected-tags');
+            const noVarCb      = document.getElementById('vtl-popup-no-variants');
+
+            if (!optList) return;
+            optList.innerHTML = '';
+            if (noVarCb) { noVarCb.checked = false; }
+            if (optList) { optList.style.opacity = '1'; optList.style.pointerEvents = 'auto'; }
+            const addBtn = document.getElementById('btn-vtl-popup-add-option');
+            if (addBtn) addBtn.style.display = 'inline-block';
+
+            // Show detected attributes notice
+            const detected = (detectedAttributes || []).filter(a => a.detected);
+            if (detected.length && detectedDiv && detectedTags) {
+                detectedTags.innerHTML = '';
+                detected.forEach(attr => {
+                    attr.values.forEach(val => {
+                        const tag = document.createElement('span');
+                        tag.style.cssText = 'background:rgba(139,92,246,0.25); border:1px solid rgba(139,92,246,0.4); border-radius:20px; padding:3px 10px; font-size:0.78rem; color:#c4b5fd;';
+                        tag.textContent = `${attr.name}: ${val}`;
+                        detectedTags.appendChild(tag);
+                    });
+                });
+                detectedDiv.style.display = 'block';
+            } else if (detectedDiv) {
+                detectedDiv.style.display = 'none';
+            }
+
+            // Pre-fill option rows from detected attributes
+            if (detectedAttributes && detectedAttributes.length) {
+                detectedAttributes.forEach(attr => {
+                    this.vtlPopupAddOptionRow(attr.name, attr.values.join(', '), attr.detected);
+                });
+            } else {
+                // Default: one empty Color row
+                this.vtlPopupAddOptionRow('Color', '', false);
+            }
+
+            window.AppController.openModal('modal-vtl-variants');
+        },
+
+        // Add an option row inside the variant popup
+        vtlPopupAddOptionRow: function(name, values, isDetected) {
+            const list = document.getElementById('vtl-popup-options-list');
+            if (!list) return;
+
+            const row = document.createElement('div');
+            row.className = 'vtl-popup-option-row';
+            row.style.cssText = 'background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.1); border-radius:8px; padding:12px;';
+
+            const aiLabel = isDetected
+                ? '<span style="background:rgba(139,92,246,0.3); color:#c4b5fd; font-size:0.7rem; padding:2px 7px; border-radius:10px; margin-left:6px;">🤖 AI Detected</span>'
+                : '';
+
+            row.innerHTML = `
+                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                    <span style="font-size:0.8rem; color:var(--text-secondary); font-weight:600;">Variant Option ${list.children.length + 1}${aiLabel}</span>
+                    <button type="button" class="btn btn-secondary btn-xs vtl-popup-remove-row" style="padding:2px 8px; font-size:0.75rem;">🗑️ Remove</button>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 2fr; gap:10px;">
+                    <div>
+                        <label style="font-size:0.78rem; color:var(--text-secondary); margin-bottom:4px; display:block;">Option Name</label>
+                        <input type="text" class="form-control vtl-popup-opt-name" placeholder="e.g. Color" value="${this.escapeHtml(name || '')}" style="font-size:0.85rem;">
+                    </div>
+                    <div>
+                        <label style="font-size:0.78rem; color:var(--text-secondary); margin-bottom:4px; display:block;">Values <span style="font-weight:400;">(comma-separated)</span></label>
+                        <input type="text" class="form-control vtl-popup-opt-values" placeholder="e.g. Red, Blue, Green" value="${this.escapeHtml(values || '')}" style="font-size:0.85rem;">
+                    </div>
+                </div>
+            `;
+
+            row.querySelector('.vtl-popup-remove-row').addEventListener('click', () => {
+                row.remove();
+                // Re-number rows
+                list.querySelectorAll('.vtl-popup-option-row').forEach((r, idx) => {
+                    const titleEl = r.querySelector('span');
+                    if (titleEl) {
+                        const aiSpan = titleEl.querySelector('span');
+                        titleEl.textContent = `Variant Option ${idx + 1}`;
+                        if (aiSpan) titleEl.appendChild(aiSpan);
+                    }
+                });
+            });
+
+            list.appendChild(row);
+        },
+
+        // Confirm popup: read options and apply to the listing results area
+        vtlPopupConfirm: function() {
+            const data = this.vtlPendingAnalysis;
+            if (!data) return;
+
+            const noVarCb = document.getElementById('vtl-popup-no-variants');
+            const noVariants = noVarCb && noVarCb.checked;
+
+            // Read popup option rows
+            const popupOptions = [];
+            if (!noVariants) {
+                document.querySelectorAll('#vtl-popup-options-list .vtl-popup-option-row').forEach(row => {
+                    const name = row.querySelector('.vtl-popup-opt-name')?.value.trim();
+                    const valuesRaw = row.querySelector('.vtl-popup-opt-values')?.value.trim();
+                    if (name && valuesRaw) {
+                        const values = valuesRaw.split(',').map(v => v.trim()).filter(Boolean);
+                        if (values.length) popupOptions.push({ name, values });
+                    }
+                });
+            }
+
+            // Close popup
+            window.AppController.closeModal('modal-vtl-variants');
+
+            // Now populate the listing results area
+            const results  = document.getElementById('vtl-results');
+            const grid     = document.getElementById('vtl-frames-grid');
+
+            // Render frames grid
+            this.vtlFrames = data.frames.map(f => ({ ...f, selected: true }));
+            this.vtlVariantAssignments = {};
+            grid.innerHTML = '';
+            this.vtlFrames.forEach((frame, i) => {
+                const div = document.createElement('div');
+                div.style.cssText = 'position:relative; cursor:pointer; border-radius:8px; overflow:hidden; border:2px solid rgba(139,92,246,0.6); transition:all 0.2s;';
+                div.setAttribute('data-vtl-frame-idx', i);
+                div.innerHTML = `
+                    <img src="${frame.url}" style="width:120px; height:90px; object-fit:cover; display:block;">
+                    <div class="vtl-frame-check" style="position:absolute;top:4px;right:4px;background:#7c3aed;color:white;border-radius:50%;width:20px;height:20px;display:flex;align-items:center;justify-content:center;font-size:11px;">✓</div>
+                `;
+                div.addEventListener('click', () => this.vtlToggleFrame(i, div));
+                grid.appendChild(div);
+            });
+
+            // Fill generated listing fields
+            document.getElementById('vtl-title').value = data.listing.title || '';
+            document.getElementById('vtl-price').value = data.listing.suggestedPrice || '';
+            document.getElementById('vtl-compare-price').value = '';
+            document.getElementById('vtl-tags').value = Array.isArray(data.listing.tags) ? data.listing.tags.join(', ') : (data.listing.tags || '');
+            document.getElementById('vtl-description').value = data.listing.description || '';
+
+            // Apply variant config from popup selections
+            const cb  = document.getElementById('vtl-has-variants');
+            const cfg = document.getElementById('vtl-variants-config');
+            const optList = document.getElementById('vtl-options-list');
+            const asgn    = document.getElementById('vtl-variant-assignments');
+
+            if (popupOptions.length > 0) {
+                // Enable variants and pre-fill the option rows
+                if (cb) cb.checked = true;
+                if (cfg) cfg.style.display = 'block';
+                if (optList) {
+                    optList.innerHTML = '';
+                    popupOptions.forEach((opt, idx) => {
+                        this.vtlAddOptionRow(idx === 0); // adds an empty row; we'll fill it below
+                        const rows = optList.querySelectorAll('.vtl-option-row');
+                        const lastRow = rows[rows.length - 1];
+                        if (lastRow) {
+                            const nameInput   = lastRow.querySelector('.vtl-opt-name');
+                            const valuesInput = lastRow.querySelector('.vtl-opt-values');
+                            if (nameInput)   nameInput.value   = opt.name;
+                            if (valuesInput) valuesInput.value = opt.values.join(', ');
+                        }
+                    });
+                }
+                if (asgn) { asgn.style.display = 'none'; asgn.innerHTML = ''; }
+            } else {
+                // No variants
+                if (cb) cb.checked = false;
+                if (cfg) cfg.style.display = 'none';
+                if (optList) optList.innerHTML = '';
+                if (asgn) { asgn.style.display = 'none'; asgn.innerHTML = ''; }
+            }
+
+            results.style.display = 'block';
+            results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+            const variantMsg = popupOptions.length
+                ? ` ${popupOptions.length} variant option(s) pre-filled.`
+                : '';
+            window.AppController.showToast(`Listing generated!${variantMsg} Review and proceed to import. 🎉`, 'success');
         },
 
         vtlToggleFrame: function(idx, el) {
