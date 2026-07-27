@@ -4,7 +4,7 @@ const fs = require('fs');
 
 const BASE_URL = 'https://graph.facebook.com/v25.0';
 
-const TARGETING_TYPES = new Set(['interest', 'behavior', 'demographic', 'life_event', 'job_title']);
+const TARGETING_TYPES = new Set(['interest', 'behavior', 'demographic', 'life_event', 'job_title', 'employer', 'field_of_study', 'school']);
 
 function normalizeTargetingName(value) {
     return String(value || '')
@@ -23,10 +23,13 @@ function normalizeTargetingType(value) {
 
 function targetingSearchUrl(name, type, token) {
     const q = encodeURIComponent(name);
-    if (type === 'behavior') return `${BASE_URL}/search?type=adTargetingCategory&class=behaviors&q=${q}&access_token=${token}`;
-    if (type === 'demographic') return `${BASE_URL}/search?type=adTargetingCategory&class=demographics&q=${q}&access_token=${token}`;
-    if (type === 'life_event') return `${BASE_URL}/search?type=adTargetingCategory&class=life_events&q=${q}&access_token=${token}`;
-    if (type === 'job_title') return `${BASE_URL}/search?type=adworkposition&q=${q}&access_token=${token}`;
+    if (type === 'behavior')       return `${BASE_URL}/search?type=adTargetingCategory&class=behaviors&q=${q}&access_token=${token}`;
+    if (type === 'demographic')    return `${BASE_URL}/search?type=adTargetingCategory&class=demographics&q=${q}&access_token=${token}`;
+    if (type === 'life_event')     return `${BASE_URL}/search?type=adTargetingCategory&class=life_events&q=${q}&access_token=${token}`;
+    if (type === 'job_title')      return `${BASE_URL}/search?type=adworkposition&q=${q}&access_token=${token}`;
+    if (type === 'employer')       return `${BASE_URL}/search?type=adworkemployer&q=${q}&access_token=${token}`;
+    if (type === 'field_of_study') return `${BASE_URL}/search?type=adeducationmajor&q=${q}&access_token=${token}`;
+    if (type === 'school')         return `${BASE_URL}/search?type=adeducationschool&q=${q}&access_token=${token}`;
     return `${BASE_URL}/search?type=adinterest&q=${q}&access_token=${token}`;
 }
 
@@ -132,14 +135,17 @@ const facebookService = {
         return handleResponse(response);
     },
 
-    // Search interests, behaviors, demographics, life events and job titles in parallel
+    // Search all targeting types in parallel
     async searchAllTargeting(query, token) {
         const searches = [
             { url: `${BASE_URL}/search?type=adinterest&q=${encodeURIComponent(query)}&access_token=${token}`, type: 'interest' },
             { url: `${BASE_URL}/search?type=adTargetingCategory&class=behaviors&q=${encodeURIComponent(query)}&access_token=${token}`, type: 'behavior' },
             { url: `${BASE_URL}/search?type=adTargetingCategory&class=demographics&q=${encodeURIComponent(query)}&access_token=${token}`, type: 'demographic' },
             { url: `${BASE_URL}/search?type=adTargetingCategory&class=life_events&q=${encodeURIComponent(query)}&access_token=${token}`, type: 'life_event' },
-            { url: `${BASE_URL}/search?type=adworkposition&q=${encodeURIComponent(query)}&access_token=${token}`, type: 'job_title' }
+            { url: `${BASE_URL}/search?type=adworkposition&q=${encodeURIComponent(query)}&access_token=${token}`, type: 'job_title' },
+            { url: `${BASE_URL}/search?type=adworkemployer&q=${encodeURIComponent(query)}&access_token=${token}`, type: 'employer' },
+            { url: `${BASE_URL}/search?type=adeducationmajor&q=${encodeURIComponent(query)}&access_token=${token}`, type: 'field_of_study' },
+            { url: `${BASE_URL}/search?type=adeducationschool&q=${encodeURIComponent(query)}&access_token=${token}`, type: 'school' }
         ];
         const settled = await Promise.allSettled(
             searches.map(s =>

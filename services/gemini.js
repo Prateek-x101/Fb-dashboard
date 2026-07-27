@@ -116,20 +116,24 @@ STRICT RULES:
 
 2. KEYWORD RELEVANCE — every single keyword inside an audience must directly relate to that audience's theme AND to the product. If the audience is "Women's Fashion Shoppers", every keyword must be about women's fashion or shopping. Never add unrelated fillers.
 
-3. KEYWORD TYPES — use all four types, mixed within each audience:
-   • "interest" — Facebook interest pages/topics: "Online shopping", "Leggings", "Yoga", "Luxury goods"
-   • "behavior" — FB purchase/device behaviors: "Online shoppers", "Engaged shoppers", "Small business owners"
-   • "demographic" — life stage/education: "Parents", "College graduates", "Newly engaged", "New homeowners"
-   • "job_title" — job role: "Fashion designer", "Marketing Manager", "Software Engineer"
+3. KEYWORD TYPES — use these types, mixed within each audience (at least 3 different types):
+   • "interest"       — Facebook interest pages/topics: "Online shopping", "Yoga", "Luxury goods"
+   • "behavior"       — FB purchase/device behaviors: "Online shoppers", "Engaged shoppers", "Small business owners"
+   • "demographic"    — life stage/relationship: "Parents", "Newly engaged", "New homeowners", "Millennials"
+   • "life_event"     — major milestones: "Newly married", "Recently moved", "New job", "New baby"
+   • "job_title"      — specific job roles: "Fashion designer", "Marketing Manager", "Software Engineer"
+   • "employer"       — specific companies: "Google", "Infosys", "Amazon", "TCS"
+   • "field_of_study" — academic subjects as on Facebook: "Computer Science", "Fashion Design", "Marketing"
+   • "school"         — university/institution names as on Facebook: "IIT Delhi", "Delhi University"
 
-4. COVERAGE — 5 to 8 keywords per audience, drawn from at least 2 different types.
+4. COVERAGE — 5 to 8 keywords per audience, drawn from at least 3 different types.
 
 5. NO DUPLICATES — no keyword may appear in more than one audience across all ${audienceCount} audiences.
 
 6. REAL FACEBOOK KEYWORDS ONLY — use common, well-known FB interest names. Prefer single-word or two-word keywords when possible ("Clothing", "Leggings", "Yoga", "Travel", "Lingerie"). Avoid inventing phrases.
 
 7. Return ONLY valid JSON — no markdown, no extra text.
-   Format: [{"audienceName":"Short label","targeting":[{"type":"interest|behavior|demographic|job_title","name":"keyword"},...]},...]`;
+   Format: [{"audienceName":"Short label","targeting":[{"type":"interest|behavior|demographic|life_event|job_title|employer|field_of_study|school","name":"keyword"},...]},...]`;
 
         const response = await fetch(url, {
             method: 'POST',

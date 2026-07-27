@@ -584,13 +584,14 @@ router.post('/create', async (req, res) => {
 
                     // Map each item to the correct Facebook flexible_spec field name
                     const typeToField = {
-                        interest:    'interests',
-                        behavior:    'behaviors',
-                        demographic: 'demographics',
-                        life_event:  'life_events',
-                        job_title:   'work_positions',
-                        employer:    'work_employers',
-                        education_major: 'education_majors'
+                        interest:       'interests',
+                        behavior:       'behaviors',
+                        demographic:    'demographics',
+                        life_event:     'life_events',
+                        job_title:      'work_positions',
+                        employer:       'work_employers',
+                        field_of_study: 'education_majors',
+                        school:         'education_schools'
                     };
                     const flexSpec = {};
                     resolvedTargeting.forEach(item => {
