@@ -45,6 +45,27 @@ function generateCleanHandle(title) {
     return meaningfulWords.replace(/[^a-z0-9-]/g, '').replace(/-+/g, '-').replace(/^-|-$/g, '');
 }
 
+function normalizeSuggestedCollectionIds(rawSuggestion, collections) {
+    let suggestions = rawSuggestion;
+    if (typeof suggestions === 'string') {
+        const cleaned = suggestions.replace(/```json/gi, '').replace(/```/g, '').trim();
+        suggestions = JSON.parse(cleaned);
+    }
+    if (!Array.isArray(suggestions)) return [];
+
+    const byId = new Map(collections.map(collection => [String(collection.id), collection.id]));
+    const byTitle = new Map(collections.map(collection => [String(collection.title).trim().toLowerCase(), collection.id]));
+
+    return [...new Set(suggestions.map(item => {
+        if (item && typeof item === 'object') {
+            item = item.id ?? item.collectionId ?? item.title ?? item.name;
+        }
+        if (item === undefined || item === null) return null;
+        const value = String(item).trim();
+        return byId.get(value) ?? byTitle.get(value.toLowerCase()) ?? null;
+    }).filter(Boolean))];
+}
+
 // 1. Get all shopify stores
 router.get('/stores', (req, res) => {
     try {
@@ -358,8 +379,7 @@ ${userCollections.map(c => `ID: ${c.id}, Title: ${c.title}`).join('\n')}
 Based on the details, identify which collections match this product. Return ONLY a valid JSON array of matched collection IDs, e.g., ["12345", "67890"]. Do not include any markdown format, markdown tags, backticks or explanation. Return raw JSON.`;
 
                 const suggestion = await geminiService.generateResponseText(geminiApiKey, geminiModel, prompt);
-                const cleanedSuggestion = suggestion.replace(/```json/g, '').replace(/```/g, '').trim();
-                suggestedCollectionIds = JSON.parse(cleanedSuggestion);
+                suggestedCollectionIds = normalizeSuggestedCollectionIds(suggestion, userCollections);
             } catch (err) {
                 console.error('Failed to run Gemini collections suggestion:', err.message);
             }
@@ -567,88 +587,9 @@ router.post('/import', async (req, res) => {
 
         console.log(`Product created successfully with ID: ${createdProductId}`);
 
-        // Match variants to their respective images (featured_image)
-        try {
-            const createdVariants = createdProduct.variants || [];
-            const createdImages = createdProduct.images || [];
-            const updatePromises = [];
-
-            for (let i = 0; i < createdVariants.length; i++) {
-                const createdVar = createdVariants[i];
-                // Find matching target scraped variant
-                const targetVar = (product.variants || []).find(tv => 
-                    tv.option1 === createdVar.option1 &&
-                    tv.option2 === createdVar.option2 &&
-                    tv.option3 === createdVar.option3
-                );
-
-                // Support direct image index assignment (used by video-to-listing flow)
-                if (targetVar && targetVar.variant_image_index !== undefined && createdImages[targetVar.variant_image_index]) {
-                    const matchedImage = createdImages[targetVar.variant_image_index];
-                    const updateUrl = `https://${store.shopUrl}/admin/api/2024-04/variants/${createdVar.id}.json`;
-                    updatePromises.push(
-                        fetch(updateUrl, {
-                            method: 'PUT',
-                            headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': store.accessToken },
-                            body: JSON.stringify({ variant: { id: createdVar.id, image_id: matchedImage.id } })
-                        }).then(async r => {
-                            if (!r.ok) console.warn(`Failed to link image for variant ${createdVar.id}: ${await r.text()}`);
-                        })
-                    );
-                } else if (targetVar && targetVar.featured_image && targetVar.featured_image.src) {
-                    const targetImageSrc = targetVar.featured_image.src;
-                    const targetClean = targetImageSrc.split('?')[0];
-                    const targetFilename = targetClean.substring(targetClean.lastIndexOf('/') + 1);
-
-                    // Method 1: Match by index of target image in original scraped gallery
-                    let targetIndex = (product.images || []).findIndex(imgUrl => {
-                        const cleanImgUrl = imgUrl.split('?')[0];
-                        return cleanImgUrl.endsWith(targetFilename);
-                    });
-
-                    let matchedImage = null;
-                    if (targetIndex !== -1 && createdImages[targetIndex]) {
-                        matchedImage = createdImages[targetIndex];
-                    } else {
-                        // Method 2: Match by filename substring in newly created Shopify images
-                        matchedImage = createdImages.find(img => {
-                            const cleanCreated = img.src.split('?')[0];
-                            return cleanCreated.includes(targetFilename) || targetClean.includes(cleanCreated.substring(cleanCreated.lastIndexOf('/') + 1));
-                        });
-                    }
-
-                    if (matchedImage) {
-                        const updateUrl = `https://${store.shopUrl}/admin/api/2024-04/variants/${createdVar.id}.json`;
-                        updatePromises.push(
-                            fetch(updateUrl, {
-                                method: 'PUT',
-                                headers: {
-                                    'Content-Type': 'application/json',
-                                    'X-Shopify-Access-Token': store.accessToken
-                                },
-                                body: JSON.stringify({
-                                    variant: {
-                                        id: createdVar.id,
-                                        image_id: matchedImage.id
-                                    }
-                                })
-                            }).then(async r => {
-                                if (!r.ok) {
-                                    console.warn(`Failed to link image for variant ${createdVar.id}: ${await r.text()}`);
-                                }
-                            })
-                        );
-                    }
-                }
-            }
-
-            if (updatePromises.length > 0) {
-                console.log(`Linking ${updatePromises.length} variant images in parallel...`);
-                await Promise.allSettled(updatePromises);
-            }
-        } catch (variantImgErr) {
-            console.error('Failed to link images to product variants:', variantImgErr.message);
-        }
+        // Keep imported media as normal product images. Variant-specific image
+        // linking is intentionally disabled so Gemini-selected best frames are
+        // not reduced to one image per variant.
 
         // Link product to selected collections in parallel
         if (Array.isArray(collectionIds) && collectionIds.length > 0) {
@@ -736,6 +677,7 @@ function isImageFile(file) {
 router.post('/video-to-listing', videoUpload.array('files', 20), async (req, res) => {
     let allExtractedFrames = []; // frames from video extraction (for cleanup)
     let uploadedFilePaths = [];  // uploaded file paths (for cleanup)
+    const preservedVideoPaths = [];
     try {
         const files = req.files || [];
         if (!files.length) return res.status(400).json({ error: 'No files uploaded.' });
@@ -764,6 +706,15 @@ router.post('/video-to-listing', videoUpload.array('files', 20), async (req, res
                 const videoFrames = await videoProcessor.extractFrames(file.path, 20);
                 videoFrames.forEach(f => allFrames.push({ ...f, sourceType: 'video' }));
                 allExtractedFrames.push(...videoFrames);
+
+                // Keep the original upload for the Shopify floating-video metafield.
+                // The extracted frames are temporary analysis assets; the source video
+                // should survive the "Use this listing" step and be uploaded later.
+                const extension = path.extname(file.originalname || '') || '.mp4';
+                const safeName = `floating-${uuidv4()}${extension.toLowerCase()}`;
+                const preservedPath = path.join(uploadsDir, safeName);
+                fs.copyFileSync(file.path, preservedPath);
+                preservedVideoPaths.push(preservedPath);
             }
         }
 
@@ -798,6 +749,10 @@ router.post('/video-to-listing', videoUpload.array('files', 20), async (req, res
         res.json({
             success: true,
             frames: savedFrames,
+            floatingVideos: preservedVideoPaths.map(filePath => ({
+                filePath,
+                filename: path.basename(filePath)
+            })),
             listing: {
                 title: analysis.title || '',
                 description: analysis.description || '',
@@ -814,7 +769,9 @@ router.post('/video-to-listing', videoUpload.array('files', 20), async (req, res
         if (allExtractedFrames.length) { try { videoProcessor.cleanupFrames(allExtractedFrames); } catch {} }
         // Clean up uploaded files
         for (const filePath of uploadedFilePaths) {
-            if (filePath && fs.existsSync(filePath)) { try { fs.unlinkSync(filePath); } catch {} }
+            if (filePath && !preservedVideoPaths.includes(filePath) && fs.existsSync(filePath)) {
+                try { fs.unlinkSync(filePath); } catch {}
+            }
         }
     }
 });

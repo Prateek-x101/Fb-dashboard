@@ -166,6 +166,28 @@
             }
         },
 
+        renderFloatingVideoPreview: function() {
+            const previewContainer = document.getElementById('shopify-import-video-preview');
+            if (!previewContainer) return;
+
+            previewContainer.innerHTML = '';
+            if (!this.floatingVideos.length) {
+                previewContainer.style.display = 'none';
+                return;
+            }
+
+            this.floatingVideos.forEach(vid => {
+                const video = document.createElement('video');
+                video.src = '/uploads/' + vid.filename;
+                video.controls = true;
+                video.muted = true;
+                video.playsInline = true;
+                video.style.cssText = 'max-height:80px; border-radius:4px; border:1px solid var(--glass-border);';
+                previewContainer.appendChild(video);
+            });
+            previewContainer.style.display = 'flex';
+        },
+
         loadStoresSelect: async function() {
             const select = document.getElementById('shopify-target-store-select');
             if (!select) return;
@@ -258,16 +280,7 @@
                 
                 this.floatingVideos = successful;
 
-                if (previewContainer && this.floatingVideos.length > 0) {
-                    this.floatingVideos.forEach(vid => {
-                        const video = document.createElement('video');
-                        video.src = '/uploads/' + vid.filename;
-                        video.controls = true;
-                        video.style.cssText = 'max-height:80px; border-radius:4px; border:1px solid var(--glass-border);';
-                        previewContainer.appendChild(video);
-                    });
-                    previewContainer.style.display = 'flex';
-                }
+                this.renderFloatingVideoPreview();
                 window.AppController.showToast(`${this.floatingVideos.length} video(s) uploaded successfully with thumbnail extracted! 📹`, 'success');
             } catch (err) {
                 window.AppController.showToast('Videos upload failed: ' + err.message, 'error');
@@ -331,19 +344,13 @@
                 btnScrape.textContent = '🔍 Inspecting Listing...';
                 previewContainer.style.display = 'none';
 
-                this.floatingVideos = [];
-                const videoInput = document.getElementById('shopify-import-video-file');
-                if (videoInput) videoInput.value = '';
-                const videoPreview = document.getElementById('shopify-import-video-preview');
-                if (videoPreview) videoPreview.style.display = 'none';
-
                 window.AppController.showToast('Fetching Shopify product metadata and analyzing with Gemini AI... 🤖', 'info');
                 
                 const data = await window.API.scrapeShopifyProduct(url, storeId);
                 
                 this.scrapedProduct = data.product;
                 this.userCollections = data.userCollections || [];
-                const suggestedIds = data.suggestedCollectionIds || [];
+                const suggestedIds = new Set((data.suggestedCollectionIds || []).map(id => String(id)));
 
                 // Fill preview fields
                 document.getElementById('shopify-import-title').value = this.scrapedProduct.title || '';
@@ -360,7 +367,7 @@
                     collectionsContainer.innerHTML = '<span style="color:var(--text-secondary); font-size:0.85rem;">No collections found on this store.</span>';
                 } else {
                     this.userCollections.forEach(c => {
-                        const isSuggested = suggestedIds.includes(String(c.id)) || suggestedIds.includes(Number(c.id));
+                        const isSuggested = suggestedIds.has(String(c.id));
                         const label = document.createElement('label');
                         label.style.cssText = 'display:flex; align-items:center; gap:8px; font-size:0.85rem; color:white; cursor:pointer;';
                         label.innerHTML = `
@@ -1188,6 +1195,7 @@
             // Build frames & variant assignments from data directly
             this.vtlFrames = data.frames.map(f => ({ ...f, selected: true }));
             this.vtlVariantAssignments = {};
+            this.floatingVideos = Array.isArray(data.floatingVideos) ? data.floatingVideos : [];
 
             const listing = data.listing;
             const title   = listing.title || '';
@@ -1197,56 +1205,12 @@
             const desc    = listing.description || '';
             const tags    = tagsRaw ? tagsRaw.split(',').map(t => t.trim()).filter(Boolean) : [];
 
-            // If variants requested: Gemini assigns images, then deduplicate (1 image per color value)
+            // Keep Gemini's best frames as ordinary product media. Do not turn them
+            // into variant images: variant-image assignment is a separate optional flow.
             let selectedFrames = [...this.vtlFrames];
             let variants = [];
 
             if (popupOptions.length > 0) {
-                const primaryOption = popupOptions[0];
-
-                // Auto-assign images via Gemini if we have enough images & primary values
-                if (selectedFrames.length > 0 && primaryOption.values.length >= 1) {
-                    try {
-                        window.AppController.showToast(`🤖 AI assigning images to "${primaryOption.name}" values…`, 'info');
-                        const response = await fetch('/api/shopify/assign-variant-images', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                frameFilenames: selectedFrames.map(f => f.filename),
-                                variantOption: primaryOption.name,
-                                variantValues: primaryOption.values
-                            })
-                        });
-                        const assignData = await response.json();
-                        if (response.ok && assignData.assignments) {
-                            selectedFrames.forEach((frame, i) => {
-                                this.vtlVariantAssignments[frame.filename] = assignData.assignments[String(i)] || primaryOption.values[0];
-                            });
-                        }
-                    } catch (e) {
-                        console.warn('Auto-assign images failed, skipping:', e.message);
-                    }
-                }
-
-                // Deduplicate: keep only the FIRST image for each primary option value
-                // (Shopify supports only 1 image per variant value)
-                const seenValues = new Set();
-                const dedupedFrames = [];
-                for (const frame of selectedFrames) {
-                    const val = this.vtlVariantAssignments[frame.filename] || null;
-                    if (val === null || !seenValues.has(val)) {
-                        if (val !== null) seenValues.add(val);
-                        dedupedFrames.push(frame);
-                    }
-                    // Deselect extras in vtlFrames
-                }
-                // Mark deselected frames in vtlFrames
-                this.vtlFrames.forEach(f => {
-                    f.selected = dedupedFrames.some(d => d.filename === f.filename);
-                });
-                selectedFrames = dedupedFrames;
-
-                // For values that got no image assigned, keep them in options but warn
                 variants = this.vtlBuildAllVariants(popupOptions, selectedFrames, price, compare);
             } else {
                 variants = [{ option1: 'Default Title', price: price || '0', compare_at_price: null }];
@@ -1265,7 +1229,7 @@
                 vendor: ''
             };
             this.userCollections = [];
-            this.floatingVideos = [];
+            this.renderFloatingVideoPreview();
 
             // Populate the shared import form fields (same as scraper format)
             document.getElementById('shopify-import-title').value = title;
@@ -1466,15 +1430,6 @@
                 return [{ option1: 'Default Title', price: price || '0', compare_at_price: compare || null }];
             }
 
-            // primaryValue → index in selectedFrames (first match wins)
-            const primaryValueToImgIdx = {};
-            selectedFrames.forEach((frame, i) => {
-                const val = this.vtlVariantAssignments[frame.filename];
-                if (val && primaryValueToImgIdx[val] === undefined) {
-                    primaryValueToImgIdx[val] = i;
-                }
-            });
-
             // Cartesian product of all option values
             const allValues = options.map(o => o.values);
             const cartesian = allValues.reduce(
@@ -1487,11 +1442,6 @@
                 if (combo[0] !== undefined) v.option1 = combo[0]; // primary (Color)
                 if (combo[1] !== undefined) v.option2 = combo[1];
                 if (combo[2] !== undefined) v.option3 = combo[2];
-                // Image matches the primary option value (option1)
-                const primaryVal = combo[0];
-                v.variant_image_index = primaryValueToImgIdx[primaryVal] !== undefined
-                    ? primaryValueToImgIdx[primaryVal]
-                    : 0;
                 return v;
             });
         },
@@ -1528,7 +1478,10 @@
                 vendor: ''
             };
             this.userCollections = [];
-            this.floatingVideos = [];
+            this.floatingVideos = Array.isArray(this.vtlPendingAnalysis?.floatingVideos)
+                ? this.vtlPendingAnalysis.floatingVideos
+                : this.floatingVideos;
+            this.renderFloatingVideoPreview();
 
             // Populate the shared import form fields
             document.getElementById('shopify-import-title').value = title;
