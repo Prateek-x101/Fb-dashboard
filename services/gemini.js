@@ -1,6 +1,7 @@
 const fetch = require('node-fetch');
 
 const BASE_URL = 'https://generativelanguage.googleapis.com/v1';
+const VISION_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const DEFAULT_MODEL = 'gemini-1.5-flash';
 const OBSOLETE_MODELS = new Set();
 
@@ -178,21 +179,46 @@ STRICT RULES:
 
     // Analyze video frames with Gemini Vision: pick best product images + generate listing
     async analyzeProductFromFrames(apiKey, model, framesBase64) {
-        const url = `${BASE_URL}/models/${normalizeModel(model)}:generateContent?key=${apiKey}`;
+        const url = `${VISION_BASE_URL}/models/${normalizeModel(model)}:generateContent?key=${apiKey}`;
 
         const parts = [
             {
                 text: `You are a professional e-commerce product analyst. You will receive ${framesBase64.length} video frames extracted from a product video.
 
 Your tasks:
-1. Select the best product frames — choose frames that clearly show the product, are sharp/in-focus, well-lit, and show the product from different useful angles. Skip blurry, motion-blurred, text-only, or near-duplicate frames. Select 4 to 10 frames max.
-2. Generate a professional Shopify product listing from those selected frames.
+1. Select the best product frames — choose frames that clearly show the product, are sharp/in-focus, well-lit, and show different useful angles. Skip blurry, motion-blurred, text-only, or near-duplicate frames. Select 4 to 10 frames max.
+2. Generate a Shopify product listing from those frames.
 
-Return ONLY valid JSON in this exact shape (no markdown, no backticks):
+CRITICAL — The description HTML MUST follow this EXACT format and structure (use this as a template):
+
+<p><span style="color: #e67e23;"><strong>FEATURES</strong></span></p>
+<p><strong>FEATURE NAME 1</strong> - Detailed description of this feature and its benefit to the customer.</p>
+<p><strong>FEATURE NAME 2</strong> - Detailed description of this feature and its benefit to the customer.</p>
+<p><strong>FEATURE NAME 3</strong> - Detailed description of this feature and its benefit to the customer.</p>
+<p><strong>FEATURE NAME 4</strong> - Detailed description of this feature and its benefit to the customer.</p>
+<p><strong>FEATURE NAME 5</strong> - Detailed description of this feature and its benefit to the customer.</p>
+<p><span style="color: #e67e23;"><strong>SPEC</strong></span></p>
+<p>Color: [detected colors]</p>
+<p>Size: [if applicable, e.g. S-2XL or One Size]</p>
+<p>Material: [material if visible]</p>
+<p><span style="color: #e67e23;"><strong>PACKAGE INCLUDES</strong></span></p>
+<p>1 x [Product Name]</p>
+<p><span style="color: #e67e23;"><strong>NOTES</strong></span></p>
+<p>Color may not appear exactly as in real life due to variations between computer monitors.</p>
+<p>Please allow a small error due to manual measurement. Please make sure you do not mind before purchasing.</p>
+
+Rules:
+- Section headers use: <span style="color: #e67e23;"><strong>HEADER</strong></span>
+- Feature names use <strong>ALL CAPS NAME</strong> followed by " - " then the description
+- Write 4-6 strong, benefit-led feature paragraphs based on what you see in the product frames
+- Fill SPEC section based on what you can see (colors, materials, style)
+- Keep NOTES section exactly as shown
+
+Return ONLY valid JSON (no markdown, no backticks):
 {
   "selectedIndices": [0, 2, 5],
-  "title": "Product title (clear, professional, no promotional fluff, 3-7 words)",
-  "description": "<p>Professional HTML product description...</p><ul><li>Feature 1</li><li>Feature 2</li></ul>",
+  "title": "Product title (clear, 3-7 words, no promotional fluff)",
+  "description": "<p><span style=\\"color: #e67e23;\\"><strong>FEATURES</strong></span></p>...",
   "tags": ["tag1", "tag2", "tag3"],
   "suggestedPrice": "29.99"
 }`
@@ -221,7 +247,7 @@ Return ONLY valid JSON in this exact shape (no markdown, no backticks):
 
     // Use Gemini Vision to assign each selected image to the most visually matching variant value
     async assignImagesToVariants(apiKey, model, framesBase64, variantOption, variantValues) {
-        const url = `${BASE_URL}/models/${normalizeModel(model)}:generateContent?key=${apiKey}`;
+        const url = `${VISION_BASE_URL}/models/${normalizeModel(model)}:generateContent?key=${apiKey}`;
 
         const parts = [
             {
