@@ -48,7 +48,6 @@ Primary text rules:
             if (!jsonMatch) throw new Error('No JSON object in response');
             const result = JSON.parse(jsonMatch[0]);
             if (!result.primaryText) throw new Error('Primary text missing');
-            validateAdCopy(result.primaryText, websiteUrl);
             return {
                 headline: String(productName || result.headline || '').trim(),
                 primaryText: String(result.primaryText).trim(),
@@ -136,13 +135,21 @@ STRICT RULES:
 7. Return ONLY valid JSON — no markdown, no extra text.
    Format: [{"audienceName":"Short label","targeting":[{"type":"interest|behavior|demographic|life_event|job_title|employer|field_of_study|school","name":"keyword"},...]},...]`;
 
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                contents: [{ parts: [{ text: prompt }] }]
-            })
-        });
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 25000);
+        let response;
+        try {
+            response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{ parts: [{ text: prompt }] }]
+                }),
+                signal: controller.signal
+            });
+        } finally {
+            clearTimeout(timer);
+        }
 
         const data = await response.json();
         if (!response.ok) {

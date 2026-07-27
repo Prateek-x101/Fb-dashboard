@@ -213,7 +213,7 @@ const facebookService = {
                     // Fetch + score one search query, return best match or null
                     async function searchAndMatch(searchName, searchType) {
                         try {
-                            const d = await fetch(targetingSearchUrl(searchName, searchType, token)).then(r => r.json());
+                            const d = await fetch(targetingSearchUrl(searchName, searchType, token), { timeout: 5000 }).then(r => r.json());
                             return bestFromPool(Array.isArray(d.data) ? d.data : []);
                         } catch { return null; }
                     }
