@@ -801,7 +801,23 @@ router.post('/create', async (req, res) => {
                     progress.failedStep = 'creative';
                     progress.failedIndex = { audienceIndex, adIndex };
                     progress.requestParams = creativeParams;
-                    const creativeResponse = await facebookService.createAdCreative(accountId, token, creativeParams);
+                    let creativeResponse;
+                    try {
+                        creativeResponse = await facebookService.createAdCreative(accountId, token, creativeParams);
+                    } catch (creativeErr) {
+                        // image_hash belongs to a different ad account — strip it and retry
+                        const hasImageHash = creativeParams.object_story_spec?.video_data?.image_hash;
+                        if (hasImageHash && /\b(100|1885183)\b/.test(String(creativeErr.message))) {
+                            console.warn('Creative failed with image_hash, retrying without thumbnail:', creativeErr.message);
+                            const fallback = JSON.parse(JSON.stringify(creativeParams));
+                            delete fallback.object_story_spec.video_data.image_hash;
+                            delete fallback.object_story_spec.video_data.image_url;
+                            progress.requestParams = fallback;
+                            creativeResponse = await facebookService.createAdCreative(accountId, token, fallback);
+                        } else {
+                            throw creativeErr;
+                        }
+                    }
                     creativeId = creativeResponse.id;
                     if (!creativeId) throw new Error(`Facebook did not return a creative ID for ${ad.name}.`);
                     checkpoint.creatives.push({ key: creativeKey, id: creativeId });
