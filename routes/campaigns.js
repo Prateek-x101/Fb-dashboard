@@ -762,7 +762,7 @@ router.post('/create', async (req, res) => {
                 const creativeParams = {
                     name: `${campaign.name} — ${audience.name} — ${ad.name}`,
                     url_tags: 'utm_medium={{ad.name}}&utm_campaign={{campaign.name}}&utm_content={{adset.name}}',
-                    contextual_multi_ads: { enroll_status: enhancements.multiAdvertiser ? 'OPT_IN' : 'OPT_OUT' },
+                    ...(enhancements.multiAdvertiser && { contextual_multi_ads: { enroll_status: 'OPT_IN' } }),
                     ...(Object.keys(dofFeatures).length > 0 && {
                         degrees_of_freedom_spec: { creative_features_spec: dofFeatures }
                     }),
