@@ -790,11 +790,7 @@ router.post('/create', async (req, res) => {
                         link_description: step3.description || '',
                         call_to_action: { type: step3.cta || 'SHOP_NOW', value: { link: destinationUrl } }
                     };
-                    if (ad.thumbnailHash) {
-                        creativeParams.object_story_spec.video_data.image_hash = ad.thumbnailHash;
-                    } else if (thumbnailUrl) {
-                        creativeParams.object_story_spec.video_data.image_url = thumbnailUrl;
-                    }
+                    // image_hash / image_url intentionally omitted — Facebook auto-generates thumbnail
                     delete creativeParams.object_story_spec.link_data;
                 }
                 if (requestedInstagramId) creativeParams.object_story_spec.instagram_user_id = requestedInstagramId;
