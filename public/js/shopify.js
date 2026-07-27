@@ -1042,7 +1042,6 @@
 
             try {
                 btnGen.disabled = true;
-                results.style.display = 'none';
                 processing.style.display = 'block';
 
                 const parts = [];
