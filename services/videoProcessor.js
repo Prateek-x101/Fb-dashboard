@@ -14,19 +14,9 @@ async function extractFbAdsLibraryVideo(pageUrl, accessToken) {
     } catch {}
     if (!adId) throw new Error('Could not find ad ID in Facebook Ads Library URL. Make sure the URL contains ?id=...');
 
-    // ── Step 1: get snapshot URL via Graph API ─────────────────────────────
-    const apiUrl = `https://graph.facebook.com/v25.0/${adId}?fields=ad_snapshot_url&access_token=${accessToken}`;
-    const apiRes = await fetch(apiUrl);
-    const apiJson = await apiRes.json();
-
-    if (apiJson.error) {
-        throw new Error(`Facebook API error: ${apiJson.error.message}`);
-    }
-
-    const snapshotUrl = apiJson.ad_snapshot_url;
-    if (!snapshotUrl) {
-        throw new Error(`No snapshot URL returned for ad ${adId}. The ad may not be publicly available.`);
-    }
+    // ── Step 1: build snapshot URL directly (no Graph API call needed) ───────
+    // The render_ad endpoint accepts any valid user token and the ad ID.
+    const snapshotUrl = `https://www.facebook.com/ads/archive/render_ad/?id=${adId}&access_token=${encodeURIComponent(accessToken)}`;
 
     // ── Step 2: fetch the snapshot HTML page ──────────────────────────────
     const htmlRes = await fetch(snapshotUrl, {
