@@ -28,32 +28,87 @@ async function extractFbAdsLibraryVideo(pageUrl, accessToken) {
     });
     const html = await htmlRes.text();
 
-    // ── Step 3: extract CDN video URL from HTML ────────────────────────────
-    // Facebook embeds video URLs as JSON-encoded strings in the snapshot HTML
-    const patterns = [
-        /"browser_native_hd_url"\s*:\s*"([^"]+)"/,
-        /"browser_native_sd_url"\s*:\s*"([^"]+)"/,
-        /"playable_url_quality_hd"\s*:\s*"([^"]+)"/,
-        /"playable_url"\s*:\s*"([^"]+)"/,
-        /"video_hd_url"\s*:\s*"([^"]+)"/,
-        /"video_sd_url"\s*:\s*"([^"]+)"/,
-        /og:video[^>]+content="([^"]+\.mp4[^"]*)"/,
-        /<video[^>]+src="([^"]+)"/
-    ];
+    // ── Log first 500 chars to help debug future format changes ──────────────
+    console.log(`[FBAdsLib] Snapshot HTML preview (${html.length} bytes): ${html.slice(0, 300)}`);
 
-    for (const re of patterns) {
+    // Detect Facebook error page before attempting extraction
+    if (html.length < 3000 && (html.includes('Sorry, something went wrong') || html.includes('<title>Error</title>'))) {
+        throw new Error('Facebook returned an error page for the ad snapshot. The access token may lack permissions or the ad is no longer available.');
+    }
+
+    // ── Unescape helper ────────────────────────────────────────────────────
+    function fbUnescape(s) {
+        return s
+            .replace(/\\u002F/gi, '/')
+            .replace(/\\u0026/gi, '&')
+            .replace(/\\u003A/gi, ':')
+            .replace(/\\u003D/gi, '=')
+            .replace(/\\u0025/gi, '%')
+            .replace(/\\\//g, '/')
+            .replace(/\\"/g, '"');
+    }
+
+    // ── Step 3: extract CDN video URL from HTML ────────────────────────────
+    // Strategy A: look for any fbcdn.net video CDN URL directly (most robust)
+    // Facebook CDN pattern: https://video*.fbcdn.net/v/...
+    const cdnRe = /https:\/\/video[a-z0-9._-]*\.fbcdn\.net\/v\/[^\s"'<>\\]{20,}/g;
+    const cdnMatches = html.match(cdnRe) || [];
+    if (cdnMatches.length) {
+        const best = cdnMatches.find(u => u.includes('_hd')) || cdnMatches[0];
+        console.log(`[FBAdsLib] Strategy A: found CDN URL: ${best.slice(0, 80)}`);
+        return fbUnescape(best);
+    }
+
+    // Strategy B: same but URL is Unicode-escaped (\u002F = /)
+    const cdnReEncoded = /https:\\u002F\\u002Fvideo[a-z0-9._-]*\.fbcdn\.net\\u002Fv\\u002F[^\s"'<>]{20,}/g;
+    const cdnEncoded = html.match(cdnReEncoded) || [];
+    if (cdnEncoded.length) {
+        const best = cdnEncoded.find(u => u.includes('_hd')) || cdnEncoded[0];
+        console.log(`[FBAdsLib] Strategy B: found encoded CDN URL`);
+        return fbUnescape(best);
+    }
+
+    // Strategy C: named JSON keys for video URL (various Facebook formats)
+    const keyPatterns = [
+        /"browser_native_hd_url"\s*:\s*"([^"]{20,})"/,
+        /"browser_native_sd_url"\s*:\s*"([^"]{20,})"/,
+        /"playable_url_quality_hd"\s*:\s*"([^"]{20,})"/,
+        /"playable_url"\s*:\s*"([^"]{20,})"/,
+        /"video_hd_url"\s*:\s*"([^"]{20,})"/,
+        /"video_sd_url"\s*:\s*"([^"]{20,})"/,
+        /"videoUrl"\s*:\s*"([^"]{20,})"/,
+        /"src"\s*:\s*"(https:\\?\/\\?\/[a-z0-9._-]+\.fbcdn\.net[^"]{20,})"/,
+        /og:video[^>]+content="([^"]+)"/,
+        /<video[^>]+src="(https?:\/\/[^"]+)"/,
+        /source\s+src="(https?:\/\/[^"]+\.mp4[^"]*)"/
+    ];
+    for (const re of keyPatterns) {
         const m = html.match(re);
         if (m && m[1]) {
-            // Unescape JSON unicode escapes (Facebook encodes \/ as \\/)
-            const videoUrl = m[1].replace(/\\u0025/g, '%').replace(/\\\//g, '/');
+            const videoUrl = fbUnescape(m[1]);
             if (videoUrl.startsWith('http')) {
-                console.log(`[FBAdsLib] Found video URL via pattern ${re.source.slice(0, 30)}`);
+                console.log(`[FBAdsLib] Strategy C: key=${re.source.slice(0, 40)}`);
                 return videoUrl;
             }
         }
     }
 
-    throw new Error(`Found the ad snapshot but could not locate a video URL inside it. This ad may be image-only, or Facebook changed their page format.`);
+    // Strategy D: any .mp4 URL in the page
+    const mp4Re = /https?:\/\/[^\s"'<>]{10,}\.mp4[^\s"'<>]*/g;
+    const mp4Matches = html.match(mp4Re) || [];
+    if (mp4Matches.length) {
+        console.log(`[FBAdsLib] Strategy D: found mp4 URL`);
+        return fbUnescape(mp4Matches[0]);
+    }
+
+    // Nothing found — dump a snippet to server logs to aid debugging
+    const snippets = ['fbcdn', 'video', 'mp4', 'playable'];
+    for (const kw of snippets) {
+        const idx = html.toLowerCase().indexOf(kw);
+        if (idx !== -1) console.log(`[FBAdsLib] Keyword '${kw}' context: ...${html.slice(Math.max(0,idx-40), idx+80)}...`);
+    }
+
+    throw new Error(`Found the ad snapshot but could not locate a video URL inside it. This ad may be image-only or the format changed — check server logs for details.`);
 }
 
 const binDir = path.join(__dirname, '..', 'bin');
