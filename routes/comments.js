@@ -135,9 +135,12 @@ router.get('/inbox', async (req, res) => {
                             const r = await fetchWithTimeout(url);
                             const d = await r.json();
                             if (d.error) {
+                                const needsReauth = d.error.code === 3 || d.error.code === 10 || d.error.code === 190 ||
+                                    /capability|permission|scope|oauth|token/i.test(d.error.message);
                                 errors.push({
                                     accountLabel: `${acc.label || acc.accountId} (@${instagramUsername})`,
-                                    message: `Instagram DM: ${d.error.message}`
+                                    message: `Instagram DM: ${d.error.message}`,
+                                    needsReauth
                                 });
                             } else if (d.data) {
                                 d.data.forEach(conv => {

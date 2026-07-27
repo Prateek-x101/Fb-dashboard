@@ -83,8 +83,48 @@ const InboxManager = {
             this.items = data.data || [];
             
             if (data.errors && data.errors.length > 0) {
-                const warningMsg = data.errors.map(err => `${err.accountLabel}: ${err.message}`).join(', ');
-                window.AppController?.showToast(`⚠️ Connection warning: ${warningMsg}`, 'warning', 10000);
+                const reauthErrors = data.errors.filter(e => e.needsReauth);
+                const otherErrors  = data.errors.filter(e => !e.needsReauth);
+
+                // Show a persistent banner for scope/capability errors with a Re-connect button
+                const existing = document.getElementById('cm-reauth-banner');
+                if (existing) existing.remove();
+
+                if (reauthErrors.length > 0) {
+                    const banner = document.createElement('div');
+                    banner.id = 'cm-reauth-banner';
+                    banner.style.cssText = `
+                        background: rgba(220,80,30,0.15);
+                        border: 1px solid rgba(220,80,30,0.5);
+                        border-radius: 8px;
+                        padding: 10px 14px;
+                        margin-bottom: 10px;
+                        font-size: 0.85rem;
+                        color: #f4a261;
+                        display: flex;
+                        align-items: center;
+                        gap: 10px;
+                    `;
+                    const accounts = [...new Set(reauthErrors.map(e => e.accountLabel))].join(', ');
+                    banner.innerHTML = `
+                        <span style="flex:1">⚠️ <strong>Permission missing</strong> for: ${accounts}.<br>
+                        Your access token was created before Instagram DM permission was added to your app.
+                        Re-connect the account to get a fresh token with updated scopes.</span>
+                        <button onclick="document.getElementById('btn-connect-facebook')?.click(); document.getElementById('cm-reauth-banner')?.remove();"
+                            style="background:rgba(220,80,30,0.8);border:none;color:#fff;padding:6px 12px;border-radius:6px;cursor:pointer;white-space:nowrap;font-size:0.82rem;">
+                            🔄 Re-connect Account
+                        </button>
+                    `;
+                    const list = document.getElementById('cm-list');
+                    list?.parentNode?.insertBefore(banner, list);
+                }
+
+                if (otherErrors.length > 0) {
+                    const warningMsg = otherErrors.map(err => `${err.accountLabel}: ${err.message}`).join(', ');
+                    window.AppController?.showToast(`⚠️ Connection warning: ${warningMsg}`, 'warning', 10000);
+                }
+            } else {
+                document.getElementById('cm-reauth-banner')?.remove();
             }
             
             this.renderList();
