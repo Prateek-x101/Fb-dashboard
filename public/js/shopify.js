@@ -16,7 +16,6 @@
             this.loadStoresSelect();
             document.addEventListener('appReady', () => {
                 this.loadStoresSelect();
-                this.loadVtlStoresSelect();
             });
         },
 
@@ -895,39 +894,75 @@
         initVideoToListing: function() {
             const btnGenerate = document.getElementById('btn-vtl-generate');
             const btnAssign   = document.getElementById('btn-vtl-assign-variants');
-            const btnImport   = document.getElementById('btn-vtl-import');
+            const btnUse      = document.getElementById('btn-vtl-use-listing');
             const variantsCb  = document.getElementById('vtl-has-variants');
             const variantsCfg = document.getElementById('vtl-variants-config');
+            const btnAddOpt   = document.getElementById('btn-vtl-add-option');
 
             if (btnGenerate) btnGenerate.addEventListener('click', () => this.vtlGenerate());
             if (btnAssign)   btnAssign.addEventListener('click', () => this.vtlAssignVariants());
-            if (btnImport)   btnImport.addEventListener('click', () => this.vtlImport());
+            if (btnUse)      btnUse.addEventListener('click', () => this.vtlUseThisListing());
             if (variantsCb)  variantsCb.addEventListener('change', () => {
                 if (variantsCfg) variantsCfg.style.display = variantsCb.checked ? 'block' : 'none';
+                if (variantsCb.checked) this.vtlAddOptionRow(true); // add first row if empty
             });
+            if (btnAddOpt)   btnAddOpt.addEventListener('click', () => this.vtlAddOptionRow(false));
         },
 
-        loadVtlStoresSelect: async function() {
-            const select = document.getElementById('vtl-store-select');
-            if (!select) return;
-            select.innerHTML = '<option value="">-- Choose Store --</option>';
-            try {
-                const stores = await window.API.getShopifyStores();
-                (stores || []).forEach(s => {
-                    const opt = document.createElement('option');
-                    opt.value = s.id;
-                    opt.textContent = `${s.name} (${s.shopUrl})`;
-                    select.appendChild(opt);
+        // Add a variant option row to the dynamic list
+        vtlAddOptionRow: function(isFirst) {
+            const list = document.getElementById('vtl-options-list');
+            if (!list) return;
+            // Don't double-add the first row
+            if (isFirst && list.children.length > 0) return;
+            const idx = list.children.length;
+            const row = document.createElement('div');
+            row.className = 'vtl-option-row';
+            row.style.cssText = 'display:grid; grid-template-columns:1fr 2fr auto; gap:8px; align-items:center;';
+            row.innerHTML = `
+                <input type="text" class="form-control vtl-opt-name" placeholder="${idx === 0 ? 'Color' : 'Size'}" style="font-size:0.88rem;">
+                <input type="text" class="form-control vtl-opt-values" placeholder="${idx === 0 ? 'Red, Blue, Green' : 'S, M, L, XL'}" style="font-size:0.88rem;">
+                <button type="button" class="btn btn-secondary btn-xs vtl-remove-option" style="padding:4px 8px;" title="Remove">🗑️</button>
+            `;
+            row.querySelector('.vtl-remove-option').addEventListener('click', () => {
+                row.remove();
+                // Clear assignments since options changed
+                this.vtlVariantAssignments = {};
+                const asgn = document.getElementById('vtl-variant-assignments');
+                if (asgn) { asgn.style.display = 'none'; asgn.innerHTML = ''; }
+            });
+            // Changing values clears assignments
+            row.querySelectorAll('input').forEach(inp => {
+                inp.addEventListener('input', () => {
+                    this.vtlVariantAssignments = {};
+                    const asgn = document.getElementById('vtl-variant-assignments');
+                    if (asgn) { asgn.style.display = 'none'; asgn.innerHTML = ''; }
                 });
-            } catch (e) { console.error('vtl stores load error:', e.message); }
+            });
+            list.appendChild(row);
+        },
+
+        // Read all option rows → [{name, values[]}]
+        vtlGetOptions: function() {
+            const rows = document.querySelectorAll('#vtl-options-list .vtl-option-row');
+            const options = [];
+            rows.forEach(row => {
+                const name = row.querySelector('.vtl-opt-name')?.value.trim();
+                const valuesRaw = row.querySelector('.vtl-opt-values')?.value.trim();
+                if (name && valuesRaw) {
+                    const values = valuesRaw.split(',').map(v => v.trim()).filter(Boolean);
+                    if (values.length) options.push({ name, values });
+                }
+            });
+            return options;
         },
 
         vtlGenerate: async function() {
-            const fileInput = document.getElementById('vtl-video-input');
-            const btnGen    = document.getElementById('btn-vtl-generate');
+            const fileInput  = document.getElementById('vtl-video-input');
+            const btnGen     = document.getElementById('btn-vtl-generate');
             const processing = document.getElementById('vtl-processing');
-            const procMsg   = document.getElementById('vtl-processing-msg');
-            const results   = document.getElementById('vtl-results');
+            const procMsg    = document.getElementById('vtl-processing-msg');
+            const results    = document.getElementById('vtl-results');
 
             if (!fileInput?.files?.length) {
                 window.AppController.showToast('Please select a video file first.', 'warning');
@@ -956,7 +991,7 @@
                 grid.innerHTML = '';
                 this.vtlFrames.forEach((frame, i) => {
                     const div = document.createElement('div');
-                    div.style.cssText = 'position:relative; cursor:pointer; border-radius:8px; overflow:hidden; border:2px solid rgba(139,92,246,0.6); transition:border-color 0.2s;';
+                    div.style.cssText = 'position:relative; cursor:pointer; border-radius:8px; overflow:hidden; border:2px solid rgba(139,92,246,0.6); transition:all 0.2s;';
                     div.setAttribute('data-vtl-frame-idx', i);
                     div.innerHTML = `
                         <img src="${frame.url}" style="width:120px; height:90px; object-fit:cover; display:block;">
@@ -966,27 +1001,26 @@
                     grid.appendChild(div);
                 });
 
-                // Fill generated fields
+                // Fill generated listing fields
                 document.getElementById('vtl-title').value = data.listing.title || '';
                 document.getElementById('vtl-price').value = data.listing.suggestedPrice || '';
                 document.getElementById('vtl-compare-price').value = '';
                 document.getElementById('vtl-tags').value = Array.isArray(data.listing.tags) ? data.listing.tags.join(', ') : (data.listing.tags || '');
                 document.getElementById('vtl-description').value = data.listing.description || '';
 
-                // Reset variants
+                // Reset variant config
                 const cb = document.getElementById('vtl-has-variants');
                 if (cb) cb.checked = false;
                 const cfg = document.getElementById('vtl-variants-config');
                 if (cfg) cfg.style.display = 'none';
+                const optList = document.getElementById('vtl-options-list');
+                if (optList) optList.innerHTML = '';
                 const asgn = document.getElementById('vtl-variant-assignments');
                 if (asgn) { asgn.style.display = 'none'; asgn.innerHTML = ''; }
-                document.getElementById('vtl-variant-option').value = '';
-                document.getElementById('vtl-variant-values').value = '';
 
-                await this.loadVtlStoresSelect();
                 processing.style.display = 'none';
                 results.style.display = 'block';
-                window.AppController.showToast('Listing generated from video! Review and import. 🎉', 'success');
+                window.AppController.showToast('Listing generated! Review and proceed to import. 🎉', 'success');
             } catch (err) {
                 processing.style.display = 'none';
                 window.AppController.showToast('Error: ' + err.message, 'error');
@@ -1003,27 +1037,25 @@
             el.style.opacity = selected ? '1' : '0.35';
             const check = el.querySelector('.vtl-frame-check');
             if (check) check.style.display = selected ? 'flex' : 'none';
-            // Clear variant assignments since selection changed
+            // Clear variant assignments since images changed
             this.vtlVariantAssignments = {};
             const asgn = document.getElementById('vtl-variant-assignments');
             if (asgn) { asgn.style.display = 'none'; asgn.innerHTML = ''; }
         },
 
         vtlAssignVariants: async function() {
-            const optionEl = document.getElementById('vtl-variant-option');
-            const valuesEl = document.getElementById('vtl-variant-values');
-            const btn      = document.getElementById('btn-vtl-assign-variants');
-            const asgnDiv  = document.getElementById('vtl-variant-assignments');
+            const btn     = document.getElementById('btn-vtl-assign-variants');
+            const asgnDiv = document.getElementById('vtl-variant-assignments');
 
-            const variantOption = optionEl?.value.trim();
-            const variantValuesRaw = valuesEl?.value.trim();
-            if (!variantOption || !variantValuesRaw) {
-                window.AppController.showToast('Enter a variant option name and at least one value.', 'warning');
+            const options = this.vtlGetOptions();
+            if (!options.length) {
+                window.AppController.showToast('Add at least one variant option with values first.', 'warning');
                 return;
             }
-            const variantValues = variantValuesRaw.split(',').map(v => v.trim()).filter(Boolean);
-            if (variantValues.length < 2) {
-                window.AppController.showToast('Please enter at least 2 variant values (e.g. Red, Blue).', 'warning');
+            // Only first option is used for image assignment (it's the visual/color option)
+            const primaryOption = options[0];
+            if (primaryOption.values.length < 2) {
+                window.AppController.showToast(`"${primaryOption.name}" needs at least 2 values for image assignment.`, 'warning');
                 return;
             }
 
@@ -1035,136 +1067,186 @@
 
             try {
                 btn.disabled = true;
-                btn.textContent = '⏳ Analyzing…';
-                window.AppController.showToast('Gemini is analyzing images for variant assignment…', 'info');
+                btn.textContent = '⏳ Analyzing images…';
+                window.AppController.showToast(`Gemini is assigning images to "${primaryOption.name}" values…`, 'info');
 
                 const response = await fetch('/api/shopify/assign-variant-images', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         frameFilenames: selectedFrames.map(f => f.filename),
-                        variantOption,
-                        variantValues
+                        variantOption: primaryOption.name,
+                        variantValues: primaryOption.values
                     })
                 });
                 const data = await response.json();
                 if (!response.ok) throw new Error(data.error || 'Assignment failed');
 
-                // Map filenames to assignments
+                // Store: filename → assigned primary value (e.g. "Red")
                 this.vtlVariantAssignments = {};
                 selectedFrames.forEach((frame, i) => {
-                    this.vtlVariantAssignments[frame.filename] = data.assignments[String(i)] || variantValues[0];
+                    this.vtlVariantAssignments[frame.filename] = data.assignments[String(i)] || primaryOption.values[0];
                 });
 
-                // Render assignment table
+                // Render result with labeled images
                 asgnDiv.innerHTML = `
-                    <p style="color:#a78bfa; font-size:0.85rem; margin-bottom:8px;">✅ Gemini assigned images to variants:</p>
+                    <p style="color:#a78bfa; font-size:0.85rem; margin-bottom:8px;">
+                        ✅ Images assigned to <strong>${this.escapeHtml(primaryOption.name)}</strong> values:
+                    </p>
                     <div style="display:flex; flex-wrap:wrap; gap:10px;">
-                        ${selectedFrames.map((frame, i) => `
+                        ${selectedFrames.map(frame => `
                             <div style="text-align:center; font-size:0.78rem;">
                                 <img src="${frame.url}" style="width:70px; height:55px; object-fit:cover; border-radius:6px; border:2px solid rgba(139,92,246,0.5); display:block; margin-bottom:4px;">
-                                <span style="color:#a78bfa; font-weight:600;">${this.escapeHtml(this.vtlVariantAssignments[frame.filename] || variantValues[0])}</span>
+                                <span style="color:#a78bfa; font-weight:600; font-size:0.75rem;">${this.escapeHtml(this.vtlVariantAssignments[frame.filename] || primaryOption.values[0])}</span>
                             </div>`).join('')}
                     </div>`;
                 asgnDiv.style.display = 'block';
-                window.AppController.showToast('Images assigned to variants! ✨', 'success');
+
+                // Show how many combinations will be created
+                const allOptions = this.vtlGetOptions();
+                const totalCombos = allOptions.reduce((acc, opt) => acc * opt.values.length, 1);
+                window.AppController.showToast(`Images assigned! Will create ${totalCombos} variant combinations. ✨`, 'success');
             } catch (err) {
                 window.AppController.showToast('Variant assignment error: ' + err.message, 'error');
             } finally {
                 btn.disabled = false;
-                btn.textContent = '🤖 Auto-Assign Images to Variants';
+                btn.textContent = '🤖 Auto-Assign Images to First Option';
             }
         },
 
-        vtlImport: async function() {
-            const storeId   = document.getElementById('vtl-store-select')?.value;
-            const skuPrefix = document.getElementById('vtl-sku-prefix')?.value.trim();
-            const title     = document.getElementById('vtl-title')?.value.trim();
-            const price     = document.getElementById('vtl-price')?.value.trim();
-            const compare   = document.getElementById('vtl-compare-price')?.value.trim();
-            const tagsRaw   = document.getElementById('vtl-tags')?.value.trim();
-            const desc      = document.getElementById('vtl-description')?.value.trim();
-            const btnImport = document.getElementById('btn-vtl-import');
+        // Build full cartesian-product variants with image assignment
+        vtlBuildAllVariants: function(options, selectedFrames, price, compare) {
+            if (!options.length) {
+                return [{ option1: 'Default Title', price: price || '0', compare_at_price: compare || null }];
+            }
 
-            if (!storeId) { window.AppController.showToast('Please select a Shopify store.', 'warning'); return; }
-            if (!skuPrefix) { window.AppController.showToast('Please enter a SKU prefix.', 'warning'); return; }
+            // primaryValue → index in selectedFrames (first match wins)
+            const primaryValueToImgIdx = {};
+            selectedFrames.forEach((frame, i) => {
+                const val = this.vtlVariantAssignments[frame.filename];
+                if (val && primaryValueToImgIdx[val] === undefined) {
+                    primaryValueToImgIdx[val] = i;
+                }
+            });
+
+            // Cartesian product of all option values
+            const allValues = options.map(o => o.values);
+            const cartesian = allValues.reduce(
+                (acc, vals) => acc.flatMap(combo => vals.map(v => [...combo, v])),
+                [[]]
+            );
+
+            return cartesian.map(combo => {
+                const v = { price: price || '0', compare_at_price: compare || null };
+                if (combo[0] !== undefined) v.option1 = combo[0]; // primary (Color)
+                if (combo[1] !== undefined) v.option2 = combo[1];
+                if (combo[2] !== undefined) v.option3 = combo[2];
+                // Image matches the primary option value (option1)
+                const primaryVal = combo[0];
+                v.variant_image_index = primaryValueToImgIdx[primaryVal] !== undefined
+                    ? primaryValueToImgIdx[primaryVal]
+                    : 0;
+                return v;
+            });
+        },
+
+        // Populate the existing scraper import form with VTL data and open it
+        vtlUseThisListing: function() {
+            const title   = document.getElementById('vtl-title')?.value.trim();
+            const price   = document.getElementById('vtl-price')?.value.trim();
+            const compare = document.getElementById('vtl-compare-price')?.value.trim();
+            const tagsRaw = document.getElementById('vtl-tags')?.value.trim();
+            const desc    = document.getElementById('vtl-description')?.value.trim();
+
             if (!title) { window.AppController.showToast('Product title cannot be empty.', 'warning'); return; }
 
             const selectedFrames = this.vtlFrames.filter(f => f.selected);
             if (!selectedFrames.length) { window.AppController.showToast('No images selected.', 'warning'); return; }
 
-            const hasVariants = document.getElementById('vtl-has-variants')?.checked;
-            const variantOption = document.getElementById('vtl-variant-option')?.value.trim();
-            const variantValuesRaw = document.getElementById('vtl-variant-values')?.value.trim();
-            const variantValues = variantValuesRaw ? variantValuesRaw.split(',').map(v => v.trim()).filter(Boolean) : [];
-
-            const imageUrls = selectedFrames.map(f => f.url);
             const tags = tagsRaw ? tagsRaw.split(',').map(t => t.trim()).filter(Boolean) : [];
+            const imageUrls = selectedFrames.map(f => f.url);
 
-            let options = [];
-            let variants = [];
+            const hasVariants = document.getElementById('vtl-has-variants')?.checked;
+            const options = hasVariants ? this.vtlGetOptions() : [];
+            const variants = this.vtlBuildAllVariants(options, selectedFrames, price, compare);
 
-            if (hasVariants && variantOption && variantValues.length >= 2) {
-                options = [{ name: variantOption, values: variantValues }];
-                // Group images by variant value
-                const variantImageMap = {}; // variantValue → first image index
-                selectedFrames.forEach((frame, i) => {
-                    const assignedValue = this.vtlVariantAssignments[frame.filename];
-                    if (assignedValue && variantImageMap[assignedValue] === undefined) {
-                        variantImageMap[assignedValue] = i;
-                    }
-                });
-                variants = variantValues.map(val => ({
-                    option1: val,
-                    price: price || '0',
-                    compare_at_price: compare || null,
-                    variant_image_index: variantImageMap[val] !== undefined ? variantImageMap[val] : 0
-                }));
-            } else {
-                variants = [{ option1: 'Default Title', price: price || '0', compare_at_price: compare || null }];
-            }
+            // Build scrapedProduct in the same shape the import route expects
+            this.scrapedProduct = {
+                title,
+                description: desc,
+                tags,
+                images: imageUrls,
+                options,
+                variants,
+                type: '',
+                vendor: ''
+            };
+            this.userCollections = [];
+            this.floatingVideos = [];
 
-            const product = { title, description: desc, tags, images: imageUrls, options, variants, type: '', vendor: '' };
+            // Populate the shared import form fields
+            document.getElementById('shopify-import-title').value = title;
+            document.getElementById('shopify-import-sku-prefix').value = '';
+            document.getElementById('shopify-import-price').value = price || '';
+            document.getElementById('shopify-import-compare-price').value = compare || '';
+            document.getElementById('shopify-import-description').value = desc;
 
-            try {
-                btnImport.disabled = true;
-                btnImport.textContent = '🚀 Importing…';
-                window.AppController.showToast('Uploading images and creating Shopify listing…', 'info');
+            // Render collections (empty)
+            const collectionsContainer = document.getElementById('shopify-import-collections-checklist');
+            if (collectionsContainer) collectionsContainer.innerHTML = '<span style="color:var(--text-secondary); font-size:0.85rem;">No collections — select store after import if needed.</span>';
 
-                const result = await window.API.importShopifyProduct({
-                    storeId, product, skuPrefix,
-                    price: price || null,
-                    comparePrice: compare || null,
-                    collectionIds: [],
-                    floatingVideos: []
-                });
-
-                window.AppController.showToast(`Imported: "${result.title}" to Shopify! 🎉`, 'success');
-
-                // Show result modal
-                const modalTitle = document.getElementById('modal-result-title');
-                const modalBody  = document.getElementById('modal-result-body');
-                if (modalTitle && modalBody) {
-                    modalTitle.textContent = 'Import Successful! 🎉';
-                    modalBody.innerHTML = `
-                        <p style="margin-bottom:1.5rem; color:var(--text-secondary); font-size:0.9rem;">
-                            Product <strong>"${this.escapeHtml(result.title)}"</strong> has been imported to your Shopify store.
-                        </p>
-                        <a href="${result.productUrl}" target="_blank" class="btn btn-secondary" style="text-align:center; display:block; text-decoration:none;">🌐 View Product on Store</a>`;
-                    window.AppController.openModal('modal-result');
+            // Render variants table if multiple options with combinations
+            const variantsContainer = document.getElementById('shopify-import-variants-container');
+            const variantsTbody     = document.getElementById('shopify-import-variants-tbody');
+            if (variantsContainer && variantsTbody) {
+                if (variants.length > 1) {
+                    variantsContainer.style.display = 'block';
+                    variantsTbody.innerHTML = '';
+                    variants.forEach((v, idx) => {
+                        const label = [v.option1, v.option2, v.option3].filter(Boolean).join(' / ');
+                        const tr = document.createElement('tr');
+                        tr.style.borderBottom = '1px solid rgba(255,255,255,0.05)';
+                        tr.innerHTML = `
+                            <td style="padding:6px; font-weight:600;">${this.escapeHtml(label)}</td>
+                            <td style="padding:6px;">
+                                <input type="number" step="0.01" class="form-control shopify-variant-price-input"
+                                    data-index="${idx}" value="${price || ''}" placeholder="${price || ''}" style="padding:4px 8px; font-size:0.8rem; background:rgba(0,0,0,0.3); border-color:var(--glass-border); width:100px;">
+                            </td>
+                            <td style="padding:6px;">
+                                <input type="number" step="0.01" class="form-control shopify-variant-compare-input"
+                                    data-index="${idx}" value="${compare || ''}" style="padding:4px 8px; font-size:0.8rem; background:rgba(0,0,0,0.3); border-color:var(--glass-border); width:100px;">
+                            </td>
+                            <td style="padding:6px; color:var(--text-secondary); font-size:0.8rem;" class="shopify-variant-sku-preview" data-index="${idx}">
+                                (prefix)-${(v.option1 || '').replace(/[^a-zA-Z0-9]/g, '')}${v.option2 ? '-' + v.option2.replace(/[^a-zA-Z0-9]/g, '') : ''}
+                            </td>`;
+                        variantsTbody.appendChild(tr);
+                    });
+                } else {
+                    variantsContainer.style.display = 'none';
                 }
-
-                // Reset
-                document.getElementById('vtl-results').style.display = 'none';
-                document.getElementById('vtl-video-input').value = '';
-                this.vtlFrames = [];
-                this.vtlVariantAssignments = {};
-            } catch (err) {
-                window.AppController.showToast('Import failed: ' + err.message, 'error');
-            } finally {
-                btnImport.disabled = false;
-                btnImport.textContent = '🚀 Import to Shopify';
             }
+
+            // Render images grid
+            const imagesContainer = document.getElementById('shopify-import-images-grid');
+            if (imagesContainer) {
+                imagesContainer.innerHTML = '';
+                selectedFrames.forEach((frame, imgIdx) => {
+                    const div = document.createElement('div');
+                    div.style.cssText = 'position:relative; flex-shrink:0;';
+                    div.innerHTML = `<img src="${frame.url}" style="width:100px; height:80px; object-fit:cover; border-radius:6px; border:1px solid var(--glass-border);">`;
+                    imagesContainer.appendChild(div);
+                });
+            }
+
+            // Update title and show the shared preview container
+            const previewTitle = document.getElementById('shopify-preview-title');
+            if (previewTitle) previewTitle.textContent = '🎬 Product Preview (from Video)';
+            const previewContainer = document.getElementById('shopify-preview-container');
+            if (previewContainer) previewContainer.style.display = 'block';
+
+            // Scroll to the import form
+            previewContainer?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            window.AppController.showToast('Listing loaded into import form. Fill SKU prefix & store, then import! 🚀', 'success');
         },
 
         // ─────────────────────────────────────────────────────────────────────
