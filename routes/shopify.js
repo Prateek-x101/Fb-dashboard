@@ -291,6 +291,23 @@ async function fetchUserCollections(shopUrl, accessToken) {
     return collections;
 }
 
+// 4a. Fetch collections for a store (used by VTL flow without needing a product URL)
+router.get('/collections', async (req, res) => {
+    try {
+        const { storeId } = req.query;
+        if (!storeId) return res.status(400).json({ error: 'storeId is required.' });
+
+        const storage = getStorage();
+        const store = (storage.shopifyStores || []).find(s => s.id === storeId);
+        if (!store) return res.status(400).json({ error: 'Store not found.' });
+
+        const collections = await fetchUserCollections(store.shopUrl, store.accessToken);
+        res.json({ success: true, collections });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch collections', details: error.message });
+    }
+});
+
 // 4. Scrape Product Details and fetch suggested collections
 router.get('/scrape', async (req, res) => {
     try {
