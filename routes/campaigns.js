@@ -808,24 +808,17 @@ router.post('/create', async (req, res) => {
                 }
 
                 if (!adId) {
+                    // tracking_specs are intentionally omitted at the ad level.
+                    // Per Meta API docs, pixel tracking is handled via promoted_object
+                    // on the adset. Adding tracking_specs here causes error 1815645
+                    // (OAuthException / invalid parameter) when the pixel is not
+                    // explicitly shared with the ad account token.
                     const adParams = {
                         name: ad.name,
                         adset_id: adsetId,
                         creative: { creative_id: creativeId },
-                        status: 'ACTIVE',
-                        tracking_specs: [
-                            {
-                                "action.type": ["offsite_conversion"],
-                                "fb_pixel": [step2.pixel]
-                            }
-                        ]
+                        status: 'ACTIVE'
                     };
-                    if (offlineDatasetId) {
-                        adParams.tracking_specs.push({
-                            "action.type": ["onsite_conversion"],
-                            "conversion_id": [offlineDatasetId]
-                        });
-                    }
                     progress.failedStep = 'ad';
                     progress.failedIndex = { audienceIndex, adIndex };
                     progress.requestParams = adParams;
