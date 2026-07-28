@@ -170,6 +170,22 @@ async function downloadDirectUrl(url, outputFilename) {
     return tempOutputPath;
 }
 
+// Resolve the actual downloaded file path (yt-dlp may change the extension)
+function resolveActualPath(resolve, reject, tempOutputPath, uploadsDir, outputFilename) {
+    let actualPath = tempOutputPath;
+    if (!fs.existsSync(actualPath)) {
+        const files = fs.readdirSync(uploadsDir);
+        const matched = files.find(f => f.startsWith(`temp_${path.parse(outputFilename).name}`));
+        if (matched) {
+            actualPath = path.join(uploadsDir, matched);
+        } else {
+            return reject(new Error('Could not find downloaded file in uploads directory.'));
+        }
+    }
+    console.log(`Video downloaded successfully to: ${actualPath}`);
+    resolve(actualPath);
+}
+
 // Download video using yt-dlp in HD (Optimized Speed)
 // accessToken is optional; used only for Facebook Ads Library URLs
 async function downloadVideo(url, outputFilename, accessToken) {
@@ -193,41 +209,47 @@ async function downloadVideo(url, outputFilename, accessToken) {
     
     console.log(`Downloading video from ${url}...`);
     
-    // Optimized yt-dlp parameters:
-    // -f best[ext=mp4]/best: directly grab single pre-merged stream (avoid separate stream download & merge phase)
-    // --concurrent-fragments 5: parallel chunks download (speeds up network throughput)
+    // yt-dlp args: browser impersonation avoids 403 blocks from YouTube/Instagram/Pinterest
+    // -f: prefer pre-merged mp4 stream, fall back to best available
+    // --impersonate chrome: sends real Chrome headers/TLS fingerprint
+    // --concurrent-fragments 5: parallel chunk download for speed
     const args = [
         '--no-playlist',
-        '-f', 'best[ext=mp4]/best',
+        '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
         '--concurrent-fragments', '5',
         '--no-warnings',
         '--no-check-certificates',
+        '--impersonate', 'chrome',
+        '--add-header', 'Accept-Language:en-US,en;q=0.9',
+        '--extractor-retries', '3',
         '-o', tempOutputPath,
         url
     ];
-    
+
     return new Promise((resolve, reject) => {
-        execFile(ytdlpPath, args, (error, stdout, stderr) => {
+        const child = execFile(ytdlpPath, args, { timeout: 300000 }, (error, stdout, stderr) => {
             if (error) {
-                console.error("yt-dlp execution error:", error);
+                // If impersonation flag unsupported on this yt-dlp build, retry without it
+                if (/impersonate|unrecognized/i.test(stderr || error.message)) {
+                    console.warn('yt-dlp --impersonate not supported, retrying without it...');
+                    const fallbackArgs = args.filter((a, i) =>
+                        a !== '--impersonate' && args[i - 1] !== '--impersonate'
+                    );
+                    execFile(ytdlpPath, fallbackArgs, { timeout: 300000 }, (err2, out2, serr2) => {
+                        if (err2) {
+                            console.error('yt-dlp fallback error:', err2.message);
+                            console.error('yt-dlp fallback stderr:', serr2);
+                            return reject(new Error(`Failed to download video from URL: ${err2.message}`));
+                        }
+                        resolveActualPath(resolve, reject, tempOutputPath, uploadsDir, outputFilename);
+                    });
+                    return;
+                }
+                console.error("yt-dlp execution error:", error.message);
                 console.error("yt-dlp stderr:", stderr);
                 return reject(new Error(`Failed to download video from URL: ${error.message}`));
             }
-            
-            // Resolve actual filename
-            let actualPath = tempOutputPath;
-            if (!fs.existsSync(actualPath)) {
-                const files = fs.readdirSync(uploadsDir);
-                const matched = files.find(f => f.startsWith(`temp_${path.parse(outputFilename).name}`));
-                if (matched) {
-                    actualPath = path.join(uploadsDir, matched);
-                } else {
-                    return reject(new Error("Could not find downloaded file in uploads directory."));
-                }
-            }
-            
-            console.log(`Video downloaded successfully to: ${actualPath}`);
-            resolve(actualPath);
+            resolveActualPath(resolve, reject, tempOutputPath, uploadsDir, outputFilename);
         });
     });
 }
