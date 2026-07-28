@@ -36,11 +36,11 @@ async function downloadUrlToTempFile(url) {
 }
 
 function appendUtmParams(url) {
-    if (!url) return url;
-    const utmStr = 'utm_medium={{ad.name}}&utm_campaign={{campaign.name}}&utm_content={{adset.name}}';
-    if (url.includes('utm_medium=')) return url;
-    const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}${utmStr}`;
+    // Return the URL as-is. Dynamic UTM tracking is handled by the
+    // url_tags field on the creative, which Meta appends at serve time.
+    // Adding them here too causes the params to appear twice in the
+    // final click URL.
+    return url || url;
 }
 
 function parseIsoDate(dateString) {
@@ -771,8 +771,9 @@ router.post('/create', async (req, res) => {
                         link_data: {
                             message: textVariation,
                             link: destinationUrl,
-                            name: step3.headline || '',
-                            description: step3.description || '',
+                            // Omit optional string fields when blank — Meta rejects empty strings
+                            ...(step3.headline  && { name: step3.headline }),
+                            ...(step3.description && { description: step3.description }),
                             call_to_action: { type: step3.cta || 'SHOP_NOW', value: { link: destinationUrl } }
                         }
                     }
@@ -783,8 +784,9 @@ router.post('/create', async (req, res) => {
                     creativeParams.object_story_spec.video_data = {
                         video_id: ad.videoId,
                         message: textVariation,
-                        title: step3.headline || '',
-                        link_description: step3.description || '',
+                        // Omit optional string fields when blank — Meta rejects empty strings
+                        ...(step3.headline    && { title: step3.headline }),
+                        ...(step3.description && { link_description: step3.description }),
                         call_to_action: { type: step3.cta || 'SHOP_NOW', value: { link: destinationUrl } }
                     };
                     if (ad.thumbnailHash) {
