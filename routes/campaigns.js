@@ -762,7 +762,7 @@ router.post('/create', async (req, res) => {
                 const creativeParams = {
                     name: `${campaign.name} — ${audience.name} — ${ad.name}`,
                     url_tags: 'utm_medium={{ad.name}}&utm_campaign={{campaign.name}}&utm_content={{adset.name}}',
-                    ...(enhancements.multiAdvertiser && { contextual_multi_ads: { enroll_status: 'OPT_IN' } }),
+                    contextual_multi_ads: { enroll_status: enhancements.multiAdvertiser ? 'OPT_IN' : 'OPT_OUT' },
                     ...(Object.keys(dofFeatures).length > 0 && {
                         degrees_of_freedom_spec: { creative_features_spec: dofFeatures }
                     }),
@@ -779,7 +779,6 @@ router.post('/create', async (req, res) => {
                 };
                 if (ad.imageHash) creativeParams.object_story_spec.link_data.image_hash = ad.imageHash;
                 if (ad.videoId) {
-                    const adMediaInfo = uploadedMedia.find(item => item.media === ad.media);
                     let thumbnailUrl = null;
                     creativeParams.object_story_spec.video_data = {
                         video_id: ad.videoId,
@@ -788,7 +787,11 @@ router.post('/create', async (req, res) => {
                         link_description: step3.description || '',
                         call_to_action: { type: step3.cta || 'SHOP_NOW', value: { link: destinationUrl } }
                     };
-                    // image_hash / image_url intentionally omitted — Facebook auto-generates thumbnail
+                    if (ad.thumbnailHash) {
+                        creativeParams.object_story_spec.video_data.image_hash = ad.thumbnailHash;
+                    } else if (thumbnailUrl) {
+                        creativeParams.object_story_spec.video_data.image_url = thumbnailUrl;
+                    }
                     delete creativeParams.object_story_spec.link_data;
                 }
                 if (requestedInstagramId) creativeParams.object_story_spec.instagram_user_id = requestedInstagramId;
@@ -797,23 +800,7 @@ router.post('/create', async (req, res) => {
                     progress.failedStep = 'creative';
                     progress.failedIndex = { audienceIndex, adIndex };
                     progress.requestParams = creativeParams;
-                    let creativeResponse;
-                    try {
-                        creativeResponse = await facebookService.createAdCreative(accountId, token, creativeParams);
-                    } catch (creativeErr) {
-                        // image_hash belongs to a different ad account — strip it and retry
-                        const hasImageHash = creativeParams.object_story_spec?.video_data?.image_hash;
-                        if (hasImageHash && /\b(100|1885183)\b/.test(String(creativeErr.message))) {
-                            console.warn('Creative failed with image_hash, retrying without thumbnail:', creativeErr.message);
-                            const fallback = JSON.parse(JSON.stringify(creativeParams));
-                            delete fallback.object_story_spec.video_data.image_hash;
-                            delete fallback.object_story_spec.video_data.image_url;
-                            progress.requestParams = fallback;
-                            creativeResponse = await facebookService.createAdCreative(accountId, token, fallback);
-                        } else {
-                            throw creativeErr;
-                        }
-                    }
+                    const creativeResponse = await facebookService.createAdCreative(accountId, token, creativeParams);
                     creativeId = creativeResponse.id;
                     if (!creativeId) throw new Error(`Facebook did not return a creative ID for ${ad.name}.`);
                     checkpoint.creatives.push({ key: creativeKey, id: creativeId });
