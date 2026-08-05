@@ -422,7 +422,6 @@ router.post('/create', async (req, res) => {
                     ...ad, 
                     imageHash: savedMedia.imageHash || null, 
                     videoId: savedMedia.videoId || null,
-                    videoThumbnailUrl: savedMedia.videoThumbnailUrl || null,
                     thumbnailHash: savedMedia.thumbnailHash || null
                 });
                 continue;
@@ -433,36 +432,47 @@ router.post('/create', async (req, res) => {
             progress.requestParams = { name: ad.name, media: ad.media };
             let imageHash = null;
             let videoId = null;
-            let videoThumbnailUrl = null;
             let thumbnailHash = null;
 
-            const ext = path.extname(ad.media).toLowerCase();
+            const mediaPath = resolveUploadPath(ad.media);
+            if (!mediaPath) {
+                throw new Error(`Media file for "${ad.name}" was not found on the server. Please re-upload the creative and try again.`);
+            }
+
+            const ext = path.extname(mediaPath).toLowerCase();
             if (['.mp4', '.mov', '.avi', '.webm'].includes(ext)) {
-                const videoRes = await facebookService.uploadVideo(accountId, token, ad.media);
+                const videoRes = await facebookService.uploadVideo(accountId, token, mediaPath);
                 videoId = videoRes.id || null;
                 if (!videoId) throw new Error(`Facebook did not return a video ID for ${ad.name}.`);
-                videoThumbnailUrl = '';
-                
-                // If a thumbnail file is provided, upload it to Meta
-                if (ad.thumbnail) {
+
+                const thumbnailPath = resolveUploadPath(ad.thumbnail);
+                if (thumbnailPath) {
                     try {
-                        const thumbRes = await facebookService.uploadImage(accountId, token, ad.thumbnail);
+                        const thumbRes = await facebookService.uploadImage(accountId, token, thumbnailPath);
                         const firstKey = Object.keys(thumbRes.images || {})[0];
                         thumbnailHash = firstKey ? thumbRes.images[firstKey].hash : null;
                     } catch (thumbErr) {
                         console.error('Failed to upload custom video thumbnail to FB:', thumbErr.message);
                     }
                 }
+
+                if (!thumbnailHash && videoId) {
+                    try {
+                        thumbnailHash = await resolveVideoThumbnailHash(accountId, token, videoId);
+                    } catch (thumbErr) {
+                        console.error(`Failed to resolve auto thumbnail for ${ad.name}:`, thumbErr.message);
+                    }
+                }
             } else {
-                const imageRes = await facebookService.uploadImage(accountId, token, ad.media);
+                const imageRes = await facebookService.uploadImage(accountId, token, mediaPath);
                 const firstKey = Object.keys(imageRes.images || {})[0];
                 imageHash = firstKey ? imageRes.images[firstKey].hash : null;
                 if (!imageHash) throw new Error(`Facebook did not return an image hash for ${ad.name}.`);
             }
             checkpoint.uploadedMedia = checkpoint.uploadedMedia.filter(item => item.index !== adIndex);
-            checkpoint.uploadedMedia.push({ index: adIndex, name: ad.name, media: ad.media, imageHash, videoId, videoThumbnailUrl, thumbnail: ad.thumbnail || null, thumbnailHash });
+            checkpoint.uploadedMedia.push({ index: adIndex, name: ad.name, media: ad.media, imageHash, videoId, thumbnail: ad.thumbnail || null, thumbnailHash });
             saveRetryCheckpoint(draftId, req.body.campaign, checkpoint, progress);
-            uploadedMedia.push({ ...ad, imageHash, videoId, videoThumbnailUrl, thumbnailHash });
+            uploadedMedia.push({ ...ad, imageHash, videoId, thumbnailHash });
         }
 
         const isCBO = campaign.budgetType === 'CBO';
@@ -778,8 +788,6 @@ router.post('/create', async (req, res) => {
                 };
                 if (ad.imageHash) creativeParams.object_story_spec.link_data.image_hash = ad.imageHash;
                 if (ad.videoId) {
-                    const adMediaInfo = uploadedMedia.find(item => item.media === ad.media);
-                    let thumbnailUrl = null;
                     creativeParams.object_story_spec.video_data = {
                         video_id: ad.videoId,
                         message: textVariation,
@@ -789,8 +797,6 @@ router.post('/create', async (req, res) => {
                     };
                     if (ad.thumbnailHash) {
                         creativeParams.object_story_spec.video_data.image_hash = ad.thumbnailHash;
-                    } else if (thumbnailUrl) {
-                        creativeParams.object_story_spec.video_data.image_url = thumbnailUrl;
                     }
                     delete creativeParams.object_story_spec.link_data;
                 }
@@ -909,6 +915,27 @@ router.post('/create', async (req, res) => {
         });
     }
 });
+
+function resolveUploadPath(fileRef) {
+    if (!fileRef) return null;
+    const value = String(fileRef).trim();
+    if (!value) return null;
+    if (fs.existsSync(value)) return value;
+
+    const uploadsDir = path.join(__dirname, '..', 'uploads');
+    const basename = path.basename(value.replace(/^\/uploads\//, ''));
+    const uploadsPath = path.join(uploadsDir, basename);
+    if (fs.existsSync(uploadsPath)) return uploadsPath;
+    return null;
+}
+
+async function resolveVideoThumbnailHash(accountId, token, videoId) {
+    const thumbnailUrl = await facebookService.getVideoThumbnailWithRetry(videoId, token);
+    if (!thumbnailUrl) return null;
+    // Meta recommends uploading thumbnails to the ad account instead of
+    // passing FB CDN URLs directly in image_url.
+    return facebookService.uploadImageFromUrl(accountId, token, thumbnailUrl);
+}
 
 function normalizeCreativeAds(step3 = {}) {
     if (Array.isArray(step3.ads) && step3.ads.length > 0) {

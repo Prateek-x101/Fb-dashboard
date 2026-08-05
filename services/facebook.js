@@ -1,6 +1,8 @@
 const fetch = require('node-fetch');
 const FormData = require('form-data');
 const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 const BASE_URL = 'https://graph.facebook.com/v25.0';
 
@@ -30,11 +32,21 @@ function targetingSearchUrl(name, type, token) {
     return `${BASE_URL}/search?type=adinterest&q=${q}&access_token=${token}`;
 }
 
+const FACEBOOK_ERROR_HINTS = {
+    1885183: 'Your Facebook App is in Development mode. Switch it to Live in Meta Developer Console (App Dashboard → switch App Mode to Live). On Render, ensure FB_APP_ID matches the same Live app used locally.'
+};
+
+function enrichFacebookError(apiError) {
+    const hint = FACEBOOK_ERROR_HINTS[apiError.error_subcode];
+    const userMessage = apiError.error_user_msg || apiError.message || 'Unknown Facebook API Error';
+    return hint ? `${userMessage} ${hint}` : userMessage;
+}
+
 async function handleResponse(response) {
     const data = await response.json();
     if (!response.ok) {
         const apiError = data.error || {};
-        const error = new Error(apiError.message || data.message || 'Unknown Facebook API Error');
+        const error = new Error(enrichFacebookError(apiError));
         error.provider = 'facebook';
         error.code = apiError.code;
         error.errorSubcode = apiError.error_subcode;
@@ -100,12 +112,34 @@ const facebookService = {
         const url = `${BASE_URL}/act_${accountId}/adimages?access_token=${token}`;
         const form = new FormData();
         form.append('filename', fs.createReadStream(filePath));
-        
+
         const response = await fetch(url, {
             method: 'POST',
             body: form
         });
         return handleResponse(response);
+    },
+
+    async uploadImageFromUrl(accountId, token, imageUrl) {
+        const response = await fetch(imageUrl);
+        if (!response.ok) {
+            throw new Error(`Failed to download thumbnail image (${response.status}).`);
+        }
+        const arrayBuffer = await response.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        const tempPath = path.join(os.tmpdir(), `fb-thumb-${Date.now()}.jpg`);
+        fs.writeFileSync(tempPath, buffer);
+        try {
+            const uploadResult = await this.uploadImage(accountId, token, tempPath);
+            const firstKey = Object.keys(uploadResult.images || {})[0];
+            return firstKey ? uploadResult.images[firstKey].hash : null;
+        } finally {
+            try {
+                fs.unlinkSync(tempPath);
+            } catch {
+                // Ignore temp file cleanup failures.
+            }
+        }
     },
 
     async uploadVideo(accountId, token, filePath) {
