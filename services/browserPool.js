@@ -13,93 +13,100 @@ const MAX_TABS = 6;
 
 let browser = null;          // shared Puppeteer Browser instance
 let activeTabCount = 0;       // currently open tabs
-let idleTimer = null;         // auto-close timer
 const waitQueue = [];         // resolve callbacks waiting for a free slot
+let launchPromise = null;     // Promise for serialized browser launch
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-function resetIdleTimer() {
-    if (idleTimer) clearTimeout(idleTimer);
-    idleTimer = setTimeout(async () => {
-        if (activeTabCount === 0 && browser) {
-            console.log('[BrowserPool] Idle timeout — closing browser');
-            try { await browser.close(); } catch {}
-            browser = null;
-        }
-    }, 60_000); // 60 seconds idle → close
-}
-
 async function ensureBrowser() {
     if (browser) return browser;
+    if (launchPromise) return launchPromise;
 
-    const isLinux = process.platform === 'linux';
-    console.log(`[BrowserPool] Launching headless Chromium (platform: ${process.platform})...`);
-    
-    const launchArgs = [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--disable-web-security',
-        '--disable-features=IsolateOrigins,site-per-process',
-        '--single-process',
-        '--no-zygote',
-        '--disable-extensions',
-        '--disable-background-networking',
-        '--disable-default-apps',
-        '--disable-sync',
-        '--disable-translate',
-        '--metrics-recording-only',
-        '--mute-audio',
-        '--no-first-run',
-    ];
+    launchPromise = (async () => {
+        const isLinux = process.platform === 'linux';
+        console.log(`[BrowserPool] Launching headless Chromium (platform: ${process.platform})...`);
+        
+        const launchArgs = [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--disable-web-security',
+            '--disable-features=IsolateOrigins,site-per-process',
+            '--single-process',
+            '--no-zygote',
+            '--disable-extensions',
+            '--disable-background-networking',
+            '--disable-default-apps',
+            '--disable-sync',
+            '--disable-translate',
+            '--metrics-recording-only',
+            '--mute-audio',
+            '--no-first-run',
+        ];
 
-    let launchOpts = {
-        headless: 'new',
-        args: launchArgs,
-        defaultViewport: { width: 1280, height: 720 },
-        timeout: 30000,
-    };
+        let launchOpts = {
+            headless: 'new',
+            args: launchArgs,
+            defaultViewport: { width: 1280, height: 720 },
+            timeout: 30000,
+        };
 
-    let puppeteer;
+        let puppeteer;
 
-    if (isLinux) {
-        // ── Render / Linux: use @sparticuz/chromium (lightweight, serverless-ready) ──
-        try {
-            const chromium = require('@sparticuz/chromium');
-            puppeteer = require('puppeteer-core');
+        if (isLinux) {
+            // ── Render / Linux: use @sparticuz/chromium (lightweight, serverless-ready) ──
+            try {
+                const chromium = require('@sparticuz/chromium');
+                puppeteer = require('puppeteer-core');
 
-            launchOpts.args = [...chromium.args, ...launchArgs];
-            launchOpts.executablePath = await chromium.executablePath();
-            launchOpts.headless = chromium.headless;
+                launchOpts.args = [...chromium.args, ...launchArgs];
+                launchOpts.executablePath = await chromium.executablePath();
+                launchOpts.headless = chromium.headless;
 
-            console.log(`[BrowserPool] Using @sparticuz/chromium: ${launchOpts.executablePath}`);
-        } catch (err) {
-            console.warn(`[BrowserPool] @sparticuz/chromium not available: ${err.message}`);
-            // Fallback: try regular puppeteer
+                console.log(`[BrowserPool] Using @sparticuz/chromium: ${launchOpts.executablePath}`);
+            } catch (err) {
+                console.warn(`[BrowserPool] @sparticuz/chromium not available: ${err.message}`);
+                // Fallback: try regular puppeteer
+                try { puppeteer = require('puppeteer'); } catch { puppeteer = require('puppeteer-core'); }
+                if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+                    launchOpts.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+                }
+            }
+        } else {
+            // ── Windows / Mac: use regular puppeteer with bundled Chromium ──
             try { puppeteer = require('puppeteer'); } catch { puppeteer = require('puppeteer-core'); }
             if (process.env.PUPPETEER_EXECUTABLE_PATH) {
                 launchOpts.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
             }
         }
-    } else {
-        // ── Windows / Mac: use regular puppeteer with bundled Chromium ──
-        try { puppeteer = require('puppeteer'); } catch { puppeteer = require('puppeteer-core'); }
-        if (process.env.PUPPETEER_EXECUTABLE_PATH) {
-            launchOpts.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
-        }
+
+        const br = await puppeteer.launch(launchOpts);
+
+        br.on('disconnected', () => {
+            console.log('[BrowserPool] Browser disconnected');
+            browser = null;
+            activeTabCount = 0;
+            launchPromise = null;
+        });
+
+        browser = br;
+        launchPromise = null;
+        return br;
+    })();
+
+    return launchPromise;
+}
+
+// Pre-warms the browser so the first request is instant
+async function warmBrowser() {
+    try {
+        console.log('[BrowserPool] Pre-warming browser instance...');
+        await ensureBrowser();
+        console.log('[BrowserPool] Pre-warm completed.');
+    } catch (err) {
+        console.error('[BrowserPool] Pre-warm failed:', err.message);
     }
-
-    browser = await puppeteer.launch(launchOpts);
-
-    browser.on('disconnected', () => {
-        console.log('[BrowserPool] Browser disconnected');
-        browser = null;
-        activeTabCount = 0;
-    });
-
-    resetIdleTimer();
-    return browser;
 }
 
 // Acquire a tab slot (may block if all 6 are busy)
@@ -120,7 +127,6 @@ function releaseSlot() {
         const next = waitQueue.shift();
         next();
     }
-    resetIdleTimer();
 }
 
 // ── Public API ──────────────────────────────────────────────────────────────
@@ -186,4 +192,4 @@ async function closeBrowser() {
     }
 }
 
-module.exports = { withTab, closeBrowser };
+module.exports = { withTab, closeBrowser, warmBrowser };

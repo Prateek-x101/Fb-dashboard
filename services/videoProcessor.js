@@ -226,36 +226,23 @@ async function downloadVideo(url, outputFilename, accessToken) {
         return downloadDirectUrl(url, outputFilename);
     }
 
-    // ── Browser-based extraction for Facebook, Instagram, Pinterest ─────────
+    // ── Facebook Ads Library: use dedicated browser extractor ────────────────
     const isFbAdsLib = /facebook\.com\/ads\/library/i.test(url);
-    const isInstagram = /instagram\.com/i.test(url);
-    const isPinterest = /pinterest\.(com|co)/i.test(url) || /pin\.it/i.test(url);
-
-    if (isFbAdsLib || isInstagram || isPinterest) {
+    if (isFbAdsLib) {
         try {
             const { extractVideoUrl } = require('./browserExtract');
-            console.log(`[Browser] Extracting video via headless Chromium: ${url.slice(0, 80)}...`);
+            console.log(`[Browser] Extracting Facebook Ads Library video via headless Chromium: ${url.slice(0, 80)}...`);
             const videoUrl = await extractVideoUrl(url);
-            console.log(`[Browser] Got video URL, downloading: ${videoUrl.slice(0, 80)}...`);
+            console.log(`[Browser] Got Facebook video URL, downloading: ${videoUrl.slice(0, 80)}...`);
             return downloadDirectUrl(videoUrl, outputFilename);
         } catch (browserErr) {
             console.warn(`[Browser] Browser extraction failed: ${browserErr.message}`);
-            
-            // For Facebook Ads Library, also try the HTML scraper as secondary fallback
-            if (isFbAdsLib) {
-                try {
-                    const videoUrl = await extractFbAdsLibraryVideo(url, accessToken);
-                    return downloadDirectUrl(videoUrl, outputFilename);
-                } catch (scraperErr) {
-                    console.warn(`[Scraper] HTML scraper also failed: ${scraperErr.message}`);
-                }
-            }
-            
-            // Final fallback to yt-dlp for Instagram/Pinterest (may be slow but might work)
-            if (!isFbAdsLib) {
-                console.log(`[Fallback] Trying yt-dlp for: ${url.slice(0, 60)}...`);
-                // Fall through to yt-dlp below
-            } else {
+            // Fallback to HTML scraper
+            try {
+                const videoUrl = await extractFbAdsLibraryVideo(url, accessToken);
+                return downloadDirectUrl(videoUrl, outputFilename);
+            } catch (scraperErr) {
+                console.warn(`[Scraper] HTML scraper also failed: ${scraperErr.message}`);
                 throw new Error(`Could not extract video. Try copying the direct .mp4 URL from the browser's Inspect Element and pasting it here.`);
             }
         }
@@ -272,16 +259,25 @@ async function downloadVideo(url, outputFilename, accessToken) {
     
     console.log(`Downloading video from ${url}...`);
     
+    // Select format dynamically to optimize download speed.
+    // Instagram and Pinterest publish single pre-merged videos.
+    // Bypassing separate audio/video streams + FFmpeg merging saves 5-10 seconds!
+    const isInstagram = /instagram\.com/i.test(url);
+    const isPinterest = /pinterest\.(com|co)/i.test(url) || /pin\.it/i.test(url);
+    const formatStr = (isInstagram || isPinterest) 
+        ? 'best[ext=mp4]/best' 
+        : 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best';
+
     // yt-dlp args: browser impersonation avoids 403 blocks from YouTube/Instagram/Pinterest
-    // -f: prefer pre-merged mp4 stream, fall back to best available
-    // --impersonate chrome: sends real Chrome headers/TLS fingerprint
-    // --concurrent-fragments 5: parallel chunk download for speed
+    // --no-call-home & --no-cache-dir: speed up startup by skipping check/update requests
     const args = [
         '--no-playlist',
-        '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        '-f', formatStr,
         '--concurrent-fragments', '5',
         '--no-warnings',
         '--no-check-certificates',
+        '--no-call-home',
+        '--no-cache-dir',
         '--impersonate', 'chrome',
         '--add-header', 'Accept-Language:en-US,en;q=0.9',
         '--extractor-retries', '1',

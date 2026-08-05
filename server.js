@@ -182,6 +182,13 @@ app.use((err, req, res, next) => {
 
 app.listen(port, '0.0.0.0', () => {
     console.log(`Server running at http://localhost:${port}`);
+    // Pre-warm the headless browser instance on server startup so the first request is instant
+    try {
+        const { warmBrowser } = require('./services/browserPool');
+        warmBrowser();
+    } catch (err) {
+        console.error('Failed to pre-warm browser pool:', err.message);
+    }
 });
 
 // Graceful shutdown — close headless browser on exit
