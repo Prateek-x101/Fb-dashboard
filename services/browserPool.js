@@ -32,15 +32,8 @@ function resetIdleTimer() {
 async function ensureBrowser() {
     if (browser) return browser;
 
-    let puppeteer;
-    try {
-        puppeteer = require('puppeteer');
-    } catch {
-        // If full puppeteer is not available, try puppeteer-core
-        puppeteer = require('puppeteer-core');
-    }
-
-    console.log('[BrowserPool] Launching headless Chromium...');
+    const isLinux = process.platform === 'linux';
+    console.log(`[BrowserPool] Launching headless Chromium (platform: ${process.platform})...`);
     
     const launchArgs = [
         '--no-sandbox',
@@ -61,16 +54,40 @@ async function ensureBrowser() {
         '--no-first-run',
     ];
 
-    const launchOpts = {
+    let launchOpts = {
         headless: 'new',
         args: launchArgs,
         defaultViewport: { width: 1280, height: 720 },
         timeout: 30000,
     };
 
-    // If a custom Chromium path is set (e.g. Render buildpack), use it
-    if (process.env.PUPPETEER_EXECUTABLE_PATH) {
-        launchOpts.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+    let puppeteer;
+
+    if (isLinux) {
+        // ── Render / Linux: use @sparticuz/chromium (lightweight, serverless-ready) ──
+        try {
+            const chromium = require('@sparticuz/chromium');
+            puppeteer = require('puppeteer-core');
+
+            launchOpts.args = [...chromium.args, ...launchArgs];
+            launchOpts.executablePath = await chromium.executablePath();
+            launchOpts.headless = chromium.headless;
+
+            console.log(`[BrowserPool] Using @sparticuz/chromium: ${launchOpts.executablePath}`);
+        } catch (err) {
+            console.warn(`[BrowserPool] @sparticuz/chromium not available: ${err.message}`);
+            // Fallback: try regular puppeteer
+            try { puppeteer = require('puppeteer'); } catch { puppeteer = require('puppeteer-core'); }
+            if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+                launchOpts.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+            }
+        }
+    } else {
+        // ── Windows / Mac: use regular puppeteer with bundled Chromium ──
+        try { puppeteer = require('puppeteer'); } catch { puppeteer = require('puppeteer-core'); }
+        if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+            launchOpts.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+        }
     }
 
     browser = await puppeteer.launch(launchOpts);
