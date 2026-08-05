@@ -29,7 +29,7 @@
             const btnCreateAdConfirm = document.getElementById('btn-shopify-create-ad-confirm');
 
             if (btnScrape) {
-                btnScrape.addEventListener('click', () => this.scrapeProduct());
+                btnScrape.addEventListener('click', () => this.universalImport());
             }
 
             if (btnImport) {
@@ -323,71 +323,118 @@
             }
         },
 
-        scrapeProduct: async function() {
+        universalImport: async function() {
             const urlInput = document.getElementById('shopify-scrape-url');
+            const fileInput = document.getElementById('vtl-video-input');
             const storeSelect = document.getElementById('shopify-target-store-select');
-            const btnScrape = document.getElementById('btn-shopify-scrape');
+            const btnImport = document.getElementById('btn-shopify-scrape');
             const previewContainer = document.getElementById('shopify-preview-container');
+            const processing = document.getElementById('vtl-processing');
+            const procMsg = document.getElementById('vtl-processing-msg');
 
-            if (!urlInput || !storeSelect || !btnScrape || !previewContainer) return;
+            if (!storeSelect || !btnImport || !previewContainer || !processing || !procMsg) return;
 
-            const url = urlInput.value.trim();
+            const url = urlInput ? urlInput.value.trim() : '';
             const storeId = storeSelect.value;
+            const files = fileInput && fileInput.files ? Array.from(fileInput.files) : [];
 
-            if (!url || !storeId) {
-                window.AppController.showToast('Please enter a Product URL and select a Store.', 'warning');
+            if (!storeId) {
+                window.AppController.showToast('Please select a target Shopify store first.', 'warning');
+                storeSelect.focus();
+                return;
+            }
+
+            if (!url && !files.length) {
+                window.AppController.showToast('Please paste a product/media link or upload files to import.', 'warning');
                 return;
             }
 
             try {
-                btnScrape.disabled = true;
-                btnScrape.textContent = '🔍 Inspecting Listing...';
+                btnImport.disabled = true;
+                btnImport.textContent = '⏳ Processing...';
                 previewContainer.style.display = 'none';
+                processing.style.display = 'block';
 
-                window.AppController.showToast('Fetching Shopify product metadata and analyzing with Gemini AI... 🤖', 'info');
+                const formData = new FormData();
+                formData.append('storeId', storeId);
+                if (url) formData.append('url', url);
                 
-                const data = await window.API.scrapeShopifyProduct(url, storeId);
-                
+                if (files.length > 0) {
+                    procMsg.textContent = `Uploading ${files.length} file(s) to server...`;
+                    files.forEach(f => formData.append('files', f));
+                } else {
+                    procMsg.textContent = 'Scraping page details and running AI analysis...';
+                }
+
+                const response = await fetch('/api/shopify/universal-import', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || data.details || 'Failed to process import');
+
+                processing.style.display = 'none';
+
                 this.scrapedProduct = data.product;
                 this.userCollections = data.userCollections || [];
                 const suggestedIds = new Set((data.suggestedCollectionIds || []).map(id => String(id)));
 
-                // Fill preview fields
+                // Populate import details preview form
                 document.getElementById('shopify-import-title').value = this.scrapedProduct.title || '';
                 document.getElementById('shopify-import-sku-prefix').value = '';
-                document.getElementById('shopify-import-price').value = '';
-                document.getElementById('shopify-import-compare-price').value = '';
+                document.getElementById('shopify-import-price').value = data.product.variants?.[0]?.price || '';
+                document.getElementById('shopify-import-compare-price').value = data.product.variants?.[0]?.compare_at_price || '';
                 document.getElementById('shopify-import-description').value = this.scrapedProduct.description || '';
 
-                // Render Collections checklist
-                const collectionsContainer = document.getElementById('shopify-import-collections-checklist');
-                collectionsContainer.innerHTML = '';
-                
-                if (this.userCollections.length === 0) {
-                    collectionsContainer.innerHTML = '<span style="color:var(--text-secondary); font-size:0.85rem;">No collections found on this store.</span>';
+                // Handle media-based results (frames for variant classification)
+                if (data.importMode === 'media' && data.frames && data.frames.length > 0) {
+                    this.vtlFrames = data.frames.map(f => ({ ...f, selected: true }));
+                    this.vtlVariantAssignments = {};
+                    this.vtlPendingAnalysis = data;
+                    
+                    // Pre-fill hidden inputs internally for variant calculations
+                    if (document.getElementById('vtl-title')) document.getElementById('vtl-title').value = data.product.title;
+                    if (document.getElementById('vtl-price')) document.getElementById('vtl-price').value = data.product.variants?.[0]?.price || '';
+                    if (document.getElementById('vtl-compare-price')) document.getElementById('vtl-compare-price').value = data.product.variants?.[0]?.compare_at_price || '';
+                    if (document.getElementById('vtl-tags')) document.getElementById('vtl-tags').value = (data.product.tags || []).join(', ');
+                    if (document.getElementById('vtl-description')) document.getElementById('vtl-description').value = data.product.description;
+
+                    // Show the variant classifications modal
+                    this.vtlShowVariantPopup(data.detectedAttributes || []);
                 } else {
-                    this.userCollections.forEach(c => {
-                        const isSuggested = suggestedIds.has(String(c.id));
-                        const label = document.createElement('label');
-                        label.style.cssText = 'display:flex; align-items:center; gap:8px; font-size:0.85rem; color:white; cursor:pointer;';
-                        label.innerHTML = `
-                            <input type="checkbox" class="shopify-collection-checkbox" value="${c.id}" ${isSuggested ? 'checked' : ''}>
-                            <span>${this.escapeHtml(c.title)} ${isSuggested ? '<span style="color:var(--accent-cyan); font-size:0.75rem;">✨ AI Match</span>' : ''}</span>
-                        `;
-                        collectionsContainer.appendChild(label);
-                    });
+                    // Standard product listing / browser scraped product
+                    this.vtlFrames = [];
+                    this.vtlVariantAssignments = {};
+                    this.vtlPendingAnalysis = null;
                 }
 
-                // Render Variants Pricing Grid if multiple variants exist AND they have different prices
+                // Render user store's collections
+                const collectionsContainer = document.getElementById('shopify-import-collections-checklist');
+                if (collectionsContainer) {
+                    collectionsContainer.innerHTML = '';
+                    if (this.userCollections.length === 0) {
+                        collectionsContainer.innerHTML = '<span style="color:var(--text-secondary); font-size:0.85rem;">No collections found on this store.</span>';
+                    } else {
+                        this.userCollections.forEach(c => {
+                            const isSuggested = suggestedIds.has(String(c.id));
+                            const label = document.createElement('label');
+                            label.style.cssText = 'display:flex; align-items:center; gap:8px; font-size:0.85rem; color:white; cursor:pointer;';
+                            label.innerHTML = `
+                                <input type="checkbox" class="shopify-collection-checkbox" value="${c.id}" ${isSuggested ? 'checked' : ''}>
+                                <span>${this.escapeHtml(c.title)} ${isSuggested ? '<span style="color:var(--accent-cyan); font-size:0.75rem;">✨ AI Match</span>' : ''}</span>
+                            `;
+                            collectionsContainer.appendChild(label);
+                        });
+                    }
+                }
+
+                // Render variants grid preview
                 const variantsContainer = document.getElementById('shopify-import-variants-container');
                 const variantsTbody = document.getElementById('shopify-import-variants-tbody');
                 const variants = this.scrapedProduct.variants || [];
 
-                const uniquePrices = new Set(variants.map(v => v.price));
-                const uniqueComparePrices = new Set(variants.map(v => v.compare_at_price));
-                const hasPriceVariations = uniquePrices.size > 1 || uniqueComparePrices.size > 1;
-
-                if (variants.length > 1 && hasPriceVariations) {
+                if (variants.length > 1) {
                     variantsContainer.style.display = 'block';
                     variantsTbody.innerHTML = '';
                     variants.forEach((v, idx) => {
@@ -395,18 +442,18 @@
                         tr.style.borderBottom = '1px solid rgba(255,255,255,0.05)';
                         
                         const title = v.title || [v.option1, v.option2, v.option3].filter(Boolean).join(' / ');
-                        const originalPrice = (v.price / 100).toFixed(2);
-                        const originalCompare = v.compare_at_price ? (v.compare_at_price / 100).toFixed(2) : '';
+                        const price = v.price || '29.99';
+                        const compare = v.compare_at_price || '';
 
                         tr.innerHTML = `
                             <td style="padding:6px; font-weight:600;">${this.escapeHtml(title)}</td>
                             <td style="padding:6px;">
                                 <input type="number" step="0.01" class="form-control shopify-variant-price-input" 
-                                    data-index="${idx}" value="${originalPrice}" style="padding:4px 8px; font-size:0.8rem; background:rgba(0,0,0,0.3); border-color:var(--glass-border); width:100px;">
+                                    data-index="${idx}" value="${price}" style="padding:4px 8px; font-size:0.8rem; background:rgba(0,0,0,0.3); border-color:var(--glass-border); width:100px;">
                             </td>
                             <td style="padding:6px;">
                                 <input type="number" step="0.01" class="form-control shopify-variant-compare-input" 
-                                    data-index="${idx}" value="${originalCompare}" style="padding:4px 8px; font-size:0.8rem; background:rgba(0,0,0,0.3); border-color:var(--glass-border); width:100px;">
+                                    data-index="${idx}" value="${compare}" style="padding:4px 8px; font-size:0.8rem; background:rgba(0,0,0,0.3); border-color:var(--glass-border); width:100px;">
                             </td>
                             <td style="padding:6px; color:var(--text-secondary); font-size:0.8rem;" class="shopify-variant-sku-preview" data-index="${idx}">
                                 (prefix)-${(v.option1 || '').replace(/[^a-zA-Z0-9]/g, '')}
@@ -435,28 +482,35 @@
 
                 // Render Images Grid
                 const imagesContainer = document.getElementById('shopify-import-images-grid');
-                imagesContainer.innerHTML = '';
-                const images = this.scrapedProduct.images || [];
-                
-                if (images.length === 0) {
-                    imagesContainer.innerHTML = '<span style="color:var(--text-secondary); font-size:0.85rem;">No images found for this product.</span>';
-                } else {
-                    images.forEach(imgUrl => {
-                        const src = imgUrl.startsWith('//') ? 'https:' + imgUrl : imgUrl;
-                        const div = document.createElement('div');
-                        div.style.cssText = 'width:80px; height:80px; flex-shrink:0; border:1px solid var(--glass-border); border-radius:6px; overflow:hidden; background:rgba(0,0,0,0.2);';
-                        div.innerHTML = `<img src="${src}" style="width:100%; height:100%; object-fit:cover;">`;
-                        imagesContainer.appendChild(div);
-                    });
+                if (imagesContainer) {
+                    imagesContainer.innerHTML = '';
+                    const images = this.scrapedProduct.images || [];
+                    if (images.length === 0) {
+                        imagesContainer.innerHTML = '<span style="color:var(--text-secondary); font-size:0.85rem;">No images found for this product.</span>';
+                    } else {
+                        images.forEach(imgUrl => {
+                            const src = imgUrl.startsWith('//') ? 'https:' + imgUrl : imgUrl;
+                            const div = document.createElement('div');
+                            div.style.cssText = 'width:80px; height:80px; flex-shrink:0; border:1px solid var(--glass-border); border-radius:6px; overflow:hidden; background:rgba(0,0,0,0.2);';
+                            div.innerHTML = `<img src="${src}" style="width:100%; height:100%; object-fit:cover;">`;
+                            imagesContainer.appendChild(div);
+                        });
+                    }
                 }
 
+                // Render floating video previews if available
+                this.floatingVideos = Array.isArray(data.floatingVideos) ? data.floatingVideos : [];
+                this.renderFloatingVideoPreview();
+
                 previewContainer.style.display = 'block';
-                window.AppController.showToast('Product data retrieved and matched successfully! 🛍️', 'success');
+                window.AppController.showToast('Product listings analyzed and generated successfully! 🛍️', 'success');
+
             } catch (err) {
-                window.AppController.showToast('Failed to scrape product details: ' + err.message, 'error');
+                processing.style.display = 'none';
+                window.AppController.showToast('Failed to import and analyze: ' + err.message, 'error');
             } finally {
-                btnScrape.disabled = false;
-                btnScrape.textContent = '🔍 Inspect Product Details';
+                btnImport.disabled = false;
+                btnImport.textContent = '✨ Import & Generate with AI';
             }
         },
 

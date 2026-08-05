@@ -265,6 +265,81 @@ Return ONLY valid JSON (no markdown, no backticks):
         return result;
     },
 
+    // Convert scraped e-commerce page text (Amazon, Alibaba, etc.) into structured Shopify listing
+    async analyzeProductFromScrapedText(apiKey, model, scrapedText) {
+        const url = `${BASE_URL}/models/${normalizeModel(model)}:generateContent?key=${apiKey}`;
+        
+        const prompt = `You are a professional e-commerce product manager. You will receive scraped text from an external product page (like Amazon, Alibaba, or any other web store).
+        
+Your task: Convert this messy product information into a clean, professional Shopify listing structure.
+
+CRITICAL - The product description HTML MUST follow this EXACT format and structure (use this as a template):
+
+<p><span style="color: #e67e23;"><strong>FEATURES</strong></span></p>
+<p><strong>FEATURE NAME 1</strong> - Detailed description of this feature and its benefit to the customer.</p>
+<p><strong>FEATURE NAME 2</strong> - Detailed description of this feature and its benefit to the customer.</p>
+<p><strong>FEATURE NAME 3</strong> - Detailed description of this feature and its benefit to the customer.</p>
+<p><strong>FEATURE NAME 4</strong> - Detailed description of this feature and its benefit to the customer.</p>
+<p><strong>FEATURE NAME 5</strong> - Detailed description of this feature and its benefit to the customer.</p>
+<p><span style="color: #e67e23;"><strong>SPEC</strong></span></p>
+<p>Color: [detected colors]</p>
+<p>Size: [if applicable, e.g. S-2XL or One Size]</p>
+<p>Material: [material if visible/known]</p>
+<p><span style="color: #e67e23;"><strong>PACKAGE INCLUDES</strong></span></p>
+<p>1 x [Product Name]</p>
+<p><span style="color: #e67e23;"><strong>NOTES</strong></span></p>
+<p>Color may not appear exactly as in real life due to variations between computer monitors.</p>
+<p>Please allow a small error due to manual measurement. Please make sure you do not mind before purchasing.</p>
+
+Rules for description:
+- Section headers use: <span style="color: #e67e23;"><strong>HEADER</strong></span>
+- Feature names use <strong>ALL CAPS NAME</strong> followed by " - " then the description
+- Extract 4-6 strong, benefit-led feature paragraphs based on the product description
+- Keep NOTES section exactly as shown
+
+Format for variants and options:
+- Identify if there are variants (e.g. Size, Color, Style).
+- List options with name (e.g., "Color") and array of values.
+- List variants with title, price (extract or suggest a clean decimal price like 29.99), compare_at_price (original price if discounted, otherwise empty), option1, option2 (if multi-attribute), and sku.
+
+Scraped text data:
+"""
+${scrapedText}
+"""
+
+Return ONLY valid JSON (no markdown, no backticks, no comments):
+{
+  "title": "Clean product title (3-7 words, no promotional fluff)",
+  "description": "<p><span style=\\"color: #e67e23;\\"><strong>FEATURES</strong></span></p>...",
+  "vendor": "Clean brand/vendor name or empty string",
+  "type": "Product category/type",
+  "tags": ["tag1", "tag2", "tag3"],
+  "suggestedPrice": "Suggested Retail Price (e.g. 29.99)",
+  "options": [
+    {"name": "Color", "values": ["Red", "Blue"]}
+  ],
+  "variants": [
+    {"title": "Red", "price": "29.99", "compare_at_price": "39.99", "option1": "Red", "sku": "red-sku"}
+  ]
+}`;
+
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{ parts: [{ text: prompt }] }]
+            })
+        });
+
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error ? data.error.message : 'Gemini Text API Error');
+
+        const rawText = data.candidates[0].content.parts[0].text.trim();
+        const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) throw new Error('No JSON found in Gemini response');
+        return JSON.parse(jsonMatch[0]);
+    },
+
     // Use Gemini Vision to assign each selected image to the most visually matching variant value
     async assignImagesToVariants(apiKey, model, framesBase64, variantOption, variantValues) {
         const url = `${VISION_BASE_URL}/models/${normalizeModel(model)}:generateContent?key=${apiKey}`;

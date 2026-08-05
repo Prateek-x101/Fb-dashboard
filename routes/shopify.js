@@ -776,6 +776,475 @@ router.post('/video-to-listing', videoUpload.array('files', 20), async (req, res
     }
 });
 
+// ── 9. Universal Shopify Importer Gateway ─────────────────────────────────────
+router.post('/universal-import', videoUpload.array('files', 20), async (req, res) => {
+    let allExtractedFrames = [];  // frames from video extraction (for cleanup)
+    let tempMediaPaths = [];       // downloaded media paths (for cleanup)
+    let preservedVideoPaths = [];  // preserved video uploads
+    const uploadsDir = path.join(__dirname, '..', 'uploads');
+
+    try {
+        const url = req.body.url ? req.body.url.trim() : null;
+        const storeId = req.body.storeId;
+        const files = req.files || [];
+
+        if (!storeId) {
+            return res.status(400).json({ error: 'Shopify Store selection is required.' });
+        }
+
+        const storage = getStorage();
+        const geminiApiKey = storage.settings?.geminiApiKey;
+        const geminiModel = storage.settings?.geminiModel || 'gemini-1.5-flash';
+        
+        // Get Shopify Store credentials
+        const store = (storage.shopifyStores || []).find(s => s.id === storeId);
+        if (!store) {
+            return res.status(400).json({ error: 'Selected Shopify store config not found.' });
+        }
+
+        // Fetch user store's collections
+        const userCollections = await fetchUserCollections(store.shopUrl, store.accessToken);
+
+        // CASE A: Raw files uploaded directly
+        if (files.length > 0) {
+            if (!geminiApiKey) return res.status(400).json({ error: 'Gemini API Key is required to analyze files. Configure it in Settings.' });
+            
+            const allFrames = [];
+            const uploadedFilePaths = files.map(f => f.path);
+
+            for (const file of files) {
+                if (isImageFile(file)) {
+                    const imgBase64 = fs.readFileSync(file.path).toString('base64');
+                    allFrames.push({ base64: imgBase64, filePath: file.path, sourceType: 'image' });
+                } else {
+                    const videoProcessor = require('../services/videoProcessor');
+                    const videoFrames = await videoProcessor.extractFrames(file.path, 20);
+                    videoFrames.forEach(f => allFrames.push({ ...f, sourceType: 'video' }));
+                    allExtractedFrames.push(...videoFrames);
+
+                    // Preserve original upload for Shopify metafield upload
+                    const extension = path.extname(file.originalname || '') || '.mp4';
+                    const safeName = `floating-${uuidv4()}${extension.toLowerCase()}`;
+                    const preservedPath = path.join(uploadsDir, safeName);
+                    fs.copyFileSync(file.path, preservedPath);
+                    preservedVideoPaths.push(preservedPath);
+                }
+            }
+
+            if (!allFrames.length) throw new Error('No usable images or frames could be extracted.');
+            
+            const framesBase64 = allFrames.map(f => f.base64);
+            const analysis = await geminiService.analyzeProductFromFrames(geminiApiKey, geminiModel, framesBase64);
+
+            const selectedIndices = (analysis.selectedIndices && analysis.selectedIndices.length)
+                ? analysis.selectedIndices
+                : allFrames.map((_, i) => i).slice(0, 8);
+
+            const savedFrames = [];
+            const imagesList = [];
+            for (const idx of selectedIndices) {
+                if (allFrames[idx]) {
+                    const frame = allFrames[idx];
+                    const destFilename = `vl_${Date.now()}_${idx}.jpg`;
+                    const destPath = path.join(uploadsDir, destFilename);
+                    fs.copyFileSync(frame.filePath, destPath);
+                    savedFrames.push({ index: idx, filename: destFilename, url: '/uploads/' + destFilename });
+                    imagesList.push('/uploads/' + destFilename);
+                }
+            }
+
+            // Clean up temporary uploads
+            for (const p of uploadedFilePaths) {
+                try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch {}
+            }
+
+            // Get suggested collections via Gemini
+            let suggestedCollectionIds = [];
+            if (geminiApiKey && userCollections.length > 0) {
+                try {
+                    const prompt = `Classify this product into relevant collections:\nTitle: ${analysis.title}\nDescription: ${analysis.description}\nCollections:\n${userCollections.map(c => `ID: ${c.id}, Title: ${c.title}`).join('\n')}\nReturn only matching collection IDs as JSON array.`;
+                    const suggestion = await geminiService.generateResponseText(geminiApiKey, geminiModel, prompt);
+                    suggestedCollectionIds = normalizeSuggestedCollectionIds(suggestion, userCollections);
+                } catch {}
+            }
+
+            // Map options and variants for scraper-compatible preview format
+            const options = (analysis.detectedAttributes || []).map(attr => ({
+                name: attr.name,
+                values: attr.values
+            }));
+            
+            // Build simple default variant if no custom options returned
+            const variants = [];
+            if (options.length === 0) {
+                variants.push({
+                    title: 'Default Title',
+                    price: analysis.suggestedPrice || '29.99',
+                    compare_at_price: null,
+                    option1: 'Default Title',
+                    sku: `sku-${Date.now()}`
+                });
+            } else {
+                // Generate variant combinations based on first option
+                const firstOpt = options[0];
+                firstOpt.values.forEach((val, idx) => {
+                    variants.push({
+                        title: val,
+                        price: analysis.suggestedPrice || '29.99',
+                        compare_at_price: null,
+                        option1: val,
+                        sku: `${val.toLowerCase().replace(/[^a-z0-9]/g, '')}-${Date.now()}-${idx}`
+                    });
+                });
+            }
+
+            return res.json({
+                success: true,
+                importMode: 'media',
+                frames: savedFrames,
+                floatingVideos: preservedVideoPaths.map(filePath => ({
+                    filePath,
+                    filename: path.basename(filePath)
+                })),
+                product: {
+                    title: analysis.title || '',
+                    description: analysis.description || '',
+                    vendor: '',
+                    type: '',
+                    tags: analysis.tags || [],
+                    images: imagesList,
+                    options: options.length > 0 ? options : [{"name": "Title", "values": ["Default Title"]}],
+                    variants
+                },
+                userCollections,
+                suggestedCollectionIds
+            });
+        }
+
+        // CASE B: URL provided
+        if (url) {
+            // Sub-case 1: Is it a media link (FB Ads Library, Instagram, Pinterest, YouTube, direct video)
+            const isMediaUrl = /facebook\.com\/ads\/library/i.test(url) ||
+                               /instagram\.com/i.test(url) ||
+                               /pinterest\.(com|co)/i.test(url) ||
+                               /pin\.it/i.test(url) ||
+                               /youtube\.com/i.test(url) ||
+                               /youtu\.be/i.test(url) ||
+                               /\.(mp4|mov|m4v|png|jpg|jpeg|webp)(\?|$)/i.test(url);
+
+            if (isMediaUrl) {
+                if (!geminiApiKey) return res.status(400).json({ error: 'Gemini API Key is required to analyze media links. Configure it in Settings.' });
+
+                console.log(`[UniversalImport] Downloading target media URL: ${url}`);
+                const videoProcessor = require('../services/videoProcessor');
+                const targetFilename = `dl-import-${Date.now()}.mp4`;
+                
+                // Get facebook token for Ads Library download if available
+                let fbAccessToken = null;
+                const accs = storage.accounts || [];
+                if (accs.length > 0) fbAccessToken = accs[0].accessToken || null;
+
+                const downloadedPath = await videoProcessor.downloadVideo(url, targetFilename, fbAccessToken);
+                tempMediaPaths.push(downloadedPath);
+
+                const allFrames = [];
+                // Check if downloaded file is an image or video
+                const isImg = /\.(png|jpg|jpeg|webp)$/i.test(downloadedPath);
+                if (isImg) {
+                    const imgBase64 = fs.readFileSync(downloadedPath).toString('base64');
+                    allFrames.push({ base64: imgBase64, filePath: downloadedPath, sourceType: 'image' });
+                } else {
+                    console.log(`[UniversalImport] Extracting frames from downloaded video...`);
+                    const videoFrames = await videoProcessor.extractFrames(downloadedPath, 20);
+                    videoFrames.forEach(f => allFrames.push({ ...f, sourceType: 'video' }));
+                    allExtractedFrames.push(...videoFrames);
+
+                    // Preserve video for metafield listing uploads
+                    const safeName = `floating-${uuidv4()}.mp4`;
+                    const preservedPath = path.join(uploadsDir, safeName);
+                    fs.copyFileSync(downloadedPath, preservedPath);
+                    preservedVideoPaths.push(preservedPath);
+                }
+
+                if (!allFrames.length) throw new Error('No usable media frames could be extracted from downloaded URL.');
+                
+                const framesBase64 = allFrames.map(f => f.base64);
+                const analysis = await geminiService.analyzeProductFromFrames(geminiApiKey, geminiModel, framesBase64);
+
+                const selectedIndices = (analysis.selectedIndices && analysis.selectedIndices.length)
+                    ? analysis.selectedIndices
+                    : allFrames.map((_, i) => i).slice(0, 8);
+
+                const savedFrames = [];
+                const imagesList = [];
+                for (const idx of selectedIndices) {
+                    if (allFrames[idx]) {
+                        const frame = allFrames[idx];
+                        const destFilename = `vl_${Date.now()}_${idx}.jpg`;
+                        const destPath = path.join(uploadsDir, destFilename);
+                        fs.copyFileSync(frame.filePath, destPath);
+                        savedFrames.push({ index: idx, filename: destFilename, url: '/uploads/' + destFilename });
+                        imagesList.push('/uploads/' + destFilename);
+                    }
+                }
+
+                // Get suggested collections via Gemini
+                let suggestedCollectionIds = [];
+                if (geminiApiKey && userCollections.length > 0) {
+                    try {
+                        const prompt = `Classify this product into relevant collections:\nTitle: ${analysis.title}\nDescription: ${analysis.description}\nCollections:\n${userCollections.map(c => `ID: ${c.id}, Title: ${c.title}`).join('\n')}\nReturn only matching collection IDs as JSON array.`;
+                        const suggestion = await geminiService.generateResponseText(geminiApiKey, geminiModel, prompt);
+                        suggestedCollectionIds = normalizeSuggestedCollectionIds(suggestion, userCollections);
+                    } catch {}
+                }
+
+                const options = (analysis.detectedAttributes || []).map(attr => ({
+                    name: attr.name,
+                    values: attr.values
+                }));
+
+                const variants = [];
+                if (options.length === 0) {
+                    variants.push({
+                        title: 'Default Title',
+                        price: analysis.suggestedPrice || '29.99',
+                        compare_at_price: null,
+                        option1: 'Default Title',
+                        sku: `sku-${Date.now()}`
+                    });
+                } else {
+                    const firstOpt = options[0];
+                    firstOpt.values.forEach((val, idx) => {
+                        variants.push({
+                            title: val,
+                            price: analysis.suggestedPrice || '29.99',
+                            compare_at_price: null,
+                            option1: val,
+                            sku: `${val.toLowerCase().replace(/[^a-z0-9]/g, '')}-${Date.now()}-${idx}`
+                        });
+                    });
+                }
+
+                return res.json({
+                    success: true,
+                    importMode: 'media',
+                    frames: savedFrames,
+                    floatingVideos: preservedVideoPaths.map(filePath => ({
+                        filePath,
+                        filename: path.basename(filePath)
+                    })),
+                    product: {
+                        title: analysis.title || '',
+                        description: analysis.description || '',
+                        vendor: '',
+                        type: '',
+                        tags: analysis.tags || [],
+                        images: imagesList,
+                        options: options.length > 0 ? options : [{"name": "Title", "values": ["Default Title"]}],
+                        variants
+                    },
+                    userCollections,
+                    suggestedCollectionIds
+                });
+            }
+
+            // Sub-case 2: Is it a Shopify product page link?
+            const isShopifyUrl = /\/products\/[a-zA-Z0-9-_]+/i.test(url) && !url.includes('amazon.') && !url.includes('alibaba.');
+            if (isShopifyUrl) {
+                console.log(`[UniversalImport] Scraping Shopify direct JSON metadata...`);
+                const parsedUrl = new URL(url);
+                parsedUrl.search = '';
+                const jsUrl = parsedUrl.origin + parsedUrl.pathname + '.js';
+
+                const scrapeRes = await fetch(jsUrl);
+                if (!scrapeRes.ok) {
+                    throw new Error(`Failed to scrape Shopify product page. Status: ${scrapeRes.status}`);
+                }
+                const product = await scrapeRes.json();
+
+                // Format options and images
+                const options = (product.options || []).map(opt => ({
+                    name: opt.name,
+                    values: opt.values
+                }));
+
+                const images = (product.images || []).map(img => {
+                    return img.startsWith('//') ? 'https:' + img : img;
+                });
+
+                // Format variants
+                const variants = (product.variants || []).map(v => ({
+                    title: v.title,
+                    price: (v.price / 100).toFixed(2),
+                    compare_at_price: v.compare_at_price ? (v.compare_at_price / 100).toFixed(2) : null,
+                    option1: v.option1,
+                    option2: v.option2,
+                    option3: v.option3,
+                    sku: v.sku || `sku-${v.id}`
+                }));
+
+                // Get suggested collections via Gemini
+                let suggestedCollectionIds = [];
+                if (geminiApiKey && userCollections.length > 0) {
+                    try {
+                        const prompt = `Classify this product into relevant collections:\nTitle: ${product.title}\nDescription: ${product.description}\nCollections:\n${userCollections.map(c => `ID: ${c.id}, Title: ${c.title}`).join('\n')}\nReturn only matching collection IDs as JSON array.`;
+                        const suggestion = await geminiService.generateResponseText(geminiApiKey, geminiModel, prompt);
+                        suggestedCollectionIds = normalizeSuggestedCollectionIds(suggestion, userCollections);
+                    } catch {}
+                }
+
+                return res.json({
+                    success: true,
+                    importMode: 'scrape',
+                    product: {
+                        title: product.title,
+                        description: product.description,
+                        vendor: product.vendor,
+                        type: product.type,
+                        tags: product.tags || [],
+                        images,
+                        options: options.length > 0 ? options : [{"name": "Title", "values": ["Default Title"]}],
+                        variants
+                    },
+                    userCollections,
+                    suggestedCollectionIds
+                });
+            }
+
+            // Sub-case 3: External e-commerce sites (Amazon, Alibaba, etc.)
+            console.log(`[UniversalImport] Scraping external e-commerce product page via browser: ${url}`);
+            
+            // Use browser extraction to extract page details
+            const pageData = await scrapeProductPageViaBrowser(url);
+            
+            if (!geminiApiKey) {
+                return res.status(400).json({ error: 'Gemini API Key is required to convert Amazon/Alibaba listings. Configure it in Settings.' });
+            }
+
+            console.log(`[UniversalImport] Analyzing page details with Gemini AI...`);
+            const structuredProduct = await geminiService.analyzeProductFromScrapedText(
+                geminiApiKey,
+                geminiModel,
+                `Page Title: ${pageData.title}\n\nPage Text:\n${pageData.bodyText}`
+            );
+
+            // Merge scraped browser images with Gemini's response
+            const finalImages = pageData.images && pageData.images.length > 0 
+                ? pageData.images 
+                : (structuredProduct.images || []);
+
+            // Ensure variants have correct defaults/skus if lacking
+            const variants = (structuredProduct.variants || []).map((v, i) => ({
+                title: v.title || 'Default Option',
+                price: v.price || structuredProduct.suggestedPrice || '29.99',
+                compare_at_price: v.compare_at_price || null,
+                option1: v.option1 || v.title || 'Default Option',
+                option2: v.option2 || null,
+                sku: v.sku || `sku-${Date.now()}-${i}`
+            }));
+
+            // Get suggested collections via Gemini
+            let suggestedCollectionIds = [];
+            if (geminiApiKey && userCollections.length > 0) {
+                try {
+                    const prompt = `Classify this product into relevant collections:\nTitle: ${structuredProduct.title}\nDescription: ${structuredProduct.description}\nCollections:\n${userCollections.map(c => `ID: ${c.id}, Title: ${c.title}`).join('\n')}\nReturn only matching collection IDs as JSON array.`;
+                    const suggestion = await geminiService.generateResponseText(geminiApiKey, geminiModel, prompt);
+                    suggestedCollectionIds = normalizeSuggestedCollectionIds(suggestion, userCollections);
+                } catch {}
+            }
+
+            return res.json({
+                success: true,
+                importMode: 'scrape',
+                product: {
+                    title: structuredProduct.title || pageData.title || 'Imported Product',
+                    description: structuredProduct.description || '',
+                    vendor: structuredProduct.vendor || '',
+                    type: structuredProduct.type || '',
+                    tags: structuredProduct.tags || [],
+                    images: finalImages,
+                    options: structuredProduct.options && structuredProduct.options.length > 0 
+                        ? structuredProduct.options 
+                        : [{"name": "Title", "values": ["Default Option"]}],
+                    variants
+                },
+                userCollections,
+                suggestedCollectionIds
+            });
+        }
+
+        return res.status(400).json({ error: 'No media files uploaded or URL provided.' });
+
+    } catch (error) {
+        console.error('[UniversalImport] Failure:', error.message);
+        res.status(500).json({ error: 'Failed to process universal import request.', details: error.message });
+    } finally {
+        const videoProcessor = require('../services/videoProcessor');
+        if (allExtractedFrames.length) { try { videoProcessor.cleanupFrames(allExtractedFrames); } catch {} }
+        
+        // Clean up temporary downloaded file paths
+        for (const tempPath of tempMediaPaths) {
+            try { if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath); } catch {}
+        }
+    }
+});
+
+// Helper function to extract product page layout via headless browser
+async function scrapeProductPageViaBrowser(url) {
+    const { withTab } = require('../services/browserPool');
+    return withTab(async (page) => {
+        console.log(`[UniversalScrape] Loading page in browser: ${url}`);
+        
+        // Block stylesheets, images, fonts to make the scrape very fast
+        await page.setRequestInterception(true);
+        page.on('request', req => {
+            const rt = req.resourceType();
+            if (['stylesheet', 'font'].includes(rt)) {
+                req.abort();
+            } else {
+                req.continue();
+            }
+        });
+
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        
+        // Wait 3 seconds for dynamic content / React loading
+        await new Promise(r => setTimeout(r, 3000));
+        
+        const pageData = await page.evaluate(() => {
+            const title = document.title || '';
+            const bodyText = document.body.innerText || '';
+            
+            // Extract image sources
+            const imgElements = document.querySelectorAll('img');
+            const imageUrls = [];
+            imgElements.forEach(img => {
+                const src = img.src || img.getAttribute('data-old-hires') || img.getAttribute('data-a-dynamic-image');
+                if (src && src.startsWith('http') && !src.includes('sprite') && !src.includes('pixel')) {
+                    // Try to filter out tiny images
+                    const width = img.naturalWidth || 0;
+                    const height = img.naturalHeight || 0;
+                    if (width > 150 && height > 150) {
+                        imageUrls.push(src);
+                    } else if (src.includes('/images/I/') || src.includes('alicdn.com')) {
+                        imageUrls.push(src);
+                    }
+                }
+            });
+            
+            const uniqueImages = [...new Set(imageUrls)].slice(0, 15);
+            
+            return {
+                title,
+                bodyText: bodyText.slice(0, 6000), // Cap to prevent large prompts
+                images: uniqueImages
+            };
+        });
+        
+        return pageData;
+    }, { timeout: 45000 });
+}
+
 // 8. Assign extracted images to variant values using Gemini Vision
 router.post('/assign-variant-images', async (req, res) => {
     try {
