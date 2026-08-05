@@ -183,3 +183,14 @@ app.use((err, req, res, next) => {
 app.listen(port, '0.0.0.0', () => {
     console.log(`Server running at http://localhost:${port}`);
 });
+
+// Graceful shutdown — close headless browser on exit
+const cleanup = async () => {
+    try {
+        const { closeBrowser } = require('./services/browserPool');
+        await closeBrowser();
+    } catch {}
+    process.exit(0);
+};
+process.on('SIGTERM', cleanup);
+process.on('SIGINT', cleanup);

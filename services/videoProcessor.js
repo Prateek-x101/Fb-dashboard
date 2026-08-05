@@ -72,8 +72,7 @@ function parseVideoUrlFromHtml(html) {
     return null;
 }
 
-// Returns a direct CDN video URL for an fb.com/ads/library/?id=XXX page.
-// Returns a direct CDN video URL for an fb.com/ads/library/?id=XXX page.
+// Returns a direct CDN video URL for an fb.com/ads/library/?id=XXX page (HTML scraper fallback).
 async function extractFbAdsLibraryVideo(pageUrl, accessToken) {
     // Parse the ad ID from the URL
     let adId;
@@ -219,6 +218,7 @@ async function downloadVideo(url, outputFilename, accessToken) {
     const isDirectCdnUrl = /\.mp4(\?|$)/i.test(url) || 
                            /\.mov(\?|$)/i.test(url) || 
                            /fbcdn\.net\/v\//i.test(url) || 
+                           /cdninstagram\.com/i.test(url) ||
                            url.includes('.mp4?') ||
                            url.startsWith('blob:');
     if (isDirectCdnUrl) {
@@ -226,13 +226,39 @@ async function downloadVideo(url, outputFilename, accessToken) {
         return downloadDirectUrl(url, outputFilename);
     }
 
-    // ── Facebook Ads Library: use dedicated scraper ────────────────────────
+    // ── Browser-based extraction for Facebook, Instagram, Pinterest ─────────
     const isFbAdsLib = /facebook\.com\/ads\/library/i.test(url);
-    if (isFbAdsLib) {
-        if (!accessToken) throw new Error('A connected Facebook account is required to download from the Ads Library. Please connect an account in Settings.');
-        const videoUrl = await extractFbAdsLibraryVideo(url, accessToken);
-        // Download the direct CDN video URL with fetch
-        return downloadDirectUrl(videoUrl, outputFilename);
+    const isInstagram = /instagram\.com/i.test(url);
+    const isPinterest = /pinterest\.(com|co)/i.test(url) || /pin\.it/i.test(url);
+
+    if (isFbAdsLib || isInstagram || isPinterest) {
+        try {
+            const { extractVideoUrl } = require('./browserExtract');
+            console.log(`[Browser] Extracting video via headless Chromium: ${url.slice(0, 80)}...`);
+            const videoUrl = await extractVideoUrl(url);
+            console.log(`[Browser] Got video URL, downloading: ${videoUrl.slice(0, 80)}...`);
+            return downloadDirectUrl(videoUrl, outputFilename);
+        } catch (browserErr) {
+            console.warn(`[Browser] Browser extraction failed: ${browserErr.message}`);
+            
+            // For Facebook Ads Library, also try the HTML scraper as secondary fallback
+            if (isFbAdsLib) {
+                try {
+                    const videoUrl = await extractFbAdsLibraryVideo(url, accessToken);
+                    return downloadDirectUrl(videoUrl, outputFilename);
+                } catch (scraperErr) {
+                    console.warn(`[Scraper] HTML scraper also failed: ${scraperErr.message}`);
+                }
+            }
+            
+            // Final fallback to yt-dlp for Instagram/Pinterest (may be slow but might work)
+            if (!isFbAdsLib) {
+                console.log(`[Fallback] Trying yt-dlp for: ${url.slice(0, 60)}...`);
+                // Fall through to yt-dlp below
+            } else {
+                throw new Error(`Could not extract video. Try copying the direct .mp4 URL from the browser's Inspect Element and pasting it here.`);
+            }
+        }
     }
 
     await ensureBinaries();
