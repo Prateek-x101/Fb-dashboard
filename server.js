@@ -97,6 +97,51 @@ app.post('/api/media/download-url', async (req, res) => {
     }
 });
 
+// Diagnostic route to test yt-dlp version and execution directly on the environment
+app.get('/api/media/debug-ytdlp', async (req, res) => {
+    try {
+        const { execFile } = require('child_process');
+        const path = require('path');
+        const fs = require('fs');
+        const binDir = path.join(__dirname, 'bin');
+        const isWindows = process.platform === 'win32';
+        const ytdlp = path.join(binDir, isWindows ? 'yt-dlp.exe' : 'yt-dlp');
+        
+        if (!fs.existsSync(ytdlp)) {
+            return res.json({ error: 'yt-dlp binary not found', path: ytdlp });
+        }
+        
+        const runTest = (args) => {
+            return new Promise((resolve) => {
+                execFile(ytdlp, args, { timeout: 10000 }, (error, stdout, stderr) => {
+                    resolve({ args, error: error ? error.message : null, stdout: stdout.trim(), stderr: stderr.trim() });
+                });
+            });
+        };
+
+        const directResult = await runTest(['--version']);
+        let py3Result = null;
+        if (directResult.error && !isWindows) {
+            py3Result = await new Promise((resolve) => {
+                execFile('python3', [ytdlp, '--version'], { timeout: 10000 }, (error, stdout, stderr) => {
+                    resolve({ error: error ? error.message : null, stdout: stdout.trim(), stderr: stderr.trim() });
+                });
+            });
+        }
+
+        res.json({
+            exists: true,
+            path: ytdlp,
+            platform: process.platform,
+            arch: process.arch,
+            direct: directResult,
+            python3Fallback: py3Result
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // Health check
 app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
