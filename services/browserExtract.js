@@ -13,7 +13,50 @@ const { withTab } = require('./browserPool');
 // Safe delay helper
 const delay = ms => new Promise(r => setTimeout(r, ms));
 
+// Simple in-memory cache to prevent concurrent/duplicate extraction requests for the same media
+const extractionCache = new Map();
+
+function getCacheKey(url) {
+    try {
+        const u = new URL(url);
+        // For Facebook Ads Library, the ad ID is the unique key
+        if (/facebook\.com\/ads\/library/i.test(url)) {
+            const id = u.searchParams.get('id');
+            if (id) return `fb_${id}`;
+        }
+        // For Instagram/Pinterest, clean the URL (strip query parameters)
+        if (/instagram\.com/i.test(url) || /pinterest\.(com|co)/i.test(url) || /pin\.it/i.test(url)) {
+            return `${u.origin}${u.pathname}`;
+        }
+    } catch {}
+    return url;
+}
+
 async function extractVideoUrl(targetUrl) {
+    const cacheKey = getCacheKey(targetUrl);
+    
+    // If there is an active or completed extraction for this key, return it
+    if (extractionCache.has(cacheKey)) {
+        console.log(`[BrowserExtract] Cache hit for: ${cacheKey}. Reusing extraction.`);
+        return extractionCache.get(cacheKey);
+    }
+    
+    const extractionPromise = (async () => {
+        return performExtraction(targetUrl);
+    })();
+    
+    // Save to cache
+    extractionCache.set(cacheKey, extractionPromise);
+    
+    // If extraction fails, remove it from cache so the user can retry later
+    extractionPromise.catch(() => {
+        extractionCache.delete(cacheKey);
+    });
+    
+    return extractionPromise;
+}
+
+async function performExtraction(targetUrl) {
     return withTab(async (page) => {
         console.log(`[BrowserExtract] Starting extraction for: ${targetUrl}`);
         
