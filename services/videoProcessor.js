@@ -5,38 +5,8 @@ const fetch = require('node-fetch');
 
 // ── Facebook Ads Library extractor ──────────────────────────────────────────
 // Returns a direct CDN video URL for an fb.com/ads/library/?id=XXX page.
-async function extractFbAdsLibraryVideo(pageUrl, accessToken) {
-    // Parse the ad ID from the URL
-    let adId;
-    try {
-        const u = new URL(pageUrl);
-        adId = u.searchParams.get('id');
-    } catch {}
-    if (!adId) throw new Error('Could not find ad ID in Facebook Ads Library URL. Make sure the URL contains ?id=...');
-
-    // ── Step 1: build snapshot URL directly (no Graph API call needed) ───────
-    // The render_ad endpoint accepts any valid user token and the ad ID.
-    const snapshotUrl = `https://www.facebook.com/ads/archive/render_ad/?id=${adId}&access_token=${encodeURIComponent(accessToken)}`;
-
-    // ── Step 2: fetch the snapshot HTML page ──────────────────────────────
-    const htmlRes = await fetch(snapshotUrl, {
-        headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9'
-        }
-    });
-    const html = await htmlRes.text();
-
-    // ── Log first 500 chars to help debug future format changes ──────────────
-    console.log(`[FBAdsLib] Snapshot HTML preview (${html.length} bytes): ${html.slice(0, 300)}`);
-
-    // Detect Facebook error page before attempting extraction
-    if (html.length < 3000 && (html.includes('Sorry, something went wrong') || html.includes('<title>Error</title>'))) {
-        throw new Error('Facebook returned an error page for the ad snapshot. The access token may lack permissions or the ad is no longer available.');
-    }
-
-    // ── Unescape helper ────────────────────────────────────────────────────
+// Helper to extract a video/CDN URL from Facebook HTML source using multiple regex strategies
+function parseVideoUrlFromHtml(html) {
     function fbUnescape(s) {
         return s
             .replace(/\\u002F/gi, '/')
@@ -48,9 +18,7 @@ async function extractFbAdsLibraryVideo(pageUrl, accessToken) {
             .replace(/\\"/g, '"');
     }
 
-    // ── Step 3: extract CDN video URL from HTML ────────────────────────────
     // Strategy A: look for any fbcdn.net video CDN URL directly (most robust)
-    // Facebook CDN pattern: https://video*.fbcdn.net/v/...
     const cdnRe = /https:\/\/video[a-z0-9._-]*\.fbcdn\.net\/v\/[^\s"'<>\\]{20,}/g;
     const cdnMatches = html.match(cdnRe) || [];
     if (cdnMatches.length) {
@@ -59,7 +27,7 @@ async function extractFbAdsLibraryVideo(pageUrl, accessToken) {
         return fbUnescape(best);
     }
 
-    // Strategy B: same but URL is Unicode-escaped (\u002F = /)
+    // Strategy B: Unicode-escaped fbcdn URL
     const cdnReEncoded = /https:\\u002F\\u002Fvideo[a-z0-9._-]*\.fbcdn\.net\\u002Fv\\u002F[^\s"'<>]{20,}/g;
     const cdnEncoded = html.match(cdnReEncoded) || [];
     if (cdnEncoded.length) {
@@ -68,7 +36,7 @@ async function extractFbAdsLibraryVideo(pageUrl, accessToken) {
         return fbUnescape(best);
     }
 
-    // Strategy C: named JSON keys for video URL (various Facebook formats)
+    // Strategy C: named JSON keys for video URL
     const keyPatterns = [
         /"browser_native_hd_url"\s*:\s*"([^"]{20,})"/,
         /"browser_native_sd_url"\s*:\s*"([^"]{20,})"/,
@@ -101,14 +69,72 @@ async function extractFbAdsLibraryVideo(pageUrl, accessToken) {
         return fbUnescape(mp4Matches[0]);
     }
 
-    // Nothing found — dump a snippet to server logs to aid debugging
-    const snippets = ['fbcdn', 'video', 'mp4', 'playable'];
-    for (const kw of snippets) {
-        const idx = html.toLowerCase().indexOf(kw);
-        if (idx !== -1) console.log(`[FBAdsLib] Keyword '${kw}' context: ...${html.slice(Math.max(0,idx-40), idx+80)}...`);
+    return null;
+}
+
+// Returns a direct CDN video URL for an fb.com/ads/library/?id=XXX page.
+async function extractFbAdsLibraryVideo(pageUrl, accessToken) {
+    // Parse the ad ID from the URL
+    let adId;
+    try {
+        const u = new URL(pageUrl);
+        adId = u.searchParams.get('id');
+    } catch {}
+    if (!adId) throw new Error('Could not find ad ID in Facebook Ads Library URL. Make sure the URL contains ?id=...');
+
+    // ── Method 1: Public scraper (No token required!) ──────────────────────
+    const publicUrl = `https://www.facebook.com/ads/library/?id=${adId}`;
+    try {
+        console.log(`[FBAdsLib] Attempting public extraction (no token) for ad ID: ${adId}`);
+        const htmlRes = await fetch(publicUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9'
+            }
+        });
+        if (htmlRes.ok) {
+            const html = await htmlRes.text();
+            const videoUrl = parseVideoUrlFromHtml(html);
+            if (videoUrl) {
+                console.log(`[FBAdsLib] Public extraction successful for ad ID: ${adId}`);
+                return videoUrl;
+            }
+        }
+    } catch (publicErr) {
+        console.warn(`[FBAdsLib] Public extraction failed: ${publicErr.message}`);
     }
 
-    throw new Error(`Found the ad snapshot but could not locate a video URL inside it. This ad may be image-only or the format changed — check server logs for details.`);
+    // ── Method 2: Fallback to token-based snapshot ──────────────────────────
+    if (accessToken) {
+        console.log(`[FBAdsLib] Falling back to token-based snapshot extraction for ad ID: ${adId}`);
+        const snapshotUrl = `https://www.facebook.com/ads/archive/render_ad/?id=${adId}&access_token=${encodeURIComponent(accessToken)}`;
+        const htmlRes = await fetch(snapshotUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9'
+            }
+        });
+        const html = await htmlRes.text();
+
+        // Detect Facebook error page before attempting extraction
+        if (html.length < 3000 && (html.includes('Sorry, something went wrong') || html.includes('<title>Error</title>'))) {
+            throw new Error('Facebook returned an error page for the ad snapshot. The access token may lack permissions or the ad is no longer available.');
+        }
+
+        const videoUrl = parseVideoUrlFromHtml(html);
+        if (videoUrl) return videoUrl;
+        
+        // Debug snippets
+        const snippets = ['fbcdn', 'video', 'mp4', 'playable'];
+        for (const kw of snippets) {
+            const idx = html.toLowerCase().indexOf(kw);
+            if (idx !== -1) console.log(`[FBAdsLib] Keyword '${kw}' context: ...${html.slice(Math.max(0,idx-40), idx+80)}...`);
+        }
+    }
+
+    throw new Error(`Could not locate a video URL inside the Facebook Ads Library page. Ensure the ad is active and actually contains a video.`);
 }
 
 const binDir = path.join(__dirname, '..', 'bin');
