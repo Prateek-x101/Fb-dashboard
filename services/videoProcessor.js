@@ -73,6 +73,7 @@ function parseVideoUrlFromHtml(html) {
 }
 
 // Returns a direct CDN video URL for an fb.com/ads/library/?id=XXX page.
+// Returns a direct CDN video URL for an fb.com/ads/library/?id=XXX page.
 async function extractFbAdsLibraryVideo(pageUrl, accessToken) {
     // Parse the ad ID from the URL
     let adId;
@@ -107,34 +108,29 @@ async function extractFbAdsLibraryVideo(pageUrl, accessToken) {
 
     // ── Method 2: Fallback to token-based snapshot ──────────────────────────
     if (accessToken) {
-        console.log(`[FBAdsLib] Falling back to token-based snapshot extraction for ad ID: ${adId}`);
-        const snapshotUrl = `https://www.facebook.com/ads/archive/render_ad/?id=${adId}&access_token=${encodeURIComponent(accessToken)}`;
-        const htmlRes = await fetch(snapshotUrl, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9'
+        try {
+            console.log(`[FBAdsLib] Falling back to token-based snapshot extraction for ad ID: ${adId}`);
+            const snapshotUrl = `https://www.facebook.com/ads/archive/render_ad/?id=${adId}&access_token=${encodeURIComponent(accessToken)}`;
+            const htmlRes = await fetch(snapshotUrl, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.9'
+                }
+            });
+            const html = await htmlRes.text();
+
+            // Check if it returned an error page
+            if (html.length > 3000 || (!html.includes('Sorry, something went wrong') && !html.includes('<title>Error</title>'))) {
+                const videoUrl = parseVideoUrlFromHtml(html);
+                if (videoUrl) return videoUrl;
             }
-        });
-        const html = await htmlRes.text();
-
-        // Detect Facebook error page before attempting extraction
-        if (html.length < 3000 && (html.includes('Sorry, something went wrong') || html.includes('<title>Error</title>'))) {
-            throw new Error('Facebook returned an error page for the ad snapshot. The access token may lack permissions or the ad is no longer available.');
-        }
-
-        const videoUrl = parseVideoUrlFromHtml(html);
-        if (videoUrl) return videoUrl;
-        
-        // Debug snippets
-        const snippets = ['fbcdn', 'video', 'mp4', 'playable'];
-        for (const kw of snippets) {
-            const idx = html.toLowerCase().indexOf(kw);
-            if (idx !== -1) console.log(`[FBAdsLib] Keyword '${kw}' context: ...${html.slice(Math.max(0,idx-40), idx+80)}...`);
+        } catch (tokenErr) {
+            console.warn(`[FBAdsLib] Token-based extraction failed: ${tokenErr.message}`);
         }
     }
 
-    throw new Error(`Could not locate a video URL inside the Facebook Ads Library page. Ensure the ad is active and actually contains a video.`);
+    throw new Error(`Auto-extraction failed. Facebook blocks server requests. Please use the Inspect-Element method: Right-click video in browser -> Inspect -> Copy the direct '.mp4' URL from the <video> tag, and paste it here directly! It will download instantly.`);
 }
 
 const binDir = path.join(__dirname, '..', 'bin');
