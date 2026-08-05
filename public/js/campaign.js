@@ -1090,17 +1090,50 @@
             }
             
             try {
+                // Inject animated pulsing loader style dynamically if not present
+                if (!document.getElementById('download-loader-style')) {
+                    const style = document.createElement('style');
+                    style.id = 'download-loader-style';
+                    style.innerHTML = `
+                        .btn-pulse-loading {
+                            background: linear-gradient(270deg, #4361ee, #4895ef, #3f37c9, #4361ee) !important;
+                            background-size: 300% 300% !important;
+                            animation: pulseGlow 1.5s ease infinite !important;
+                            border: none !important;
+                            color: white !important;
+                        }
+                        @keyframes pulseGlow {
+                            0% { background-position: 0% 50%; box-shadow: 0 0 8px rgba(67, 97, 238, 0.5); }
+                            50% { background-position: 100% 50%; box-shadow: 0 0 20px rgba(72, 149, 239, 0.8); }
+                            100% { background-position: 0% 50%; box-shadow: 0 0 8px rgba(67, 97, 238, 0.5); }
+                        }
+                    `;
+                    document.head.appendChild(style);
+                }
+
                 btnDownload.disabled = true;
-                btnDownload.textContent = '⏳ Downloading...';
+                btnDownload.classList.add('btn-pulse-loading');
+                btnDownload.innerHTML = `⏳ Starting (0/${urls.length})...`;
                 window.AppController.showToast(`Downloading and cleaning ${urls.length} video(s) in parallel... 📥`, 'info');
                 
+                let successCount = 0;
+                let finishedCount = 0;
+
                 const promises = urls.map(async (url) => {
-                    const result = await window.API.downloadVideoFromUrl(url, canvasType);
-                    return result;
+                    try {
+                        const result = await window.API.downloadVideoFromUrl(url, canvasType);
+                        finishedCount++;
+                        btnDownload.innerHTML = `⏳ Downloading ${finishedCount}/${urls.length}...`;
+                        return result;
+                    } catch (err) {
+                        finishedCount++;
+                        btnDownload.innerHTML = `⏳ Downloading ${finishedCount}/${urls.length}...`;
+                        throw err;
+                    }
                 });
 
                 const results = await Promise.allSettled(promises);
-                let successCount = 0;
+                successCount = 0;
 
                 const failReasons = [];
                 results.forEach((res) => {
@@ -1152,6 +1185,7 @@
                 window.AppController.showToast('Download failed: ' + err.message, 'error');
             } finally {
                 btnDownload.disabled = false;
+                btnDownload.classList.remove('btn-pulse-loading');
                 btnDownload.textContent = '📥 Download & Clean All';
             }
         },

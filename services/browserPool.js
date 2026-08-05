@@ -129,7 +129,8 @@ function releaseSlot() {
     }
 }
 
-// ── Public API ──────────────────────────────────────────────────────────────
+let lastNavTime = 0;
+const NAV_SPACING_MS = 2000; // Space navigations by 2 seconds to prevent anti-bot blocking
 
 /**
  * Run an extraction function inside a managed browser tab.
@@ -142,6 +143,18 @@ async function withTab(extractFn, opts = {}) {
     const timeout = opts.timeout || 60000;
 
     await acquireSlot();
+    
+    // Space out navigations to avoid triggering parallel request blocks
+    const now = Date.now();
+    const diff = now - lastNavTime;
+    if (diff < NAV_SPACING_MS) {
+        const delayTime = NAV_SPACING_MS - diff;
+        lastNavTime = now + delayTime; // Reserve time slot
+        await new Promise(r => setTimeout(r, delayTime));
+    } else {
+        lastNavTime = now;
+    }
+
     let page = null;
     try {
         const br = await ensureBrowser();

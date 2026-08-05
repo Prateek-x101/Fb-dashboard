@@ -36,10 +36,24 @@ async function downloadUrlToTempFile(url) {
 }
 
 function appendUtmParams(url) {
-    // UTM tracking is handled by the url_tags field on the creative object.
-    // Meta automatically appends those params to the destination URL at serve-time.
-    // We intentionally do NOT add them here to avoid double-appending.
-    return (url || '').trim();
+    if (!url) return '';
+    let parsedUrl = url.trim();
+    
+    // If the URL already contains UTM parameters, don't append again
+    if (parsedUrl.includes('utm_medium=') || parsedUrl.includes('utm_campaign=')) {
+        return parsedUrl;
+    }
+    
+    const utmString = 'utm_medium={{ad.name}}&utm_campaign={{campaign.name}}&utm_content={{adset.name}}';
+    
+    if (parsedUrl.includes('?')) {
+        if (parsedUrl.endsWith('?') || parsedUrl.endsWith('&')) {
+            return parsedUrl + utmString;
+        }
+        return parsedUrl + '&' + utmString;
+    } else {
+        return parsedUrl + '?' + utmString;
+    }
 }
 
 function parseIsoDate(dateString) {
