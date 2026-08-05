@@ -192,6 +192,18 @@ function resolveActualPath(resolve, reject, tempOutputPath, uploadsDir, outputFi
 // Download video using yt-dlp in HD (Optimized Speed)
 // accessToken is optional; used only for Facebook Ads Library URLs
 async function downloadVideo(url, outputFilename, accessToken) {
+    // ── Direct CDN / Video URL fallback (Bypass yt-dlp entirely) ───────────
+    // If the URL is a direct link to a video file, fetch it directly
+    const isDirectCdnUrl = /\.mp4(\?|$)/i.test(url) || 
+                           /\.mov(\?|$)/i.test(url) || 
+                           /fbcdn\.net\/v\//i.test(url) || 
+                           url.includes('.mp4?') ||
+                           url.startsWith('blob:');
+    if (isDirectCdnUrl) {
+        console.log(`Bypassing yt-dlp. Downloading direct video CDN link: ${url.slice(0, 80)}...`);
+        return downloadDirectUrl(url, outputFilename);
+    }
+
     // ── Facebook Ads Library: use dedicated scraper ────────────────────────
     const isFbAdsLib = /facebook\.com\/ads\/library/i.test(url);
     if (isFbAdsLib) {
