@@ -112,7 +112,8 @@ async function extractFbAdsLibraryVideo(pageUrl, accessToken) {
 }
 
 const binDir = path.join(__dirname, '..', 'bin');
-const ytdlpPath = path.join(binDir, 'yt-dlp');          // Linux binary (no .exe)
+const isWindows = process.platform === 'win32';
+const ytdlpPath = path.join(binDir, isWindows ? 'yt-dlp.exe' : 'yt-dlp');
 const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
 const ffmpegPath = ffmpegInstaller.path;
 
@@ -121,7 +122,7 @@ if (!fs.existsSync(binDir)) {
     fs.mkdirSync(binDir, { recursive: true });
 }
 
-// Download yt-dlp Linux binary if not present
+// Download yt-dlp binary if not present
 async function ensureBinaries() {
     if (fs.existsSync(ytdlpPath)) {
         // Make sure it is executable (survives redeployments)
@@ -129,8 +130,10 @@ async function ensureBinaries() {
         return;
     }
 
-    console.log("yt-dlp not found. Downloading Linux binary from GitHub...");
-    const downloadUrl = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux";
+    console.log(`yt-dlp not found. Downloading ${isWindows ? 'Windows' : 'Linux'} binary from GitHub...`);
+    const downloadUrl = isWindows
+        ? "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+        : "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux";
 
     try {
         const res = await fetch(downloadUrl);
@@ -221,36 +224,67 @@ async function downloadVideo(url, outputFilename, accessToken) {
         '--no-check-certificates',
         '--impersonate', 'chrome',
         '--add-header', 'Accept-Language:en-US,en;q=0.9',
-        '--extractor-retries', '3',
+        '--extractor-retries', '1',
+        '--no-interactive',
+        '--socket-timeout', '15',
         '-o', tempOutputPath,
         url
     ];
 
+    const runYtdlp = (execArgs) => {
+        return new Promise((resolve, reject) => {
+            console.log(`Executing yt-dlp with path: ${ytdlpPath}`);
+            execFile(ytdlpPath, execArgs, { timeout: 300000 }, (error, stdout, stderr) => {
+                if (error) {
+                    const isExecError = error.code === 'ENOENT' || error.code === 'EACCES' || error.code === 127;
+                    if (!isWindows && isExecError) {
+                        console.warn('Direct yt-dlp execution failed. Retrying with python3 interpreter...');
+                        execFile('python3', [ytdlpPath, ...execArgs], { timeout: 300000 }, (py3Err, py3Out, py3Serr) => {
+                            if (py3Err) {
+                                console.warn('python3 execution failed. Retrying with python...');
+                                execFile('python', [ytdlpPath, ...execArgs], { timeout: 300000 }, (pyErr, pyOut, pySerr) => {
+                                    if (pyErr) {
+                                        return reject({ error: pyErr, stderr: pySerr });
+                                    }
+                                    resolve({ stdout: pyOut, stderr: pySerr });
+                                });
+                            } else {
+                                resolve({ stdout: py3Out, stderr: py3Serr });
+                            }
+                        });
+                    } else {
+                        reject({ error, stderr });
+                    }
+                } else {
+                    resolve({ stdout, stderr });
+                }
+            });
+        });
+    };
+
     return new Promise((resolve, reject) => {
-        const child = execFile(ytdlpPath, args, { timeout: 300000 }, (error, stdout, stderr) => {
-            if (error) {
+        runYtdlp(args)
+            .then(() => resolveActualPath(resolve, reject, tempOutputPath, uploadsDir, outputFilename))
+            .catch(({ error, stderr }) => {
                 // If impersonation flag unsupported on this yt-dlp build, retry without it
                 if (/impersonate|unrecognized/i.test(stderr || error.message)) {
                     console.warn('yt-dlp --impersonate not supported, retrying without it...');
                     const fallbackArgs = args.filter((a, i) =>
                         a !== '--impersonate' && args[i - 1] !== '--impersonate'
                     );
-                    execFile(ytdlpPath, fallbackArgs, { timeout: 300000 }, (err2, out2, serr2) => {
-                        if (err2) {
+                    runYtdlp(fallbackArgs)
+                        .then(() => resolveActualPath(resolve, reject, tempOutputPath, uploadsDir, outputFilename))
+                        .catch(({ error: err2, stderr: serr2 }) => {
                             console.error('yt-dlp fallback error:', err2.message);
                             console.error('yt-dlp fallback stderr:', serr2);
-                            return reject(new Error(`Failed to download video from URL: ${err2.message}`));
-                        }
-                        resolveActualPath(resolve, reject, tempOutputPath, uploadsDir, outputFilename);
-                    });
-                    return;
+                            reject(new Error(`Failed to download video from URL: ${err2.message}`));
+                        });
+                } else {
+                    console.error("yt-dlp execution error:", error.message);
+                    console.error("yt-dlp stderr:", stderr);
+                    reject(new Error(`Failed to download video from URL: ${error.message}`));
                 }
-                console.error("yt-dlp execution error:", error.message);
-                console.error("yt-dlp stderr:", stderr);
-                return reject(new Error(`Failed to download video from URL: ${error.message}`));
-            }
-            resolveActualPath(resolve, reject, tempOutputPath, uploadsDir, outputFilename);
-        });
+            });
     });
 }
 

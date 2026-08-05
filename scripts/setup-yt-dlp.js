@@ -7,8 +7,11 @@ const fs   = require('fs');
 const path = require('path');
 
 const binDir  = path.join(__dirname, '..', 'bin');
-const binPath = path.join(binDir, 'yt-dlp');
-const DL_URL  = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux';
+const isWindows = process.platform === 'win32';
+const binPath = path.join(binDir, isWindows ? 'yt-dlp.exe' : 'yt-dlp');
+const DL_URL  = isWindows 
+    ? 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe'
+    : 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux';
 
 if (!fs.existsSync(binDir)) fs.mkdirSync(binDir, { recursive: true });
 
@@ -17,7 +20,7 @@ if (fs.existsSync(binPath)) {
     process.exit(0);
 }
 
-console.log('[setup-yt-dlp] Downloading yt-dlp Linux binary…');
+console.log(`[setup-yt-dlp] Downloading yt-dlp ${isWindows ? 'Windows' : 'Linux'} binary…`);
 
 function download(url, dest, redirects) {
     if (redirects > 5) { console.error('Too many redirects'); process.exit(1); }
