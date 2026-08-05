@@ -407,7 +407,7 @@ Based on the details, identify which collections match this product. Return ONLY
 // 5. Import Product to user's Shopify store
 router.post('/import', async (req, res) => {
     try {
-        const { storeId, product, skuPrefix, price, comparePrice, collectionIds, floatingVideos } = req.body;
+        const { storeId, product, skuPrefix, price, comparePrice, collectionIds, floatingVideos, imageAssignments } = req.body;
         if (!storeId || !product || !skuPrefix) {
             return res.status(400).json({ error: 'Missing required parameters for Shopify import.' });
         }
@@ -587,9 +587,64 @@ router.post('/import', async (req, res) => {
 
         console.log(`Product created successfully with ID: ${createdProductId}`);
 
-        // Keep imported media as normal product images. Variant-specific image
-        // linking is intentionally disabled so Gemini-selected best frames are
-        // not reduced to one image per variant.
+        // Associate variants with images based on assignments
+        if (imageAssignments && Object.keys(imageAssignments).length > 0) {
+            const createdImages = createdProduct.images || [];
+            const createdVariants = createdProduct.variants || [];
+            const variantImageUpdates = [];
+
+            for (const createdImg of createdImages) {
+                // Check if this created image matches any assigned original path/filename
+                const matchedKey = Object.keys(imageAssignments).find(key => {
+                    if (key.startsWith('/uploads/')) {
+                        const filename = path.basename(key);
+                        return createdImg.src.includes(filename);
+                    }
+                    // Clean both urls of queries to perform a safe string match
+                    const cleanKey = key.split('?')[0];
+                    const cleanSrc = createdImg.src.split('?')[0];
+                    return cleanSrc.includes(cleanKey) || cleanKey.includes(cleanSrc);
+                });
+
+                if (matchedKey) {
+                    const targetValue = imageAssignments[matchedKey];
+                    // Find matching variants that contain this option value
+                    const matchingVariants = createdVariants.filter(v => 
+                        v.option1 === targetValue || 
+                        v.option2 === targetValue || 
+                        v.option3 === targetValue
+                    );
+
+                    for (const mv of matchingVariants) {
+                        variantImageUpdates.push({
+                            variantId: mv.id,
+                            imageId: createdImg.id
+                        });
+                    }
+                }
+            }
+
+            if (variantImageUpdates.length > 0) {
+                console.log(`Linking ${variantImageUpdates.length} variant images in Shopify...`);
+                // Update variant image linking sequentially or in parallel
+                await Promise.allSettled(variantImageUpdates.map(async (update) => {
+                    const variantUrl = `https://${store.shopUrl}/admin/api/2024-04/variants/${update.variantId}.json`;
+                    await fetch(variantUrl, {
+                        method: 'PUT',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Shopify-Access-Token': store.accessToken
+                        },
+                        body: JSON.stringify({
+                            variant: {
+                                id: update.variantId,
+                                image_id: update.imageId
+                            }
+                        })
+                    });
+                }));
+            }
+        }
 
         // Link product to selected collections in parallel
         if (Array.isArray(collectionIds) && collectionIds.length > 0) {
@@ -725,9 +780,21 @@ router.post('/video-to-listing', videoUpload.array('files', 20), async (req, res
         const analysis = await geminiService.analyzeProductFromFrames(geminiApiKey, geminiModel, framesBase64);
 
         // Save only selected frames/images to uploads/ for serving
-        const selectedIndices = (analysis.selectedIndices && analysis.selectedIndices.length)
-            ? analysis.selectedIndices
-            : allFrames.map((_, i) => i).slice(0, 8);
+        let selectedIndices = (analysis.selectedIndices && analysis.selectedIndices.length)
+            ? [...analysis.selectedIndices]
+            : [];
+        
+        // Ensure at least 5-10 frames are extracted if available
+        if (selectedIndices.length < 5 && allFrames.length > 0) {
+            const limit = Math.min(10, allFrames.length);
+            for (let i = 0; i < allFrames.length; i++) {
+                if (!selectedIndices.includes(i)) {
+                    selectedIndices.push(i);
+                }
+                if (selectedIndices.length >= limit) break;
+            }
+        }
+        selectedIndices.sort((a, b) => a - b);
 
         const savedFrames = [];
         for (const idx of selectedIndices) {
@@ -839,9 +906,20 @@ router.post('/universal-import', videoUpload.array('files', 20), async (req, res
             const framesBase64 = allFrames.map(f => f.base64);
             const analysis = await geminiService.analyzeProductFromFrames(geminiApiKey, geminiModel, framesBase64);
 
-            const selectedIndices = (analysis.selectedIndices && analysis.selectedIndices.length)
-                ? analysis.selectedIndices
-                : allFrames.map((_, i) => i).slice(0, 8);
+            let selectedIndices = (analysis.selectedIndices && analysis.selectedIndices.length)
+                ? [...analysis.selectedIndices]
+                : [];
+            
+            if (selectedIndices.length < 5 && allFrames.length > 0) {
+                const limit = Math.min(10, allFrames.length);
+                for (let i = 0; i < allFrames.length; i++) {
+                    if (!selectedIndices.includes(i)) {
+                        selectedIndices.push(i);
+                    }
+                    if (selectedIndices.length >= limit) break;
+                }
+            }
+            selectedIndices.sort((a, b) => a - b);
 
             const savedFrames = [];
             const imagesList = [];
@@ -974,9 +1052,20 @@ router.post('/universal-import', videoUpload.array('files', 20), async (req, res
                 const framesBase64 = allFrames.map(f => f.base64);
                 const analysis = await geminiService.analyzeProductFromFrames(geminiApiKey, geminiModel, framesBase64);
 
-                const selectedIndices = (analysis.selectedIndices && analysis.selectedIndices.length)
-                    ? analysis.selectedIndices
-                    : allFrames.map((_, i) => i).slice(0, 8);
+                let selectedIndices = (analysis.selectedIndices && analysis.selectedIndices.length)
+                    ? [...analysis.selectedIndices]
+                    : [];
+                
+                if (selectedIndices.length < 5 && allFrames.length > 0) {
+                    const limit = Math.min(10, allFrames.length);
+                    for (let i = 0; i < allFrames.length; i++) {
+                        if (!selectedIndices.includes(i)) {
+                            selectedIndices.push(i);
+                        }
+                        if (selectedIndices.length >= limit) break;
+                    }
+                }
+                selectedIndices.sort((a, b) => a - b);
 
                 const savedFrames = [];
                 const imagesList = [];
@@ -1206,24 +1295,62 @@ async function scrapeProductPageViaBrowser(url) {
             const title = document.title || '';
             const bodyText = document.body.innerText || '';
             
-            // Extract image sources
-            const imgElements = document.querySelectorAll('img');
+            const isAmazon = window.location.hostname.includes('amazon.');
+            const isAlibaba = window.location.hostname.includes('alibaba.');
             const imageUrls = [];
-            imgElements.forEach(img => {
-                const src = img.src || img.getAttribute('data-old-hires') || img.getAttribute('data-a-dynamic-image');
-                if (src && src.startsWith('http') && !src.includes('sprite') && !src.includes('pixel')) {
-                    // Try to filter out tiny images
-                    const width = img.naturalWidth || 0;
-                    const height = img.naturalHeight || 0;
-                    if (width > 150 && height > 150) {
-                        imageUrls.push(src);
-                    } else if (src.includes('/images/I/') || src.includes('alicdn.com')) {
+            
+            if (isAmazon) {
+                // 1. Amazon main image
+                const landing = document.querySelector('#landingImage');
+                if (landing && landing.src) {
+                    imageUrls.push(landing.src);
+                }
+                
+                // 2. Amazon thumbnail images list
+                document.querySelectorAll('#altImages img, #imageBlock img').forEach(img => {
+                    const src = img.src || img.getAttribute('data-old-hires') || img.getAttribute('data-a-dynamic-image') || img.getAttribute('src');
+                    if (src && !src.includes('sprite') && !src.includes('play-button') && !src.includes('videoplayer')) {
+                        // Amazon thumbnail URL patterns look like: /images/I/xxxx._AC_US40_.jpg
+                        // We replace the suffix to get the large high-res version: /images/I/xxxx.jpg
+                        const hires = src.replace(/\._[A-Z0-9_-]+\./i, '.');
+                        imageUrls.push(hires);
+                    }
+                });
+                
+                // 3. Amazon APlus description images (high probability of product detail images)
+                document.querySelectorAll('#aplus img, .aplus-v2 img').forEach(img => {
+                    const src = img.src;
+                    if (src && !src.includes('pixel') && !src.includes('logo') && src.startsWith('http')) {
                         imageUrls.push(src);
                     }
-                }
-            });
+                });
+            } else if (isAlibaba) {
+                // Alibaba thumbnail list and description images
+                document.querySelectorAll('.thumb-list img, .detail-description img').forEach(img => {
+                    const src = img.src || img.getAttribute('data-src') || img.getAttribute('src');
+                    if (src && !src.includes('pixel') && !src.includes('logo') && src.startsWith('http')) {
+                        // Remove dimensions suffix like _50x50.jpg to get large version
+                        const hires = src.replace(/_\d+x\d+.*$/, '');
+                        imageUrls.push(hires);
+                    }
+                });
+            } else {
+                // Generic page fallback
+                const imgElements = document.querySelectorAll('img');
+                imgElements.forEach(img => {
+                    const src = img.src || img.getAttribute('data-old-hires') || img.getAttribute('data-a-dynamic-image');
+                    if (src && src.startsWith('http') && !src.includes('sprite') && !src.includes('pixel') && !src.includes('logo') && !src.includes('banner')) {
+                        const width = img.naturalWidth || 0;
+                        const height = img.naturalHeight || 0;
+                        if (width > 200 && height > 200) {
+                            imageUrls.push(src);
+                        }
+                    }
+                });
+            }
             
-            const uniqueImages = [...new Set(imageUrls)].slice(0, 15);
+            // Deduplicate and filter out invalid values
+            const uniqueImages = [...new Set(imageUrls.filter(Boolean))].slice(0, 15);
             
             return {
                 title,

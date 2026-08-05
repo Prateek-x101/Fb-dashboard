@@ -32,6 +32,13 @@
                 btnScrape.addEventListener('click', () => this.universalImport());
             }
 
+            const storeSelect = document.getElementById('shopify-target-store-select');
+            if (storeSelect) {
+                storeSelect.addEventListener('change', () => {
+                    localStorage.setItem('selectedShopifyStoreId', storeSelect.value);
+                });
+            }
+
             if (btnImport) {
                 btnImport.addEventListener('click', () => this.importProduct());
             }
@@ -166,6 +173,72 @@
             }
         },
 
+        renderImagesGrid: function() {
+            const imagesContainer = document.getElementById('shopify-import-images-grid');
+            if (!imagesContainer) return;
+            imagesContainer.innerHTML = '';
+            
+            const images = this.scrapedProduct ? (this.scrapedProduct.images || []) : [];
+            const options = this.scrapedProduct ? (this.scrapedProduct.options || []) : [];
+            
+            // Get values from the first variant option (typically Color or Style)
+            const primaryOptionValues = options.length > 0 ? (options[0].values || []) : [];
+            
+            if (images.length === 0) {
+                imagesContainer.innerHTML = '<span style="color:var(--text-secondary); font-size:0.85rem;">No images found for this product.</span>';
+                return;
+            }
+
+            images.forEach((imgUrl, idx) => {
+                const src = imgUrl.startsWith('//') ? 'https:' + imgUrl : imgUrl;
+                const filename = imgUrl.startsWith('/uploads/') ? imgUrl.replace(/^\/uploads\//, '') : imgUrl;
+                
+                // Retrieve assigned value (either pre-set by VTL or manually changed)
+                let assignedVal = this.vtlVariantAssignments[filename] || this.vtlVariantAssignments[imgUrl] || '';
+                
+                const card = document.createElement('div');
+                card.className = 'shopify-image-card';
+                card.style.cssText = 'display:flex; flex-direction:column; align-items:center; gap:6px; width:100px; flex-shrink:0;';
+                
+                let selectHtml = '';
+                if (primaryOptionValues.length > 0) {
+                    selectHtml = `
+                        <select class="form-control shopify-image-assignment-select" data-src="${imgUrl}" style="padding:2px 4px; font-size:0.72rem; width:90px; background:rgba(0,0,0,0.5); color:white; border-color:var(--glass-border); border-radius:4px; height:24px; cursor:pointer;">
+                            <option value="">No Variant</option>
+                            ${primaryOptionValues.map(val => `
+                                <option value="${this.escapeHtml(val)}" ${assignedVal === val ? 'selected' : ''}>
+                                    ${this.escapeHtml(val)}
+                                </option>
+                            `).join('')}
+                        </select>
+                    `;
+                }
+                
+                card.innerHTML = `
+                    <div style="width:90px; height:90px; border:1px solid var(--glass-border); border-radius:6px; overflow:hidden; background:rgba(0,0,0,0.2); position:relative;">
+                        <img src="${src}" style="width:100%; height:100%; object-fit:cover;">
+                        ${assignedVal ? `<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(124,58,237,0.85);color:white;font-size:0.6rem;text-align:center;padding:2px;font-weight:600;">${this.escapeHtml(assignedVal)}</div>` : ''}
+                    </div>
+                    ${selectHtml}
+                `;
+                
+                imagesContainer.appendChild(card);
+                
+                // Bind change event to select dropdown
+                const selectEl = card.querySelector('.shopify-image-assignment-select');
+                if (selectEl) {
+                    selectEl.addEventListener('change', (e) => {
+                        const selectedVal = e.target.value;
+                        // Save assignment under both keys
+                        this.vtlVariantAssignments[filename] = selectedVal;
+                        this.vtlVariantAssignments[imgUrl] = selectedVal;
+                        // Re-render grid to update overlays on images
+                        this.renderImagesGrid();
+                    });
+                }
+            });
+        },
+
         renderFloatingVideoPreview: function() {
             const previewContainer = document.getElementById('shopify-import-video-preview');
             if (!previewContainer) return;
@@ -201,6 +274,14 @@
                     opt.textContent = `${s.name} (${s.shopUrl})`;
                     select.appendChild(opt);
                 });
+
+                // Restore previously selected store from localStorage
+                const savedStoreId = localStorage.getItem('selectedShopifyStoreId');
+                if (savedStoreId && (stores || []).some(s => s.id === savedStoreId)) {
+                    select.value = savedStoreId;
+                } else if (stores && stores.length === 1) {
+                    select.value = stores[0].id;
+                }
             } catch (err) {
                 console.error("Failed to load stores inside select dropdown:", err.message);
             }
@@ -480,23 +561,8 @@
                     variantsContainer.style.display = 'none';
                 }
 
-                // Render Images Grid
-                const imagesContainer = document.getElementById('shopify-import-images-grid');
-                if (imagesContainer) {
-                    imagesContainer.innerHTML = '';
-                    const images = this.scrapedProduct.images || [];
-                    if (images.length === 0) {
-                        imagesContainer.innerHTML = '<span style="color:var(--text-secondary); font-size:0.85rem;">No images found for this product.</span>';
-                    } else {
-                        images.forEach(imgUrl => {
-                            const src = imgUrl.startsWith('//') ? 'https:' + imgUrl : imgUrl;
-                            const div = document.createElement('div');
-                            div.style.cssText = 'width:80px; height:80px; flex-shrink:0; border:1px solid var(--glass-border); border-radius:6px; overflow:hidden; background:rgba(0,0,0,0.2);';
-                            div.innerHTML = `<img src="${src}" style="width:100%; height:100%; object-fit:cover;">`;
-                            imagesContainer.appendChild(div);
-                        });
-                    }
-                }
+                // Render Images Grid with assignments
+                this.renderImagesGrid();
 
                 // Render floating video previews if available
                 this.floatingVideos = Array.isArray(data.floatingVideos) ? data.floatingVideos : [];
@@ -589,6 +655,19 @@
                 btnImport.textContent = '🚀 Auto-Importing Listings...';
                 window.AppController.showToast('Uploading images and generating variants on Shopify... 🛍️', 'info');
 
+                // Collect manual image assignments
+                const imageAssignments = {};
+                document.querySelectorAll('.shopify-image-assignment-select').forEach(sel => {
+                    const src = sel.getAttribute('data-src');
+                    const val = sel.value;
+                    if (val) {
+                        imageAssignments[src] = val;
+                        // Also associate with base filename for uploads match
+                        const filename = src.startsWith('/uploads/') ? src.replace(/^\/uploads\//, '') : src;
+                        imageAssignments[filename] = val;
+                    }
+                });
+
                 const result = await window.API.importShopifyProduct({
                     storeId,
                     product: productPayload,
@@ -596,7 +675,8 @@
                     price: price || null,
                     comparePrice: comparePrice || null,
                     collectionIds,
-                    floatingVideos: this.floatingVideos
+                    floatingVideos: this.floatingVideos,
+                    imageAssignments
                 });
 
                 window.AppController.showToast(`Successfully imported: "${result.title}" to Shopify! 🎉`, 'success');
@@ -1363,22 +1443,8 @@
                 }
             }
 
-            // Render images grid in scraper format
-            const imagesContainer = document.getElementById('shopify-import-images-grid');
-            if (imagesContainer) {
-                imagesContainer.innerHTML = '';
-                selectedFrames.forEach(frame => {
-                    const div = document.createElement('div');
-                    div.style.cssText = 'width:80px; height:80px; flex-shrink:0; border:1px solid var(--glass-border); border-radius:6px; overflow:hidden; background:rgba(0,0,0,0.2); position:relative;';
-                    // Show color label if assigned
-                    const colorVal = this.vtlVariantAssignments[frame.filename];
-                    div.innerHTML = `
-                        <img src="${frame.url}" style="width:100%; height:100%; object-fit:cover;">
-                        ${colorVal ? `<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(124,58,237,0.85);color:white;font-size:0.6rem;text-align:center;padding:2px;">${this.escapeHtml(colorVal)}</div>` : ''}
-                    `;
-                    imagesContainer.appendChild(div);
-                });
-            }
+            // Render images grid with assignments
+            this.renderImagesGrid();
 
             // Show the shared preview container (same as scraper result)
             const previewTitle = document.getElementById('shopify-preview-title');
