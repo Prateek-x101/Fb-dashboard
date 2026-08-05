@@ -569,7 +569,10 @@ router.post('/create', async (req, res) => {
             const targeting = {
                 age_min: audience.ageMin || 18,
                 age_max: audience.ageMax || 65,
-                geo_locations: Object.keys(geoLocations).length > 0 ? geoLocations : { countries: ['IN'] }
+                geo_locations: Object.keys(geoLocations).length > 0 ? geoLocations : { countries: ['IN'] },
+                targeting_automation: {
+                    advantage_audience: enhancements.advantageAudience ? 1 : 0
+                }
             };
             if (genders.length) targeting.genders = genders;
             if (Object.keys(excludedGeo).length > 0) targeting.excluded_geo_locations = excludedGeo;
