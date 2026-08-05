@@ -142,6 +142,33 @@ app.get('/api/media/debug-ytdlp', async (req, res) => {
     }
 });
 
+// Diagnostic route to check what Facebook returns to Render for public Ad Library links
+app.get('/api/media/debug-fb', async (req, res) => {
+    try {
+        const adId = req.query.id || '1574129074339531';
+        const url = `https://www.facebook.com/ads/library/?id=${adId}`;
+        const fetch = require('node-fetch');
+        const response = await fetch(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9'
+            }
+        });
+        const html = await response.text();
+        res.json({
+            status: response.status,
+            statusText: response.statusText,
+            url: response.url,
+            headers: Object.fromEntries(response.headers.entries()),
+            htmlLength: html.length,
+            htmlSnippet: html.slice(0, 1500)
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // Health check
 app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
