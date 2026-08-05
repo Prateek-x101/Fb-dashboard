@@ -799,7 +799,10 @@ router.post('/universal-import', videoUpload.array('files', 20), async (req, res
         // Get Shopify Store credentials
         const store = (storage.shopifyStores || []).find(s => s.id === storeId);
         if (!store) {
-            return res.status(400).json({ error: 'Selected Shopify store config not found.' });
+            return res.status(400).json({ 
+                error: 'Selected Shopify store config not found.',
+                details: `Received storeId: "${storeId}". Available stores: ${JSON.stringify((storage.shopifyStores || []).map(s => ({ id: s.id, name: s.name || s.shopName || s.shopUrl })))}`
+            });
         }
 
         // Fetch user store's collections
