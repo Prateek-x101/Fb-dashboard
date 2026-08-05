@@ -36,11 +36,11 @@ async function downloadUrlToTempFile(url) {
 }
 
 function appendUtmParams(url) {
-    if (!url) return url;
-    const utmStr = 'utm_medium={{ad.name}}&utm_campaign={{campaign.name}}&utm_content={{adset.name}}';
-    if (url.includes('utm_medium=')) return url;
-    const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}${utmStr}`;
+    // Return the URL as-is. Dynamic UTM tracking is handled by the
+    // url_tags field on the creative, which Meta appends at serve time.
+    // Adding them here too causes the params to appear twice in the
+    // final click URL.
+    return url || url;
 }
 
 function parseIsoDate(dateString) {
@@ -422,6 +422,7 @@ router.post('/create', async (req, res) => {
                     ...ad, 
                     imageHash: savedMedia.imageHash || null, 
                     videoId: savedMedia.videoId || null,
+                    videoThumbnailUrl: savedMedia.videoThumbnailUrl || null,
                     thumbnailHash: savedMedia.thumbnailHash || null
                 });
                 continue;
@@ -432,47 +433,36 @@ router.post('/create', async (req, res) => {
             progress.requestParams = { name: ad.name, media: ad.media };
             let imageHash = null;
             let videoId = null;
+            let videoThumbnailUrl = null;
             let thumbnailHash = null;
 
-            const mediaPath = resolveUploadPath(ad.media);
-            if (!mediaPath) {
-                throw new Error(`Media file for "${ad.name}" was not found on the server. Please re-upload the creative and try again.`);
-            }
-
-            const ext = path.extname(mediaPath).toLowerCase();
+            const ext = path.extname(ad.media).toLowerCase();
             if (['.mp4', '.mov', '.avi', '.webm'].includes(ext)) {
-                const videoRes = await facebookService.uploadVideo(accountId, token, mediaPath);
+                const videoRes = await facebookService.uploadVideo(accountId, token, ad.media);
                 videoId = videoRes.id || null;
                 if (!videoId) throw new Error(`Facebook did not return a video ID for ${ad.name}.`);
-
-                const thumbnailPath = resolveUploadPath(ad.thumbnail);
-                if (thumbnailPath) {
+                videoThumbnailUrl = '';
+                
+                // If a thumbnail file is provided, upload it to Meta
+                if (ad.thumbnail) {
                     try {
-                        const thumbRes = await facebookService.uploadImage(accountId, token, thumbnailPath);
+                        const thumbRes = await facebookService.uploadImage(accountId, token, ad.thumbnail);
                         const firstKey = Object.keys(thumbRes.images || {})[0];
                         thumbnailHash = firstKey ? thumbRes.images[firstKey].hash : null;
                     } catch (thumbErr) {
                         console.error('Failed to upload custom video thumbnail to FB:', thumbErr.message);
                     }
                 }
-
-                if (!thumbnailHash && videoId) {
-                    try {
-                        thumbnailHash = await resolveVideoThumbnailHash(accountId, token, videoId);
-                    } catch (thumbErr) {
-                        console.error(`Failed to resolve auto thumbnail for ${ad.name}:`, thumbErr.message);
-                    }
-                }
             } else {
-                const imageRes = await facebookService.uploadImage(accountId, token, mediaPath);
+                const imageRes = await facebookService.uploadImage(accountId, token, ad.media);
                 const firstKey = Object.keys(imageRes.images || {})[0];
                 imageHash = firstKey ? imageRes.images[firstKey].hash : null;
                 if (!imageHash) throw new Error(`Facebook did not return an image hash for ${ad.name}.`);
             }
             checkpoint.uploadedMedia = checkpoint.uploadedMedia.filter(item => item.index !== adIndex);
-            checkpoint.uploadedMedia.push({ index: adIndex, name: ad.name, media: ad.media, imageHash, videoId, thumbnail: ad.thumbnail || null, thumbnailHash });
+            checkpoint.uploadedMedia.push({ index: adIndex, name: ad.name, media: ad.media, imageHash, videoId, videoThumbnailUrl, thumbnail: ad.thumbnail || null, thumbnailHash });
             saveRetryCheckpoint(draftId, req.body.campaign, checkpoint, progress);
-            uploadedMedia.push({ ...ad, imageHash, videoId, thumbnailHash });
+            uploadedMedia.push({ ...ad, imageHash, videoId, videoThumbnailUrl, thumbnailHash });
         }
 
         const isCBO = campaign.budgetType === 'CBO';
@@ -594,13 +584,14 @@ router.post('/create', async (req, res) => {
 
                     // Map each item to the correct Facebook flexible_spec field name
                     const typeToField = {
-                        interest:    'interests',
-                        behavior:    'behaviors',
-                        demographic: 'demographics',
-                        life_event:  'life_events',
-                        job_title:   'work_positions',
-                        employer:    'work_employers',
-                        education_major: 'education_majors'
+                        interest:       'interests',
+                        behavior:       'behaviors',
+                        demographic:    'demographics',
+                        life_event:     'life_events',
+                        job_title:      'work_positions',
+                        employer:       'work_employers',
+                        field_of_study: 'education_majors',
+                        school:         'education_schools'
                     };
                     const flexSpec = {};
                     resolvedTargeting.forEach(item => {
@@ -780,23 +771,28 @@ router.post('/create', async (req, res) => {
                         link_data: {
                             message: textVariation,
                             link: destinationUrl,
-                            name: step3.headline || '',
-                            description: step3.description || '',
+                            // Omit optional string fields when blank — Meta rejects empty strings
+                            ...(step3.headline  && { name: step3.headline }),
+                            ...(step3.description && { description: step3.description }),
                             call_to_action: { type: step3.cta || 'SHOP_NOW', value: { link: destinationUrl } }
                         }
                     }
                 };
                 if (ad.imageHash) creativeParams.object_story_spec.link_data.image_hash = ad.imageHash;
                 if (ad.videoId) {
+                    let thumbnailUrl = null;
                     creativeParams.object_story_spec.video_data = {
                         video_id: ad.videoId,
                         message: textVariation,
-                        title: step3.headline || '',
-                        link_description: step3.description || '',
+                        // Omit optional string fields when blank — Meta rejects empty strings
+                        ...(step3.headline    && { title: step3.headline }),
+                        ...(step3.description && { link_description: step3.description }),
                         call_to_action: { type: step3.cta || 'SHOP_NOW', value: { link: destinationUrl } }
                     };
                     if (ad.thumbnailHash) {
                         creativeParams.object_story_spec.video_data.image_hash = ad.thumbnailHash;
+                    } else if (thumbnailUrl) {
+                        creativeParams.object_story_spec.video_data.image_url = thumbnailUrl;
                     }
                     delete creativeParams.object_story_spec.link_data;
                 }
@@ -814,24 +810,17 @@ router.post('/create', async (req, res) => {
                 }
 
                 if (!adId) {
+                    // tracking_specs are intentionally omitted at the ad level.
+                    // Per Meta API docs, pixel tracking is handled via promoted_object
+                    // on the adset. Adding tracking_specs here causes error 1815645
+                    // (OAuthException / invalid parameter) when the pixel is not
+                    // explicitly shared with the ad account token.
                     const adParams = {
                         name: ad.name,
                         adset_id: adsetId,
                         creative: { creative_id: creativeId },
-                        status: 'ACTIVE',
-                        tracking_specs: [
-                            {
-                                "action.type": ["offsite_conversion"],
-                                "fb_pixel": [step2.pixel]
-                            }
-                        ]
+                        status: 'ACTIVE'
                     };
-                    if (offlineDatasetId) {
-                        adParams.tracking_specs.push({
-                            "action.type": ["onsite_conversion"],
-                            "conversion_id": [offlineDatasetId]
-                        });
-                    }
                     progress.failedStep = 'ad';
                     progress.failedIndex = { audienceIndex, adIndex };
                     progress.requestParams = adParams;
@@ -916,27 +905,6 @@ router.post('/create', async (req, res) => {
     }
 });
 
-function resolveUploadPath(fileRef) {
-    if (!fileRef) return null;
-    const value = String(fileRef).trim();
-    if (!value) return null;
-    if (fs.existsSync(value)) return value;
-
-    const uploadsDir = path.join(__dirname, '..', 'uploads');
-    const basename = path.basename(value.replace(/^\/uploads\//, ''));
-    const uploadsPath = path.join(uploadsDir, basename);
-    if (fs.existsSync(uploadsPath)) return uploadsPath;
-    return null;
-}
-
-async function resolveVideoThumbnailHash(accountId, token, videoId) {
-    const thumbnailUrl = await facebookService.getVideoThumbnailWithRetry(videoId, token);
-    if (!thumbnailUrl) return null;
-    // Meta recommends uploading thumbnails to the ad account instead of
-    // passing FB CDN URLs directly in image_url.
-    return facebookService.uploadImageFromUrl(accountId, token, thumbnailUrl);
-}
-
 function normalizeCreativeAds(step3 = {}) {
     if (Array.isArray(step3.ads) && step3.ads.length > 0) {
         const total = step3.ads.length;
@@ -1001,52 +969,82 @@ async function fetchWebsiteDetails(websiteUrl) {
     }
 
     const firstMatch = (regex) => {
-        const match = html.match(regex);
-        return match ? match[1].replace(/\s+/g, ' ').trim() : '';
+        const m = html.match(regex);
+        return m ? m[1].replace(/\s+/g, ' ').trim() : '';
     };
+
     const productName =
         firstMatch(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i) ||
         firstMatch(/<meta[^>]+name=["']twitter:title["'][^>]+content=["']([^"']+)["']/i) ||
         firstMatch(/<h1[^>]*>([\s\S]*?)<\/h1>/i).replace(/<[^>]+>/g, '') ||
         firstMatch(/<title[^>]*>([\s\S]*?)<\/title>/i).replace(/<[^>]+>/g, '') ||
         'Product';
+
     const metaDescription =
         firstMatch(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i) ||
         firstMatch(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i);
+
+    // Brand / store name
+    const brand =
+        firstMatch(/<meta[^>]+property=["']og:site_name["'][^>]+content=["']([^"']+)["']/i) ||
+        firstMatch(/<meta[^>]+name=["']twitter:site["'][^>]+content=["']([^"']+)["']/i) || '';
+
+    // Price
+    const priceAmount =
+        firstMatch(/<meta[^>]+property=["']product:price:amount["'][^>]+content=["']([^"']+)["']/i) ||
+        firstMatch(/["']price["']\s*:\s*["']([0-9.,]+)["']/i) || '';
+    const priceCurrency =
+        firstMatch(/<meta[^>]+property=["']product:price:currency["'][^>]+content=["']([^"']+)["']/i) || '';
+
+    // JSON-LD Product nodes
     const structuredProducts = [];
-    for (const match of html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    for (const m of html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
         try {
-            const parsed = JSON.parse(match[1].trim());
+            const parsed = JSON.parse(m[1].trim());
             const nodes = Array.isArray(parsed) ? parsed : [parsed];
             nodes.forEach(node => {
-                const type = node && node['@type'];
-                if (node && (type === 'Product' || (Array.isArray(type) && type.includes('Product')))) {
+                const t = node && node['@type'];
+                if (node && (t === 'Product' || (Array.isArray(t) && t.includes('Product')))) {
                     structuredProducts.push(node);
                 }
             });
-        } catch {
-            // Keep using visible page text when one JSON-LD block is invalid.
-        }
+        } catch { /* ignore malformed blocks */ }
     }
-    const content = html
+
+    // Pull bullet/feature list items from the page (product details, specs, benefits)
+    const listItems = [];
+    for (const m of html.matchAll(/<li[^>]*>([\s\S]*?)<\/li>/gi)) {
+        const text = m[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        if (text.length > 8 && text.length < 220) listItems.push(text);
+    }
+    const featuresBlock = listItems.length
+        ? `\nProduct features / bullet points:\n${listItems.slice(0, 25).map(l => `• ${l}`).join('\n')}`
+        : '';
+
+    // Clean page text — keep meaningful content, trim to 8 000 chars
+    const pageText = html
         .replace(/<script[\s\S]*?<\/script>/gi, '')
         .replace(/<style[\s\S]*?<\/style>/gi, '')
         .replace(/<[^>]+>/g, ' ')
         .replace(/\s+/g, ' ')
         .trim()
-        .slice(0, 12000);
+        .slice(0, 8000);
+
     const structuredDetails = structuredProducts.length
-        ? `\n\nStructured product data (JSON-LD):\n${JSON.stringify(structuredProducts.slice(0, 3), null, 2).slice(0, 12000)}`
+        ? `\nStructured product data (JSON-LD):\n${JSON.stringify(structuredProducts.slice(0, 3), null, 2).slice(0, 6000)}`
         : '';
 
     return {
         productName,
         content: [
             `URL: ${websiteUrl}`,
+            brand            ? `Brand/Store: ${brand}` : '',
             `Product name: ${productName}`,
-            metaDescription ? `Meta description: ${metaDescription}` : '',
+            metaDescription  ? `Description: ${metaDescription}` : '',
+            priceAmount      ? `Price: ${priceCurrency} ${priceAmount}`.trim() : '',
+            featuresBlock,
             structuredDetails,
-            `\nFull product page content:\n${content}`
+            `\nFull page content:\n${pageText}`
         ].filter(Boolean).join('\n')
     };
 }

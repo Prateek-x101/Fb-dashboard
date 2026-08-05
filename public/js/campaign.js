@@ -19,11 +19,14 @@
 
         // Colour/label metadata for each targeting type
         TYPE_META: {
-            interest:    { label: 'Interest',    color: '#4361ee' },
-            behavior:    { label: 'Behavior',    color: '#f77f00' },
-            demographic: { label: 'Demographic', color: '#2d9e5f' },
-            life_event:  { label: 'Life Event',  color: '#9b5de5' },
-            job_title:   { label: 'Job Title',   color: '#e63946' }
+            interest:       { label: 'Interest',        color: '#4361ee' },
+            behavior:       { label: 'Behavior',        color: '#f77f00' },
+            demographic:    { label: 'Demographic',     color: '#2d9e5f' },
+            life_event:     { label: 'Life Event',      color: '#9b5de5' },
+            job_title:      { label: 'Job Title',       color: '#e63946' },
+            employer:       { label: 'Employer',        color: '#0096c7' },
+            field_of_study: { label: 'Field of Study',  color: '#e9c46a' },
+            school:         { label: 'School',          color: '#e76f51' }
         },
 
         init: function() {
@@ -351,6 +354,38 @@
                 btnCampaignMediaDownload.addEventListener('click', () => this.handleVideoUrlDownload());
             }
 
+            // Campaign name → auto-switch ABO/CBO with animation
+            const campaignNameInput = document.getElementById('campaign-name');
+            if (campaignNameInput) {
+                campaignNameInput.addEventListener('input', () => {
+                    const val = campaignNameInput.value.toUpperCase();
+                    const hasABO = val.includes('ABO');
+                    const hasCBO = val.includes('CBO');
+                    if (!hasABO && !hasCBO) return;
+
+                    const aboRadio = document.getElementById('budget-type-abo');
+                    const cboRadio = document.getElementById('budget-type-cbo');
+                    const aboCard = aboRadio?.closest('.radio-card');
+                    const cboCard = cboRadio?.closest('.radio-card');
+
+                    const targetRadio  = hasABO ? aboRadio  : cboRadio;
+                    const targetCard   = hasABO ? aboCard   : cboCard;
+                    const otherCard    = hasABO ? cboCard   : aboCard;
+
+                    if (!targetRadio || targetRadio.checked) return;
+                    targetRadio.checked = true;
+                    targetRadio.dispatchEvent(new Event('change', { bubbles: true }));
+
+                    // Flash animation on the newly selected card
+                    [aboCard, cboCard].forEach(c => c && c.classList.remove('budget-type-flash'));
+                    if (targetCard) {
+                        void targetCard.offsetWidth; // force reflow
+                        targetCard.classList.add('budget-type-flash');
+                        targetCard.addEventListener('animationend', () => targetCard.classList.remove('budget-type-flash'), { once: true });
+                    }
+                });
+            }
+
             const btnAutoFill = document.getElementById('btn-auto-fill-copy');
             if (btnAutoFill) btnAutoFill.addEventListener('click', () => this.autoFillCreativeCopy());
             const btnAddAd = document.getElementById('btn-add-creative-ad');
@@ -418,13 +453,27 @@
                 if (!start) { window.AppController.showToast('Please set a start date', 'warning'); return false; }
                 if (!account) { window.AppController.showToast('Please select an ad account', 'warning'); return false; }
 
+                // Convert "YYYY-MM-DD HH:mm" local time to UTC ISO string so the
+                // backend receives an unambiguous timestamp regardless of server timezone.
+                function localDateStrToUtcIso(str) {
+                    if (!str) return '';
+                    // Already a full ISO string with timezone — pass through
+                    if (/[Zz]|[+-]\d{2}:?\d{2}$/.test(str)) return str;
+                    // "YYYY-MM-DD HH:mm" or "YYYY-MM-DDTHH:mm"
+                    const m = str.match(/^(\d{4})-(\d{2})-(\d{2})[\sT](\d{2}):(\d{2})(?::(\d{2}))?/);
+                    if (!m) return str;
+                    const [, yr, mo, dy, hr, mn, sc] = m;
+                    const d = new Date(+yr, +mo - 1, +dy, +hr, +mn, +(sc || 0));
+                    return isNaN(d.getTime()) ? str : d.toISOString();
+                }
+                const endRaw = document.getElementById('schedule-end')?.value || '';
                 this.campaignData.step1 = {
                     name,
                     objective: document.getElementById('campaign-objective')?.value,
                     budgetType: document.getElementById('budget-type-cbo')?.checked ? 'CBO' : 'ABO',
                     budgetAmount: parseFloat(budgetAmount),
-                    scheduleStart: start,
-                    scheduleEnd: document.getElementById('schedule-end')?.value || '',
+                    scheduleStart: localDateStrToUtcIso(start),
+                    scheduleEnd: localDateStrToUtcIso(endRaw),
                     accountId: account,
                     specialAdCategory: document.getElementById('camp-special')?.value || 'NONE'
                 };
@@ -468,19 +517,19 @@
                 const lookalikeExclude = [];
                 document.querySelectorAll('#lookalike-exclude-tags .audience-tag').forEach(t => lookalikeExclude.push(t.getAttribute('data-value')));
 
-                // Per-card interests only
+                // Per-card targeting (all types: interests, behaviors, demographics, job titles, etc.)
                 const audienceCards = document.querySelectorAll('.audience-card');
                 const audiences = [];
                 audienceCards.forEach((card, idx) => {
-                    const interests = [];
+                    const targeting = [];
                     card.querySelectorAll('.interest-tag').forEach(tag => {
-                        interests.push({
-                            id: tag.getAttribute('data-id') || '',
+                        targeting.push({
+                            id:   tag.getAttribute('data-id') || '',
                             name: tag.getAttribute('data-value') || tag.textContent.replace('✖','').trim(),
                             type: tag.getAttribute('data-type') || 'interest'
                         });
                     });
-                    const adsetName = interests.slice(0, 3).map(i => i.name).join(', ') || `Audience ${idx + 1}`;
+                    const adsetName = targeting.slice(0, 3).map(i => i.name).join(', ') || `Audience ${idx + 1}`;
                     audiences.push({
                         name: adsetName,
                         locationsInclude: globalLocInclude.length > 0 ? globalLocInclude : [{ key: 'IN', type: 'country', name: 'India' }],
@@ -492,8 +541,7 @@
                         customAudiencesExclude: customExclude,
                         lookalikeInclude,
                         lookalikeExclude,
-                        interests,
-                        targeting: interests
+                        targeting
                     });
                 });
 
@@ -720,12 +768,35 @@
                             igSelect.appendChild(o);
                         }
                     });
+                    // Auto-select page and matching Instagram
                     if (pageSelect) {
                         const matchingPage = pages.find(page =>
                             page.id === account.pageId &&
                             ((!page.accountIds && page.accountId === account.id) || page.accountIds?.includes(account.id))
                         );
-                        pageSelect.value = matchingPage ? account.pageId : '';
+                        const selectedPageId = matchingPage ? account.pageId : (pages.length === 1 ? pages[0].id : '');
+                        pageSelect.value = selectedPageId;
+
+                        // Auto-select Instagram linked to the selected page
+                        if (selectedPageId && igSelect) {
+                            const selectedPage = pages.find(p => p.id === selectedPageId);
+                            if (selectedPage?.instagram_business_account) {
+                                igSelect.value = selectedPage.instagram_business_account.id;
+                            }
+                        }
+                    }
+
+                    // When user manually picks a page, auto-select its Instagram
+                    if (pageSelect && igSelect) {
+                        pageSelect.addEventListener('change', () => {
+                            const pid = pageSelect.value;
+                            const pg = pages.find(p => p.id === pid);
+                            if (pg?.instagram_business_account) {
+                                igSelect.value = pg.instagram_business_account.id;
+                            } else {
+                                igSelect.value = '';
+                            }
+                        });
                     }
                 } catch {
                     if (pageSelect) pageSelect.innerHTML = '<option value="">Could not load pages</option>';
@@ -733,12 +804,26 @@
             }
         },
 
-        // ── Audience cards (interests only) ──────────────────────────────
+        // ── Audience cards ────────────────────────────────────────────────
         updateAudienceCards: function() {
             const container = document.getElementById('audience-container');
             const num = parseInt(document.getElementById('num-adsets')?.value || 5, 10);
             if (!container) return;
+            // Clean up body-appended dropdowns from any previous render
+            document.querySelectorAll('.interest-dropdown-body').forEach(d => d.remove());
             container.innerHTML = '';
+
+            // Colour legend
+            const legendEl = document.createElement('div');
+            legendEl.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px 14px;margin-bottom:14px;padding:10px 14px;background:rgba(255,255,255,0.04);border-radius:8px;border:1px solid rgba(255,255,255,0.07);';
+            legendEl.innerHTML = Object.entries(this.TYPE_META).map(([, m]) =>
+                `<span style="display:inline-flex;align-items:center;gap:5px;font-size:0.72rem;">
+                    <span style="width:9px;height:9px;border-radius:50%;background:${m.color};flex-shrink:0;display:inline-block;"></span>
+                    <span style="color:${m.color};font-weight:600;">${m.label}</span>
+                </span>`
+            ).join('');
+            container.appendChild(legendEl);
+
             for (let i = 0; i < num; i++) this._createAudienceCard(container, i, num);
         },
 
@@ -751,34 +836,54 @@
                 <div class="flex justify-between align-center mb-2">
                     <h4>🎯 Audience ${i + 1}</h4>
                     <div class="flex gap-2 align-center">
-                        <button class="btn btn-gemini btn-sm btn-ai-audience" data-index="${i}" title="Gemini reads your website and picks unique interests">🤖 AI</button>
+                        <button class="btn btn-gemini btn-sm btn-ai-audience" data-index="${i}" title="Gemini reads your website and picks unique targeting">🤖 AI</button>
                         ${total > 1 ? `<button class="remove-card-btn" onclick="this.closest('.audience-card').remove()"><span>✖</span></button>` : ''}
                     </div>
                 </div>
-                <div class="form-group" style="margin-bottom:0; position:relative;">
+                <div class="form-group" style="margin-bottom:0;">
                     <label style="font-size:0.8rem; color:var(--text-secondary);">
-                        Interests / Keywords
+                        Targeting Keywords
                         <span style="font-size:0.72rem; color:var(--accent-cyan); margin-left:0.4rem;">first 3 keywords → ad set name on Facebook</span>
                     </label>
-                    <div class="form-control tags-input interests-tags-${i}" style="min-height:50px; position:relative; flex-wrap:wrap;">
-                        <input type="text" placeholder="Search interests or type and press Enter…" class="interest-search" data-index="${i}" style="background:transparent; border:none; color:white; outline:none; flex:1; min-width:150px;">
+                    <div class="form-control tags-input interests-tags-${i}" style="min-height:50px; flex-wrap:wrap;">
+                        <input type="text" placeholder="Search or type keyword and press Enter…" class="interest-search" data-index="${i}" style="background:transparent; border:none; color:white; outline:none; flex:1; min-width:150px;">
                     </div>
-                    <div class="interest-dropdown" id="interest-dropdown-${i}" style="display:none; position:absolute; z-index:50; background:rgba(26,26,46,0.98); border:1px solid var(--glass-border); border-radius:8px; max-height:200px; overflow-y:auto; width:100%;"></div>
                 </div>
             `;
             container.appendChild(card);
 
+            // Dropdown appended to <body> — backdrop-filter on .glass-card creates a new stacking
+            // context so any child position:absolute is clipped inside it regardless of z-index.
+            // position:fixed on a body child avoids that entirely.
+            const dropdown = document.createElement('div');
+            dropdown.className = 'interest-dropdown-body';
+            dropdown.style.cssText = [
+                'display:none','position:fixed','z-index:99999',
+                'background:rgba(22,22,42,0.98)','border:1px solid var(--glass-border)',
+                'border-radius:8px','max-height:220px','overflow-y:auto',
+                'box-shadow:0 8px 32px rgba(0,0,0,0.55)','min-width:200px'
+            ].join(';');
+            document.body.appendChild(dropdown);
+
+            const tagsContainer = card.querySelector(`.interests-tags-${i}`);
+            const searchInput   = card.querySelector('.interest-search');
+
+            const positionDropdown = () => {
+                const rect = tagsContainer.getBoundingClientRect();
+                dropdown.style.top   = `${rect.bottom + 4}px`;
+                dropdown.style.left  = `${rect.left}px`;
+                dropdown.style.width = `${rect.width}px`;
+            };
+            const closeDropdown = () => { dropdown.style.display = 'none'; };
+
             card.querySelector('.btn-ai-audience').addEventListener('click', () => this.aiGenerateAudience(i));
 
-            const searchInput = card.querySelector('.interest-search');
             let debounceTimeout;
-            searchInput.addEventListener('input', (e) => {
+            searchInput.addEventListener('input', () => {
                 clearTimeout(debounceTimeout);
-                const idx = parseInt(e.target.getAttribute('data-index'));
                 debounceTimeout = setTimeout(async () => {
-                    const val = e.target.value.trim();
-                    const dropdown = document.getElementById(`interest-dropdown-${idx}`);
-                    if (val.length > 2 && dropdown) {
+                    const val = searchInput.value.trim();
+                    if (val.length > 2) {
                         try {
                             const results = await window.API.searchInterests(val);
                             dropdown.innerHTML = '';
@@ -787,27 +892,63 @@
                                     const type = r.type || 'interest';
                                     const meta = this.TYPE_META[type] || this.TYPE_META.interest;
                                     const item = document.createElement('div');
-                                    item.style.cssText = 'padding:0.55rem 1rem; cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.05); display:flex; align-items:center; gap:0.5rem;';
-                                    item.innerHTML = `<span style="font-size:0.6rem;padding:1px 6px;border-radius:4px;background:${meta.color}25;color:${meta.color};white-space:nowrap;flex-shrink:0;">${meta.label}</span><span style="font-size:0.85rem;">${r.name || r}</span>`;
-                                    item.addEventListener('mouseenter', () => item.style.background = 'rgba(67,97,238,0.2)');
+                                    item.style.cssText = 'padding:0.5rem 1rem;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.05);display:flex;align-items:center;gap:0.5rem;';
+                                    item.innerHTML = `<span style="font-size:0.6rem;padding:2px 7px;border-radius:4px;background:${meta.color}30;color:${meta.color};white-space:nowrap;flex-shrink:0;font-weight:700;">${meta.label}</span><span style="font-size:0.85rem;">${r.name || r}</span>`;
+                                    item.addEventListener('mouseenter', () => item.style.background = 'rgba(67,97,238,0.18)');
                                     item.addEventListener('mouseleave', () => item.style.background = 'transparent');
-                                    item.addEventListener('click', () => {
-                                        this._addInterestTag(card, idx, r.id || '', r.name || r, type);
-                                        dropdown.style.display = 'none';
-                                        e.target.value = '';
+                                    item._result = { id: r.id || '', name: r.name || r, type };
+                                    item.addEventListener('mousedown', (ev) => {
+                                        ev.preventDefault();
+                                        this._addInterestTag(card, i, r.id || '', r.name || r, type);
+                                        closeDropdown();
+                                        searchInput.value = '';
                                     });
                                     dropdown.appendChild(item);
                                 });
+                                positionDropdown();
                                 dropdown.style.display = 'block';
-                            } else { dropdown.style.display = 'none'; }
-                        } catch { dropdown.style.display = 'none'; }
-                    } else if (dropdown) { dropdown.style.display = 'none'; }
-                }, 500);
+                            } else { closeDropdown(); }
+                        } catch { closeDropdown(); }
+                    } else { closeDropdown(); }
+                }, 400);
             });
-            document.addEventListener('click', (e) => {
-                if (!e.target.classList.contains('interest-search')) {
-                    document.querySelectorAll('.interest-dropdown').forEach(d => d.style.display = 'none');
+
+            // Enter key: use stored result data from first item, or add raw typed text as interest
+            searchInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    clearTimeout(debounceTimeout);
+                    const firstItem = dropdown.style.display !== 'none'
+                        ? dropdown.querySelector('div') : null;
+                    if (firstItem && firstItem._result) {
+                        const { id, name, type } = firstItem._result;
+                        this._addInterestTag(card, i, id, name, type);
+                        closeDropdown();
+                        searchInput.value = '';
+                    } else {
+                        const val = searchInput.value.trim();
+                        if (val) {
+                            this._addInterestTag(card, i, '', val, 'interest');
+                            searchInput.value = '';
+                            closeDropdown();
+                        }
+                    }
+                } else if (e.key === 'Escape') {
+                    closeDropdown();
                 }
+            });
+
+            // Reposition on any scroll (capture catches SPA container scrolls) or resize
+            const reposition = () => { if (dropdown.style.display !== 'none') positionDropdown(); };
+            document.addEventListener('scroll', reposition, { capture: true, passive: true });
+            window.addEventListener('resize', reposition, { passive: true });
+
+            document.addEventListener('mousedown', (e) => {
+                if (!searchInput.contains(e.target) && !dropdown.contains(e.target)) closeDropdown();
+            });
+
+            searchInput.addEventListener('focus', () => {
+                if (dropdown.children.length > 0) { positionDropdown(); dropdown.style.display = 'block'; }
             });
         },
 
@@ -821,7 +962,8 @@
             tag.setAttribute('data-id', id);
             tag.setAttribute('data-value', name);
             tag.setAttribute('data-type', type);
-            tag.innerHTML = `<span style="font-size:0.58rem;padding:1px 5px;border-radius:3px;background:${meta.color}25;color:${meta.color};margin-right:3px;">${meta.label}</span>${name} <span class="tag-remove" onclick="this.parentElement.remove()">✖</span>`;
+            tag.style.cssText = `border-left:3px solid ${meta.color};background:${meta.color}18;border-radius:6px;padding:3px 8px 3px 6px;color:#fff;display:inline-flex;align-items:center;gap:4px;`;
+            tag.innerHTML = `<span style="font-size:0.58rem;font-weight:700;color:${meta.color};text-transform:uppercase;letter-spacing:0.04em;white-space:nowrap;">${meta.label}</span><span>${name}</span><span class="tag-remove" onclick="this.parentElement.remove()" style="color:rgba(255,255,255,0.35);font-size:0.7rem;cursor:pointer;margin-left:2px;">✖</span>`;
             tc.insertBefore(tag, input);
         },
 
@@ -960,6 +1102,7 @@
                 const results = await Promise.allSettled(promises);
                 let successCount = 0;
 
+                const failReasons = [];
                 results.forEach((res) => {
                     if (res.status === 'fulfilled' && res.value) {
                         const val = res.value;
@@ -983,7 +1126,9 @@
                             this.addCreativeAd(item, false);
                         }
                     } else {
-                        console.error('Video download failed:', res.reason);
+                        const reason = res.reason?.message || res.reason || 'Unknown error';
+                        console.error('Video download failed:', reason);
+                        failReasons.push(reason);
                     }
                 });
                 
@@ -997,7 +1142,12 @@
                     </div>
                 `;
 
-                window.AppController.showToast(`Successfully processed ${successCount} of ${urls.length} video(s)! 📹`, 'success');
+                if (successCount > 0) {
+                    window.AppController.showToast(`Successfully processed ${successCount} of ${urls.length} video(s)! 📹`, 'success');
+                } else {
+                    const errMsg = failReasons.length ? failReasons[0] : 'Download failed — check your URL and try again.';
+                    window.AppController.showToast(`❌ Download failed: ${errMsg}`, 'error');
+                }
             } catch (err) {
                 window.AppController.showToast('Download failed: ' + err.message, 'error');
             } finally {
@@ -1561,7 +1711,12 @@
 
         extractHeadlineName: function(title) {
             if (!title) return '';
-            
+
+            // 0. Decode HTML entities (e.g. &amp; → &, &quot; → ", &#039; → ')
+            const txt = document.createElement('textarea');
+            txt.innerHTML = title;
+            title = txt.value;
+
             // 1. Remove all emojis
             let clean = title.replace(/[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDC00-\uDFFF]/g, '');
             
@@ -1634,10 +1789,19 @@
                     }
                 }
 
-                this.campaignData.step3.ads.forEach((ad, index) => {
-                    ad.primaryText = (variations[index] || result.primaryText || '').trim();
+                // Update primary text IN-PLACE — never wipe and re-render the cards.
+                // Re-rendering does container.innerHTML='' which destroys the filmstrip/
+                // thumbnail section and causes the visible blank → reload flicker.
+                const cards = document.querySelectorAll('#creative-ads-container .creative-ad-card');
+                cards.forEach((card, index) => {
+                    const textField = card.querySelector('.creative-primary-text');
+                    const newText = (variations[index] || result.primaryText || '').trim();
+                    if (textField) textField.value = newText;
+                    // Keep campaignData in sync without touching the DOM structure
+                    if (this.campaignData.step3.ads[index]) {
+                        this.campaignData.step3.ads[index].primaryText = newText;
+                    }
                 });
-                this.renderCreativeAds();
                 if (!silent) window.AppController.showToast('Headline and primary text auto-filled ✨', 'success');
             } catch (error) {
                 if (!silent) window.AppController.showToast('Website/Gemini error: ' + error.message, 'error');

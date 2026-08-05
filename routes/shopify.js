@@ -3,9 +3,16 @@ const router = express.Router();
 const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const multer = require('multer');
 const geminiService = require('../services/gemini');
 const fetch = require('node-fetch');
 const { getStorage, saveStorage } = require('../services/storage');
+
+// Multer for video uploads in this route
+const videoUpload = multer({
+    dest: path.join(__dirname, '..', 'uploads'),
+    limits: { fileSize: 500 * 1024 * 1024 } // 500MB
+});
 
 function generateCleanHandle(title) {
     if (!title) return '';
@@ -36,6 +43,27 @@ function generateCleanHandle(title) {
     // Keep 3 to 5 words for a concise, meaningful handle
     const meaningfulWords = words.slice(0, 5).join('-');
     return meaningfulWords.replace(/[^a-z0-9-]/g, '').replace(/-+/g, '-').replace(/^-|-$/g, '');
+}
+
+function normalizeSuggestedCollectionIds(rawSuggestion, collections) {
+    let suggestions = rawSuggestion;
+    if (typeof suggestions === 'string') {
+        const cleaned = suggestions.replace(/```json/gi, '').replace(/```/g, '').trim();
+        suggestions = JSON.parse(cleaned);
+    }
+    if (!Array.isArray(suggestions)) return [];
+
+    const byId = new Map(collections.map(collection => [String(collection.id), collection.id]));
+    const byTitle = new Map(collections.map(collection => [String(collection.title).trim().toLowerCase(), collection.id]));
+
+    return [...new Set(suggestions.map(item => {
+        if (item && typeof item === 'object') {
+            item = item.id ?? item.collectionId ?? item.title ?? item.name;
+        }
+        if (item === undefined || item === null) return null;
+        const value = String(item).trim();
+        return byId.get(value) ?? byTitle.get(value.toLowerCase()) ?? null;
+    }).filter(Boolean))];
 }
 
 // 1. Get all shopify stores
@@ -284,6 +312,23 @@ async function fetchUserCollections(shopUrl, accessToken) {
     return collections;
 }
 
+// 4a. Fetch collections for a store (used by VTL flow without needing a product URL)
+router.get('/collections', async (req, res) => {
+    try {
+        const { storeId } = req.query;
+        if (!storeId) return res.status(400).json({ error: 'storeId is required.' });
+
+        const storage = getStorage();
+        const store = (storage.shopifyStores || []).find(s => s.id === storeId);
+        if (!store) return res.status(400).json({ error: 'Store not found.' });
+
+        const collections = await fetchUserCollections(store.shopUrl, store.accessToken);
+        res.json({ success: true, collections });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch collections', details: error.message });
+    }
+});
+
 // 4. Scrape Product Details and fetch suggested collections
 router.get('/scrape', async (req, res) => {
     try {
@@ -334,8 +379,7 @@ ${userCollections.map(c => `ID: ${c.id}, Title: ${c.title}`).join('\n')}
 Based on the details, identify which collections match this product. Return ONLY a valid JSON array of matched collection IDs, e.g., ["12345", "67890"]. Do not include any markdown format, markdown tags, backticks or explanation. Return raw JSON.`;
 
                 const suggestion = await geminiService.generateResponseText(geminiApiKey, geminiModel, prompt);
-                const cleanedSuggestion = suggestion.replace(/```json/g, '').replace(/```/g, '').trim();
-                suggestedCollectionIds = JSON.parse(cleanedSuggestion);
+                suggestedCollectionIds = normalizeSuggestedCollectionIds(suggestion, userCollections);
             } catch (err) {
                 console.error('Failed to run Gemini collections suggestion:', err.message);
             }
@@ -445,9 +489,20 @@ router.post('/import', async (req, res) => {
         });
 
         // Formulate images (append https: if start with //)
-        const images = (product.images || []).map(imgUrl => {
+        // Formulate images: support external URLs and local /uploads/ files (send as base64 attachment)
+        const images = (product.images || []).map((imgUrl, idx) => {
+            if (imgUrl.startsWith('/uploads/')) {
+                const filePath = path.join(__dirname, '..', imgUrl.replace(/^\//, ''));
+                if (fs.existsSync(filePath)) {
+                    return {
+                        attachment: fs.readFileSync(filePath).toString('base64'),
+                        filename: path.basename(filePath),
+                        position: idx + 1
+                    };
+                }
+            }
             const src = imgUrl.startsWith('//') ? 'https:' + imgUrl : imgUrl;
-            return { src };
+            return { src, position: idx + 1 };
         });
 
         // Handle optional floating videos upload
@@ -532,75 +587,9 @@ router.post('/import', async (req, res) => {
 
         console.log(`Product created successfully with ID: ${createdProductId}`);
 
-        // Match variants to their respective images (featured_image)
-        try {
-            const createdVariants = createdProduct.variants || [];
-            const createdImages = createdProduct.images || [];
-            const updatePromises = [];
-
-            for (let i = 0; i < createdVariants.length; i++) {
-                const createdVar = createdVariants[i];
-                // Find matching target scraped variant
-                const targetVar = (product.variants || []).find(tv => 
-                    tv.option1 === createdVar.option1 &&
-                    tv.option2 === createdVar.option2 &&
-                    tv.option3 === createdVar.option3
-                );
-
-                if (targetVar && targetVar.featured_image && targetVar.featured_image.src) {
-                    const targetImageSrc = targetVar.featured_image.src;
-                    const targetClean = targetImageSrc.split('?')[0];
-                    const targetFilename = targetClean.substring(targetClean.lastIndexOf('/') + 1);
-
-                    // Method 1: Match by index of target image in original scraped gallery
-                    let targetIndex = (product.images || []).findIndex(imgUrl => {
-                        const cleanImgUrl = imgUrl.split('?')[0];
-                        return cleanImgUrl.endsWith(targetFilename);
-                    });
-
-                    let matchedImage = null;
-                    if (targetIndex !== -1 && createdImages[targetIndex]) {
-                        matchedImage = createdImages[targetIndex];
-                    } else {
-                        // Method 2: Match by filename substring in newly created Shopify images
-                        matchedImage = createdImages.find(img => {
-                            const cleanCreated = img.src.split('?')[0];
-                            return cleanCreated.includes(targetFilename) || targetClean.includes(cleanCreated.substring(cleanCreated.lastIndexOf('/') + 1));
-                        });
-                    }
-
-                    if (matchedImage) {
-                        const updateUrl = `https://${store.shopUrl}/admin/api/2024-04/variants/${createdVar.id}.json`;
-                        updatePromises.push(
-                            fetch(updateUrl, {
-                                method: 'PUT',
-                                headers: {
-                                    'Content-Type': 'application/json',
-                                    'X-Shopify-Access-Token': store.accessToken
-                                },
-                                body: JSON.stringify({
-                                    variant: {
-                                        id: createdVar.id,
-                                        image_id: matchedImage.id
-                                    }
-                                })
-                            }).then(async r => {
-                                if (!r.ok) {
-                                    console.warn(`Failed to link image for variant ${createdVar.id}: ${await r.text()}`);
-                                }
-                            })
-                        );
-                    }
-                }
-            }
-
-            if (updatePromises.length > 0) {
-                console.log(`Linking ${updatePromises.length} variant images in parallel...`);
-                await Promise.allSettled(updatePromises);
-            }
-        } catch (variantImgErr) {
-            console.error('Failed to link images to product variants:', variantImgErr.message);
-        }
+        // Keep imported media as normal product images. Variant-specific image
+        // linking is intentionally disabled so Gemini-selected best frames are
+        // not reduced to one image per variant.
 
         // Link product to selected collections in parallel
         if (Array.isArray(collectionIds) && collectionIds.length > 0) {
@@ -674,6 +663,143 @@ Return ONLY the recreated HTML code. Do not include any markdown block formattin
         res.json({ success: true, description: cleanHtml });
     } catch (error) {
         res.status(500).json({ error: 'Failed to generate AI description', details: error.message });
+    }
+});
+
+// Helper: check if a mimetype or filename is an image
+function isImageFile(file) {
+    const mime = file.mimetype || '';
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    return mime.startsWith('image/') || ['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(ext);
+}
+
+// 7. Media (Video + Images) → AI Listing Generator
+router.post('/video-to-listing', videoUpload.array('files', 20), async (req, res) => {
+    let allExtractedFrames = []; // frames from video extraction (for cleanup)
+    let uploadedFilePaths = [];  // uploaded file paths (for cleanup)
+    const preservedVideoPaths = [];
+    try {
+        const files = req.files || [];
+        if (!files.length) return res.status(400).json({ error: 'No files uploaded.' });
+
+        const storage = getStorage();
+        const geminiApiKey = storage.settings?.geminiApiKey;
+        const geminiModel = storage.settings?.geminiModel || 'gemini-1.5-flash';
+        if (!geminiApiKey) return res.status(400).json({ error: 'Gemini API Key is not configured. Please add it in Settings.' });
+
+        uploadedFilePaths = files.map(f => f.path);
+        const videoProcessor = require('../services/videoProcessor');
+        const uploadsDir = path.join(__dirname, '..', 'uploads');
+
+        // Build a unified list of frames: {base64, filePath, sourceType, originalIndex}
+        const allFrames = [];
+
+        for (const file of files) {
+            if (isImageFile(file)) {
+                // Image file: read directly as base64
+                const imgBase64 = fs.readFileSync(file.path).toString('base64');
+                allFrames.push({ base64: imgBase64, filePath: file.path, sourceType: 'image' });
+                console.log(`Media→Listing: added image file ${file.originalname}`);
+            } else {
+                // Video file: extract frames
+                console.log(`Media→Listing: extracting frames from video ${file.originalname}`);
+                const videoFrames = await videoProcessor.extractFrames(file.path, 20);
+                videoFrames.forEach(f => allFrames.push({ ...f, sourceType: 'video' }));
+                allExtractedFrames.push(...videoFrames);
+
+                // Keep the original upload for the Shopify floating-video metafield.
+                // The extracted frames are temporary analysis assets; the source video
+                // should survive the "Use this listing" step and be uploaded later.
+                const extension = path.extname(file.originalname || '') || '.mp4';
+                const safeName = `floating-${uuidv4()}${extension.toLowerCase()}`;
+                const preservedPath = path.join(uploadsDir, safeName);
+                fs.copyFileSync(file.path, preservedPath);
+                preservedVideoPaths.push(preservedPath);
+            }
+        }
+
+        if (!allFrames.length) throw new Error('No usable frames or images could be extracted from the uploaded files.');
+        console.log(`Media→Listing: ${allFrames.length} total frames/images. Analyzing with Gemini Vision...`);
+
+        const framesBase64 = allFrames.map(f => f.base64);
+        const analysis = await geminiService.analyzeProductFromFrames(geminiApiKey, geminiModel, framesBase64);
+
+        // Save only selected frames/images to uploads/ for serving
+        const selectedIndices = (analysis.selectedIndices && analysis.selectedIndices.length)
+            ? analysis.selectedIndices
+            : allFrames.map((_, i) => i).slice(0, 8);
+
+        const savedFrames = [];
+        for (const idx of selectedIndices) {
+            if (allFrames[idx]) {
+                const frame = allFrames[idx];
+                const destFilename = `vl_${Date.now()}_${idx}.jpg`;
+                const destPath = path.join(uploadsDir, destFilename);
+                if (frame.sourceType === 'image') {
+                    // Copy image directly
+                    fs.copyFileSync(frame.filePath, destPath);
+                } else {
+                    // Copy extracted video frame
+                    fs.copyFileSync(frame.filePath, destPath);
+                }
+                savedFrames.push({ index: idx, filename: destFilename, url: '/uploads/' + destFilename });
+            }
+        }
+
+        res.json({
+            success: true,
+            frames: savedFrames,
+            floatingVideos: preservedVideoPaths.map(filePath => ({
+                filePath,
+                filename: path.basename(filePath)
+            })),
+            listing: {
+                title: analysis.title || '',
+                description: analysis.description || '',
+                tags: analysis.tags || [],
+                suggestedPrice: analysis.suggestedPrice || ''
+            },
+            detectedAttributes: analysis.detectedAttributes || []
+        });
+    } catch (error) {
+        console.error('Media→Listing error:', error.message);
+        res.status(500).json({ error: 'Failed to generate listing from media', details: error.message });
+    } finally {
+        const videoProcessor = require('../services/videoProcessor');
+        if (allExtractedFrames.length) { try { videoProcessor.cleanupFrames(allExtractedFrames); } catch {} }
+        // Clean up uploaded files
+        for (const filePath of uploadedFilePaths) {
+            if (filePath && !preservedVideoPaths.includes(filePath) && fs.existsSync(filePath)) {
+                try { fs.unlinkSync(filePath); } catch {}
+            }
+        }
+    }
+});
+
+// 8. Assign extracted images to variant values using Gemini Vision
+router.post('/assign-variant-images', async (req, res) => {
+    try {
+        const { frameFilenames, variantOption, variantValues } = req.body;
+        if (!frameFilenames?.length || !variantOption || !variantValues?.length) {
+            return res.status(400).json({ error: 'Missing frameFilenames, variantOption, or variantValues.' });
+        }
+
+        const storage = getStorage();
+        const geminiApiKey = storage.settings?.geminiApiKey;
+        const geminiModel = storage.settings?.geminiModel || 'gemini-1.5-flash';
+        if (!geminiApiKey) return res.status(400).json({ error: 'Gemini API Key is not configured. Please add it in Settings.' });
+
+        const uploadsDir = path.join(__dirname, '..', 'uploads');
+        const framesBase64 = frameFilenames.map(filename => {
+            const filePath = path.join(uploadsDir, filename);
+            return fs.readFileSync(filePath).toString('base64');
+        });
+
+        const result = await geminiService.assignImagesToVariants(geminiApiKey, geminiModel, framesBase64, variantOption, variantValues);
+        res.json({ success: true, assignments: result.assignments || {} });
+    } catch (error) {
+        console.error('Assign variant images error:', error.message);
+        res.status(500).json({ error: 'Failed to assign images to variants', details: error.message });
     }
 });
 

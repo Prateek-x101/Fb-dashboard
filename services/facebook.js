@@ -1,12 +1,10 @@
 const fetch = require('node-fetch');
 const FormData = require('form-data');
 const fs = require('fs');
-const os = require('os');
-const path = require('path');
 
 const BASE_URL = 'https://graph.facebook.com/v25.0';
 
-const TARGETING_TYPES = new Set(['interest', 'behavior', 'demographic', 'life_event', 'job_title']);
+const TARGETING_TYPES = new Set(['interest', 'behavior', 'demographic', 'life_event', 'job_title', 'employer', 'field_of_study', 'school']);
 
 function normalizeTargetingName(value) {
     return String(value || '')
@@ -25,28 +23,21 @@ function normalizeTargetingType(value) {
 
 function targetingSearchUrl(name, type, token) {
     const q = encodeURIComponent(name);
-    if (type === 'behavior') return `${BASE_URL}/search?type=adTargetingCategory&class=behaviors&q=${q}&access_token=${token}`;
-    if (type === 'demographic') return `${BASE_URL}/search?type=adTargetingCategory&class=demographics&q=${q}&access_token=${token}`;
-    if (type === 'life_event') return `${BASE_URL}/search?type=adTargetingCategory&class=life_events&q=${q}&access_token=${token}`;
-    if (type === 'job_title') return `${BASE_URL}/search?type=adworkposition&q=${q}&access_token=${token}`;
+    if (type === 'behavior')       return `${BASE_URL}/search?type=adTargetingCategory&class=behaviors&q=${q}&access_token=${token}`;
+    if (type === 'demographic')    return `${BASE_URL}/search?type=adTargetingCategory&class=demographics&q=${q}&access_token=${token}`;
+    if (type === 'life_event')     return `${BASE_URL}/search?type=adTargetingCategory&class=life_events&q=${q}&access_token=${token}`;
+    if (type === 'job_title')      return `${BASE_URL}/search?type=adworkposition&q=${q}&access_token=${token}`;
+    if (type === 'employer')       return `${BASE_URL}/search?type=adworkemployer&q=${q}&access_token=${token}`;
+    if (type === 'field_of_study') return `${BASE_URL}/search?type=adeducationmajor&q=${q}&access_token=${token}`;
+    if (type === 'school')         return `${BASE_URL}/search?type=adeducationschool&q=${q}&access_token=${token}`;
     return `${BASE_URL}/search?type=adinterest&q=${q}&access_token=${token}`;
-}
-
-const FACEBOOK_ERROR_HINTS = {
-    1885183: 'Your Facebook App is in Development mode. Switch it to Live in Meta Developer Console (App Dashboard → switch App Mode to Live). On Render, ensure FB_APP_ID matches the same Live app used locally.'
-};
-
-function enrichFacebookError(apiError) {
-    const hint = FACEBOOK_ERROR_HINTS[apiError.error_subcode];
-    const userMessage = apiError.error_user_msg || apiError.message || 'Unknown Facebook API Error';
-    return hint ? `${userMessage} ${hint}` : userMessage;
 }
 
 async function handleResponse(response) {
     const data = await response.json();
     if (!response.ok) {
         const apiError = data.error || {};
-        const error = new Error(enrichFacebookError(apiError));
+        const error = new Error(apiError.message || data.message || 'Unknown Facebook API Error');
         error.provider = 'facebook';
         error.code = apiError.code;
         error.errorSubcode = apiError.error_subcode;
@@ -112,34 +103,12 @@ const facebookService = {
         const url = `${BASE_URL}/act_${accountId}/adimages?access_token=${token}`;
         const form = new FormData();
         form.append('filename', fs.createReadStream(filePath));
-
+        
         const response = await fetch(url, {
             method: 'POST',
             body: form
         });
         return handleResponse(response);
-    },
-
-    async uploadImageFromUrl(accountId, token, imageUrl) {
-        const response = await fetch(imageUrl);
-        if (!response.ok) {
-            throw new Error(`Failed to download thumbnail image (${response.status}).`);
-        }
-        const arrayBuffer = await response.arrayBuffer();
-        const buffer = Buffer.from(arrayBuffer);
-        const tempPath = path.join(os.tmpdir(), `fb-thumb-${Date.now()}.jpg`);
-        fs.writeFileSync(tempPath, buffer);
-        try {
-            const uploadResult = await this.uploadImage(accountId, token, tempPath);
-            const firstKey = Object.keys(uploadResult.images || {})[0];
-            return firstKey ? uploadResult.images[firstKey].hash : null;
-        } finally {
-            try {
-                fs.unlinkSync(tempPath);
-            } catch {
-                // Ignore temp file cleanup failures.
-            }
-        }
     },
 
     async uploadVideo(accountId, token, filePath) {
@@ -166,14 +135,17 @@ const facebookService = {
         return handleResponse(response);
     },
 
-    // Search interests, behaviors, demographics, life events and job titles in parallel
+    // Search all targeting types in parallel
     async searchAllTargeting(query, token) {
         const searches = [
             { url: `${BASE_URL}/search?type=adinterest&q=${encodeURIComponent(query)}&access_token=${token}`, type: 'interest' },
             { url: `${BASE_URL}/search?type=adTargetingCategory&class=behaviors&q=${encodeURIComponent(query)}&access_token=${token}`, type: 'behavior' },
             { url: `${BASE_URL}/search?type=adTargetingCategory&class=demographics&q=${encodeURIComponent(query)}&access_token=${token}`, type: 'demographic' },
             { url: `${BASE_URL}/search?type=adTargetingCategory&class=life_events&q=${encodeURIComponent(query)}&access_token=${token}`, type: 'life_event' },
-            { url: `${BASE_URL}/search?type=adworkposition&q=${encodeURIComponent(query)}&access_token=${token}`, type: 'job_title' }
+            { url: `${BASE_URL}/search?type=adworkposition&q=${encodeURIComponent(query)}&access_token=${token}`, type: 'job_title' },
+            { url: `${BASE_URL}/search?type=adworkemployer&q=${encodeURIComponent(query)}&access_token=${token}`, type: 'employer' },
+            { url: `${BASE_URL}/search?type=adeducationmajor&q=${encodeURIComponent(query)}&access_token=${token}`, type: 'field_of_study' },
+            { url: `${BASE_URL}/search?type=adeducationschool&q=${encodeURIComponent(query)}&access_token=${token}`, type: 'school' }
         ];
         const settled = await Promise.allSettled(
             searches.map(s =>
@@ -202,18 +174,97 @@ const facebookService = {
 
                 const name = String(item.name || '').trim();
                 if (name) {
-                    const data = await fetch(targetingSearchUrl(name, type, token)).then(r => r.json());
-                    const candidates = Array.isArray(data.data) ? data.data : [];
                     const normalizedName = normalizeTargetingName(name);
-                    const match = candidates.find(candidate =>
-                        normalizeTargetingName(candidate.name) === normalizedName
-                    );
+                    const sigWords = normalizedName.split(' ').filter(w => w.length > 2);
 
-                    // A broad search's first result may be a different
-                    // interest. Drop unresolved items rather than sending a
-                    // wrong key and letting Meta reject the whole ad set.
+                    // Score a candidate pool against the target keyword — returns best match or null
+                    function bestFromPool(pool) {
+                        // 1. Exact
+                        let m = pool.find(c => normalizeTargetingName(c.name) === normalizedName);
+                        if (m) return m;
+                        // 2. One string contains the other
+                        m = pool.find(c => {
+                            const cn = normalizeTargetingName(c.name);
+                            return cn.includes(normalizedName) || normalizedName.includes(cn);
+                        });
+                        if (m) return m;
+                        // 3. All significant words present in candidate
+                        if (sigWords.length > 0) {
+                            m = pool.find(c => {
+                                const cn = normalizeTargetingName(c.name);
+                                return sigWords.every(w => cn.includes(w));
+                            });
+                            if (m) return m;
+                        }
+                        // 4. Best word-overlap ≥ 60%
+                        if (sigWords.length > 1) {
+                            let best = null, bestScore = 0;
+                            for (const c of pool) {
+                                const cn = normalizeTargetingName(c.name);
+                                const hits = sigWords.filter(w => cn.includes(w)).length;
+                                const score = hits / sigWords.length;
+                                if (score >= 0.6 && score > bestScore) { best = c; bestScore = score; }
+                            }
+                            if (best) return best;
+                        }
+                        return null;
+                    }
+
+                    // Fetch + score one search query, return best match or null
+                    async function searchAndMatch(searchName, searchType) {
+                        try {
+                            const d = await fetch(targetingSearchUrl(searchName, searchType, token), { timeout: 5000 }).then(r => r.json());
+                            return bestFromPool(Array.isArray(d.data) ? d.data : []);
+                        } catch { return null; }
+                    }
+
+                    // Round 1 — full keyword, declared type
+                    let match = await searchAndMatch(name, type);
+                    let matchedType = type;
+
+                    // Round 2 — multi-word: retry with longest significant word, same type
+                    if (!match && sigWords.length > 1) {
+                        const pivot = sigWords.reduce((a, b) => b.length > a.length ? b : a, sigWords[0]);
+                        match = await searchAndMatch(pivot, type);
+                    }
+
+                    // Round 3 — type fallback: behavior/demographic/life_event → also try as interest
+                    //   (Facebook often lists the same concept under a different category)
+                    if (!match && type !== 'interest') {
+                        match = await searchAndMatch(name, 'interest');
+                        if (match) matchedType = 'interest';
+                    }
+
+                    // Round 4 — interest → also try behavior (e.g. "Online shoppers" is a behavior)
+                    if (!match && type === 'interest') {
+                        match = await searchAndMatch(name, 'behavior');
+                        if (match) matchedType = 'behavior';
+                    }
+
+                    // Round 5 — pivot word + interest fallback
+                    if (!match && sigWords.length > 1 && type !== 'interest') {
+                        const pivot = sigWords.reduce((a, b) => b.length > a.length ? b : a, sigWords[0]);
+                        match = await searchAndMatch(pivot, 'interest');
+                        if (match) matchedType = 'interest';
+                    }
+
+                    // Last resort — first result from full-keyword primary search only if ≥1 word matches
+                    if (!match) {
+                        try {
+                            const d = await fetch(targetingSearchUrl(name, type, token)).then(r => r.json());
+                            const primary = Array.isArray(d.data) ? d.data : [];
+                            if (primary.length > 0) {
+                                const firstCn = normalizeTargetingName(primary[0].name);
+                                if (sigWords.some(w => firstCn.includes(w))) {
+                                    match = primary[0];
+                                    matchedType = type;
+                                }
+                            }
+                        } catch { /* skip */ }
+                    }
+
                     if (match?.id) {
-                        return { id: String(match.id), name: match.name, type };
+                        return { id: String(match.id), name: match.name, type: matchedType };
                     }
                     return null;
                 }

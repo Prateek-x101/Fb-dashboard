@@ -68,10 +68,21 @@ app.post('/api/media/download-url', async (req, res) => {
         const outputFilename = `downloaded-${Date.now()}.mp4`;
 
         console.log(`Received download request for url: ${url}, canvasType: ${canvasType || 'original'}`);
-        
-        // 1. Download video
-        const tempPath = await videoProcessor.downloadVideo(url, outputFilename);
-        
+
+        // Resolve a Facebook access token from stored accounts (needed for Ads Library URLs)
+        let fbAccessToken = null;
+        try {
+            const storagePath = path.join(__dirname, 'config', 'storage.local.json');
+            if (fs.existsSync(storagePath)) {
+                const stored = JSON.parse(fs.readFileSync(storagePath, 'utf8'));
+                const accs = stored.accounts || [];
+                if (accs.length > 0) fbAccessToken = accs[0].accessToken || null;
+            }
+        } catch {}
+
+        // 1. Download video (passes token only used for FB Ads Library)
+        const tempPath = await videoProcessor.downloadVideo(url, outputFilename, fbAccessToken);
+
         // 2. Reprocess video (scale, pad, strip, re-encode)
         const result = await videoProcessor.processVideo(tempPath, outputFilename, canvasType || 'original');
         

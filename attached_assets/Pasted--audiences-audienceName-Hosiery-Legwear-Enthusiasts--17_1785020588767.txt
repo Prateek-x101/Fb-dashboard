@@ -1,0 +1,121 @@
+{
+    "audiences": [
+        {
+            "audienceName": "Hosiery & Legwear Enthusiasts",
+            "interests": [
+                {
+                    "id": "6003511935694",
+                    "name": "Hosiery"
+                },
+                {
+                    "id": "6003478942057",
+                    "name": "Leggings"
+                },
+                {
+                    "id": "6003425255975",
+                    "name": "Tights"
+                },
+                {
+                    "id": "6003310881136",
+                    "name": "Socks Appeal"
+                }
+            ]
+        },
+        {
+            "audienceName": "Contemporary Women's Fashion Shoppers",
+            "interests": [
+                {
+                    "id": "6003346592981",
+                    "name": "Online shopping"
+                },
+                {
+                    "id": "6003166866758",
+                    "name": "Fast fashion"
+                },
+                {
+                    "id": "6011366104268",
+                    "name": "Women's clothing"
+                },
+                {
+                    "id": "6003188355978",
+                    "name": "Dresses"
+                },
+                {
+                    "id": "6002866906422",
+                    "name": "Skirt"
+                },
+                {
+                    "id": "6003348604581",
+                    "name": "Fashion accessories"
+                }
+            ]
+        },
+        {
+            "audienceName": "Body Shaping & Shapewear Aficionados",
+            "interests": [
+                {
+                    "id": "6003281800054",
+                    "name": "Foundation garment"
+                },
+                {
+                    "id": "6003111546435",
+                    "name": "Undergarment"
+                },
+                {
+                    "id": "6003516262570",
+                    "name": "Corset"
+                },
+                {
+                    "id": "6003024627293",
+                    "name": "Lingerie"
+                }
+            ]
+        },
+        {
+            "audienceName": "Glamour & Night Out Styling",
+            "interests": [
+                {
+                    "id": "6003361714600",
+                    "name": "Nightclubs"
+                },
+                {
+                    "id": "6004474265429",
+                    "name": "Party dress"
+                },
+                {
+                    "id": "6010467603978",
+                    "name": "Chalany High Heels"
+                }
+            ]
+        },
+        {
+            "audienceName": "Boutique & Trendy Apparel Lovers",
+            "interests": [
+                {
+                    "id": "6003390752144",
+                    "name": "Shopping malls"
+                },
+                {
+                    "id": "6003103108917",
+                    "name": "Boutiques"
+                },
+                {
+                    "id": "6003539990673",
+                    "name": "Digital Trends"
+                },
+                {
+                    "id": "6003524485642",
+                    "name": "Personal stylist"
+                },
+                {
+                    "id": "6003456388203",
+                    "name": "Clothing"
+                },
+                {
+                    "id": "6003169323302",
+                    "name": "style"
+                }
+            ]
+        }
+    ]
+}

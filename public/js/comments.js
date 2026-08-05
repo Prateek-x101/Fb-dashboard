@@ -83,8 +83,102 @@ const InboxManager = {
             this.items = data.data || [];
             
             if (data.errors && data.errors.length > 0) {
-                const warningMsg = data.errors.map(err => `${err.accountLabel}: ${err.message}`).join(', ');
-                window.AppController?.showToast(`⚠️ Connection warning: ${warningMsg}`, 'warning', 10000);
+                const reauthErrors = data.errors.filter(e => e.needsReauth);
+                const otherErrors  = data.errors.filter(e => !e.needsReauth);
+
+                // Show a persistent banner for scope/capability errors with a Re-connect button
+                const existing = document.getElementById('cm-reauth-banner');
+                if (existing) existing.remove();
+
+                if (reauthErrors.length > 0) {
+                    const banner = document.createElement('div');
+                    banner.id = 'cm-reauth-banner';
+                    banner.style.cssText = `
+                        background: rgba(220,80,30,0.15);
+                        border: 1px solid rgba(220,80,30,0.5);
+                        border-radius: 8px;
+                        padding: 10px 14px;
+                        margin-bottom: 10px;
+                        font-size: 0.85rem;
+                        color: #f4a261;
+                        display: flex;
+                        align-items: center;
+                        gap: 10px;
+                    `;
+                    const accounts = [...new Set(reauthErrors.map(e => e.accountLabel))].join(', ');
+                    banner.innerHTML = `
+                        <span style="flex:1">⚠️ <strong>Permission missing</strong> for: ${accounts}.<br>
+                        Your access token was created before Instagram DM permission was added to your app.
+                        Re-connect the account to get a fresh token with updated scopes.</span>
+                        <button id="cm-reauth-btn"
+                            style="background:rgba(220,80,30,0.8);border:none;color:#fff;padding:6px 12px;border-radius:6px;cursor:pointer;white-space:nowrap;font-size:0.82rem;">
+                            🔄 Re-connect Account
+                        </button>
+                    `;
+                    const list = document.getElementById('cm-list');
+                    list?.parentNode?.insertBefore(banner, list);
+
+                    // Wire the Re-connect button — same OAuth popup flow as Settings page
+                    const reauthBtn = document.getElementById('cm-reauth-btn');
+                    if (reauthBtn) {
+                        reauthBtn.addEventListener('click', () => {
+                            reauthBtn.disabled = true;
+                            reauthBtn.textContent = '⏳ Connecting...';
+
+                            localStorage.removeItem('fb_auth_token');
+                            localStorage.removeItem('fb_auth_error');
+                            localStorage.removeItem('fb_auth_handled');
+
+                            const w = 600, h = 650;
+                            const popup = window.open(
+                                '/api/accounts/auth/facebook',
+                                'facebook_login',
+                                `width=${w},height=${h},left=${(screen.width-w)/2},top=${(screen.height-h)/2},status=no,resizable=yes,scrollbars=yes`
+                            );
+
+                            const poll = setInterval(async () => {
+                                const token = localStorage.getItem('fb_auth_token');
+                                const error = localStorage.getItem('fb_auth_error');
+                                if (token) {
+                                    clearInterval(poll);
+                                    if (localStorage.getItem('fb_auth_handled')) return;
+                                    localStorage.setItem('fb_auth_handled', 'true');
+                                    localStorage.removeItem('fb_auth_token');
+                                    setTimeout(() => localStorage.removeItem('fb_auth_handled'), 2000);
+                                    if (popup && !popup.closed) popup.close();
+                                    window.AppController?.showToast('Re-connected! Refreshing messages...', 'success');
+                                    document.getElementById('cm-reauth-banner')?.remove();
+                                    // Reload accounts then refresh inbox
+                                    try {
+                                        await window.API.request('/api/accounts');
+                                    } catch(e) { /* ignore */ }
+                                    CommentManager.loadItems();
+                                } else if (error) {
+                                    clearInterval(poll);
+                                    if (localStorage.getItem('fb_auth_handled')) return;
+                                    localStorage.setItem('fb_auth_handled', 'true');
+                                    localStorage.removeItem('fb_auth_error');
+                                    setTimeout(() => localStorage.removeItem('fb_auth_handled'), 2000);
+                                    if (popup && !popup.closed) popup.close();
+                                    window.AppController?.showToast('Re-connect failed: ' + error, 'error');
+                                    reauthBtn.disabled = false;
+                                    reauthBtn.textContent = '🔄 Re-connect Account';
+                                } else if (!popup || popup.closed) {
+                                    clearInterval(poll);
+                                    reauthBtn.disabled = false;
+                                    reauthBtn.textContent = '🔄 Re-connect Account';
+                                }
+                            }, 500);
+                        });
+                    }
+                }
+
+                if (otherErrors.length > 0) {
+                    const warningMsg = otherErrors.map(err => `${err.accountLabel}: ${err.message}`).join(', ');
+                    window.AppController?.showToast(`⚠️ Connection warning: ${warningMsg}`, 'warning', 10000);
+                }
+            } else {
+                document.getElementById('cm-reauth-banner')?.remove();
             }
             
             this.renderList();

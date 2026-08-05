@@ -52,6 +52,30 @@ function avatarColor(name) {
     return colors[Math.abs(h) % colors.length];
 }
 
+// Debug: show what pages + IG accounts are visible for each stored account
+router.get('/debug-pages', async (req, res) => {
+    const storage = getStorage();
+    const accounts = storage.accounts || [];
+    const result = [];
+    for (const acc of accounts) {
+        if (!acc.accessToken) continue;
+        try {
+            const pagesResult = await facebookService.getConnectedInstagram(acc.accessToken);
+            const pages = (pagesResult.data || []).map(p => ({
+                pageId: p.id,
+                pageName: p.name,
+                hasPageToken: !!p.access_token,
+                instagramId: p.instagram_business_account?.id || null,
+                instagramUsername: p.instagram_business_account?.username || null
+            }));
+            result.push({ accountId: acc.accountId, label: acc.label, pages });
+        } catch (e) {
+            result.push({ accountId: acc.accountId, label: acc.label, error: e.message });
+        }
+    }
+    res.json(result);
+});
+
 // type = all | messenger | instagram | fb-comments | ig-comments
 router.get('/inbox', async (req, res) => {
     const storage = getStorage();
@@ -131,13 +155,31 @@ router.get('/inbox', async (req, res) => {
                     fetchPromises.push((async () => {
                         try {
                             const fields = 'id,participants{username,name,id},messages.limit(1){text,from,created_time},unread_count,updated_time';
-                            const url = `${BASE}/${instagramAccountId}/conversations?platform=instagram&fields=${encodeURIComponent(fields)}&limit=30&access_token=${token}`;
-                            const r = await fetchWithTimeout(url);
-                            const d = await r.json();
+                            const igToken = pageToken || token;
+
+                            // Try IG-account-based endpoint first, then page-based as fallback
+                            let d = null;
+                            for (const endpoint of [
+                                `${BASE}/${instagramAccountId}/conversations?platform=instagram&fields=${encodeURIComponent(fields)}&limit=30&access_token=${igToken}`,
+                                `${BASE}/${pageId}/conversations?platform=instagram&fields=${encodeURIComponent(fields)}&limit=30&access_token=${igToken}`
+                            ]) {
+                                const r = await fetchWithTimeout(endpoint);
+                                d = await r.json();
+                                if (!d.error) break; // success — stop trying
+                                if (d.error.code !== 3 && d.error.code !== 10) break; // non-capability error, don't retry
+                            }
+
                             if (d.error) {
+                                const isCapability = d.error.code === 3 || d.error.code === 10;
+                                const needsReauth = isCapability || d.error.code === 190 ||
+                                    /capability|permission|scope|oauth|token/i.test(d.error.message);
+                                const message = isCapability
+                                    ? `Instagram DM not enabled on your Facebook App. Fix: Developer Console → your app → Add Products → add "Messenger" + enable Instagram Messaging. Then re-connect. (API error: ${d.error.message})`
+                                    : `Instagram DM: ${d.error.message}`;
                                 errors.push({
                                     accountLabel: `${acc.label || acc.accountId} (@${instagramUsername})`,
-                                    message: `Instagram DM: ${d.error.message}`
+                                    message,
+                                    needsReauth
                                 });
                             } else if (d.data) {
                                 d.data.forEach(conv => {
