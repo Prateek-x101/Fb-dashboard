@@ -225,7 +225,6 @@ async function downloadVideo(url, outputFilename, accessToken) {
         '--impersonate', 'chrome',
         '--add-header', 'Accept-Language:en-US,en;q=0.9',
         '--extractor-retries', '1',
-        '--no-interactive',
         '--socket-timeout', '15',
         '-o', tempOutputPath,
         url
