@@ -1197,18 +1197,6 @@ async function scrapeProductPageViaBrowser(url) {
     const { withTab } = require('../services/browserPool');
     return withTab(async (page) => {
         console.log(`[UniversalScrape] Loading page in browser: ${url}`);
-        
-        // Block stylesheets, images, fonts to make the scrape very fast
-        await page.setRequestInterception(true);
-        page.on('request', req => {
-            const rt = req.resourceType();
-            if (['stylesheet', 'font'].includes(rt)) {
-                req.abort();
-            } else {
-                req.continue();
-            }
-        });
-
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
         
         // Wait 3 seconds for dynamic content / React loading
