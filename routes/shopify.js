@@ -203,7 +203,6 @@ async function uploadFileToShopify(shopUrl, accessToken, localFilePath, filename
             fileCreate(files: $files) {
                 files {
                     id
-                    status
                 }
                 userErrors {
                     field
