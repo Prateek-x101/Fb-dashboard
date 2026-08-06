@@ -65,7 +65,7 @@ app.post('/api/media/download-url', async (req, res) => {
         }
 
         const videoProcessor = require('./services/videoProcessor');
-        const outputFilename = `downloaded-${Date.now()}.mp4`;
+        const outputFilename = `downloaded-${Date.now()}-${Math.floor(Math.random() * 1000000)}.mp4`;
 
         console.log(`Received download request for url: ${url}, canvasType: ${canvasType || 'original'}`);
 
