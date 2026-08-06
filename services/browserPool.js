@@ -109,15 +109,8 @@ async function warmBrowser() {
     }
 }
 
-let idleTimeout = null;       // timeout handle for closing idle browser
-
 // Acquire a tab slot (may block if all 6 are busy)
 function acquireSlot() {
-    if (idleTimeout) {
-        clearTimeout(idleTimeout);
-        idleTimeout = null;
-    }
-
     if (activeTabCount < MAX_TABS) {
         activeTabCount++;
         return Promise.resolve();
@@ -133,15 +126,6 @@ function releaseSlot() {
         activeTabCount++;
         const next = waitQueue.shift();
         next();
-    } else if (activeTabCount === 0) {
-        // No active tabs. Auto-close browser after 60s idle to free RAM
-        if (idleTimeout) clearTimeout(idleTimeout);
-        idleTimeout = setTimeout(async () => {
-            if (browser && activeTabCount === 0) {
-                console.log('[BrowserPool] Idle timeout reached. Closing Chromium to free resources...');
-                await closeBrowser();
-            }
-        }, 60000);
     }
 }
 
