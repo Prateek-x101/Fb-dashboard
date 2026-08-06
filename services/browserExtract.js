@@ -288,27 +288,27 @@ async function performExtraction(targetUrl) {
             } catch {}
         });
 
-        // Set viewport and user-agent
-        await page.setUserAgent("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1");
+        // Set realistic desktop user agent and viewport
+        await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36");
         await page.setViewport({
-            width: 390,
-            height: 844,
-            deviceScaleFactor: 2,
-            isMobile: true,
-            hasTouch: true
+            width: 1280,
+            height: 800
         });
 
-        // Navigate page
-        await page.goto(navigationUrl, { waitUntil: 'domcontentloaded', timeout: 25000 })
+        // Navigate page and wait for network to settle (critical for GraphQL payloads)
+        await page.goto(navigationUrl, { waitUntil: 'networkidle2', timeout: 30000 })
             .catch(err => console.warn(`[BrowserExtract] Navigation warning: ${err.message}`));
 
         // Wait for video element
         try {
-            await page.waitForSelector('video', { timeout: 8000 });
+            await page.waitForSelector('video', { timeout: 10000 });
         } catch {}
 
         // Settle network
         await delay(2500);
+        try {
+            await page.waitForNetworkIdle({ timeout: 5000, idleTime: 600 });
+        } catch {}
 
         // Click trigger buttons to ensure player initiates
         await page.evaluate(() => {

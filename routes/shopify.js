@@ -617,16 +617,15 @@ router.post('/import', async (req, res) => {
             const variantImageUpdates = [];
 
             for (const createdImg of createdImages) {
-                // Check if this created image matches any assigned original path/filename
+                // Get the original image URL/path using the position (1-indexed)
+                const originalUrl = (product.images || [])[createdImg.position - 1];
+                if (!originalUrl) continue;
+
+                // Find matching key in imageAssignments
                 const matchedKey = Object.keys(imageAssignments).find(key => {
-                    if (key.startsWith('/uploads/')) {
-                        const filename = path.basename(key);
-                        return createdImg.src.includes(filename);
-                    }
-                    // Clean both urls of queries to perform a safe string match
-                    const cleanKey = key.split('?')[0];
-                    const cleanSrc = createdImg.src.split('?')[0];
-                    return cleanSrc.includes(cleanKey) || cleanKey.includes(cleanSrc);
+                    return key === originalUrl || 
+                           key.split('?')[0] === originalUrl.split('?')[0] ||
+                           path.basename(key) === path.basename(originalUrl);
                 });
 
                 if (matchedKey) {
