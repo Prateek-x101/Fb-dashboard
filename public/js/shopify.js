@@ -55,6 +55,11 @@
                 btnRecreate.addEventListener('click', () => this.aiDescription('recreate'));
             }
 
+            const descTextarea = document.getElementById('shopify-import-description');
+            if (descTextarea) {
+                descTextarea.addEventListener('input', () => this.updateDescriptionMobilePreview());
+            }
+
             if (btnCreateAdConfirm) {
                 btnCreateAdConfirm.addEventListener('click', () => this.confirmAdCreationOptions());
             }
@@ -342,6 +347,63 @@
             });
         },
 
+        updateDescriptionMobilePreview: function() {
+            const textarea = document.getElementById('shopify-import-description');
+            const iframe = document.getElementById('shopify-import-description-preview-iframe');
+            if (!textarea || !iframe) return;
+            
+            const htmlContent = textarea.value || '';
+            const styledHtml = `
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="utf-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                    <style>
+                        body {
+                            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                            font-size: 13px;
+                            line-height: 1.45;
+                            color: #374151;
+                            margin: 0;
+                            padding: 10px;
+                            box-sizing: border-box;
+                            background: #ffffff;
+                        }
+                        img {
+                            max-width: 100% !important;
+                            height: auto !important;
+                            display: block;
+                            margin: 10px auto;
+                            border-radius: 6px;
+                        }
+                        h1, h2, h3, h4, h5, h6 {
+                            margin-top: 12px;
+                            margin-bottom: 6px;
+                            color: #111827;
+                            line-height: 1.3;
+                        }
+                        h3 { 
+                            font-size: 14px; 
+                            border-bottom: 1px solid #e5e7eb; 
+                            padding-bottom: 3px; 
+                            color: #4b5563;
+                        }
+                        p { margin-top: 0; margin-bottom: 8px; }
+                        ul, ol { padding-left: 16px; margin-top: 0; margin-bottom: 8px; }
+                        li { margin-bottom: 3px; }
+                        strong { color: #111827; }
+                    </style>
+                </head>
+                <body>
+                    ${htmlContent}
+                </body>
+                </html>
+            `;
+            
+            iframe.srcdoc = styledHtml;
+        },
+
         renderFloatingVideoPreview: function() {
             const previewContainer = document.getElementById('shopify-import-video-preview');
             if (!previewContainer) return;
@@ -498,6 +560,7 @@
                 if (!response.ok) throw new Error(data.error || 'AI request failed');
 
                 descInput.value = data.description;
+                this.updateDescriptionMobilePreview();
                 window.AppController.showToast('Description updated successfully! ✨', 'success');
             } catch (err) {
                 window.AppController.showToast(err.message, 'error');
@@ -570,6 +633,7 @@
                 document.getElementById('shopify-import-price').value = data.product.variants?.[0]?.price || '';
                 document.getElementById('shopify-import-compare-price').value = data.product.variants?.[0]?.compare_at_price || '';
                 document.getElementById('shopify-import-description').value = this.scrapedProduct.description || '';
+                this.updateDescriptionMobilePreview();
 
                 // Handle media-based results (frames for variant classification)
                 if (data.importMode === 'media' && data.frames && data.frames.length > 0) {
