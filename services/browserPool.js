@@ -141,6 +141,7 @@ const NAV_SPACING_MS = 2000; // Space navigations by 2 seconds to prevent anti-b
  */
 async function withTab(extractFn, opts = {}) {
     const timeout = opts.timeout || 60000;
+    const blockImages = opts.blockImages !== false;
 
     await acquireSlot();
     
@@ -164,7 +165,10 @@ async function withTab(extractFn, opts = {}) {
         await page.setRequestInterception(true);
         page.on('request', req => {
             const rt = req.resourceType();
-            if (['image', 'stylesheet', 'font'].includes(rt)) {
+            const shouldBlock = blockImages 
+                ? ['image', 'stylesheet', 'font'].includes(rt)
+                : ['stylesheet', 'font'].includes(rt);
+            if (shouldBlock) {
                 req.abort();
             } else {
                 req.continue();

@@ -1549,7 +1549,7 @@ async function scrapeProductPageViaBrowser(url) {
         }
         
         return pageData;
-    }, { timeout: 60000 });
+    }, { timeout: 60000, blockImages: false });
 }
 
 // Endpoint to upload manual images in Shopify Importer preview grid
