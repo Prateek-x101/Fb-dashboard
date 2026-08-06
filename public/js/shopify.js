@@ -1325,8 +1325,7 @@
                 const rawAccountId = currentAcc.accountId || currentAcc.id;
 
                 // Get pixels
-                const pixelsData = await window.API.getPixels(rawAccountId);
-                const pixels = pixelsData.data || [];
+                const pixels = await window.API.getPixels(rawAccountId) || [];
                 pixelSelect.innerHTML = '<option value="">-- Select Pixel --</option>';
                 pixels.forEach(p => {
                     const opt = document.createElement('option');
