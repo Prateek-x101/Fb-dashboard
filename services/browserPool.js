@@ -109,8 +109,15 @@ async function warmBrowser() {
     }
 }
 
+let idleTimeout = null;       // timeout handle for closing idle browser
+
 // Acquire a tab slot (may block if all 6 are busy)
 function acquireSlot() {
+    if (idleTimeout) {
+        clearTimeout(idleTimeout);
+        idleTimeout = null;
+    }
+
     if (activeTabCount < MAX_TABS) {
         activeTabCount++;
         return Promise.resolve();
@@ -126,6 +133,15 @@ function releaseSlot() {
         activeTabCount++;
         const next = waitQueue.shift();
         next();
+    } else if (activeTabCount === 0) {
+        // No active tabs. Auto-close browser after 60s idle to free RAM
+        if (idleTimeout) clearTimeout(idleTimeout);
+        idleTimeout = setTimeout(async () => {
+            if (browser && activeTabCount === 0) {
+                console.log('[BrowserPool] Idle timeout reached. Closing Chromium to free resources...');
+                await closeBrowser();
+            }
+        }, 60000);
     }
 }
 
@@ -191,8 +207,15 @@ async function withTab(extractFn, opts = {}) {
 
         return result;
     } finally {
-        // Always close the tab
         if (page) {
+            try {
+                // Clear browser cookies and cache to free up memory immediately
+                const client = await page.target().createCDPSession();
+                await client.send('Network.clearBrowserCookies').catch(() => {});
+                await client.send('Network.clearBrowserCache').catch(() => {});
+            } catch (e) {
+                console.warn('[BrowserPool] Failed to clear page cache:', e.message);
+            }
             try { await page.close(); } catch {}
         }
         releaseSlot();
