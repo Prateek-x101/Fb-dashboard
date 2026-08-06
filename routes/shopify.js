@@ -726,10 +726,10 @@ Here is a list of available product image URLs that you MUST insert into the des
 ${cleanedImages.map((img, i) => `- Image URL ${i + 1}: ${img}`).join('\n')}
 
 IMPORTANT IMAGE RULES:
-1. Position 2 to 4 of these image URLs at natural, high-converting places in the description HTML (e.g., one below the main headline/hook, one near specification lists, and one before the satisfaction guarantee).
-2. For each image, you MUST output this exact HTML markup:
+1. Position 1 to 4 of these image URLs (depending on how many are available in the list) at natural, high-converting places in the description HTML (e.g., one below the main headline/hook, one near specification lists, and one before the satisfaction guarantee).
+2. For each image you insert, you MUST output this exact HTML markup:
 <img src="IMAGE_URL" style="max-width: 100%; display: block; margin: 15px auto; border-radius: 8px;" />
-Replace IMAGE_URL with the exact URL from the list above. Do not modify or invent URLs.
+Replace IMAGE_URL with the exact URL from the list above. Do not modify, trim, or invent URLs.
 3. If the input HTML already contains <img> tags, prioritize keeping and styling them, but feel free to add more from the list if needed to make the description look extremely premium.`;
         }
 
@@ -737,21 +737,28 @@ Replace IMAGE_URL with the exact URL from the list above. Do not modify or inven
         if (action === 'enhance') {
             prompt = `You are a professional e-commerce copywriter. Enhance and polish the following product description HTML for the product "${productTitle || ''}". 
 Improve the copy, make it persuasive and professional, fix grammatical errors, and ensure it looks clean and attractive when rendered. 
-Do NOT completely rewrite the entire structure or discard key product details unless they are spammy or irrelevant.${imagesContext}
-Return ONLY the enhanced HTML code. Do not include any markdown block formatting (like \`\`\`html or \`\`\`), backticks, or introduction/explanation.`;
+Do NOT completely rewrite the entire structure or discard key product details unless they are spammy or irrelevant.
+${imagesContext}
+
+Output MUST be ONLY valid HTML code. Do not include any markdown block formatting (like \`\`\`html or \`\`\`), backticks, or explanation.`;
         } else if (action === 'recreate') {
             prompt = `You are a professional e-commerce copywriter. Recreate a brand-new, extremely high-converting and beautifully structured product description in HTML for the product "${productTitle || ''}".
 Use modern copywriting techniques (hook, problem, solution, benefit bullet points, specifications, and trust badges or satisfaction guarantee).
-Make it visually appealing with clean HTML formatting (use elements like <h3>, <p>, <ul>, <li>, and <strong>). Do not include any CSS styles or scripts.${imagesContext}
-The original description is:
-"${description}"
+Make it visually appealing with clean HTML formatting (use elements like <h3>, <p>, <ul>, <li>, and <strong>). Do not include any CSS styles or scripts.
 
-Return ONLY the recreated HTML code. Do not include any markdown block formatting (like \`\`\`html or \`\`\`), backticks, or introduction/explanation.`;
+The original description to rewrite is:
+"${description}"
+${imagesContext}
+
+Output MUST be ONLY valid HTML code. Do not include any markdown block formatting (like \`\`\`html or \`\`\`), backticks, or explanation.`;
         } else {
             return res.status(400).json({ error: 'Invalid action. Must be "enhance" or "recreate".' });
         }
 
-        const resultHtml = await geminiService.generateResponseText(geminiApiKey, geminiModel, `${prompt}\n\nInput HTML/Description:\n${description}`);
+        const systemInstructions = `You are a strict HTML generator. You must output raw HTML matching the instructions.
+CRITICAL: You MUST include the requested product image <img> tags in the generated HTML. Do not leave them out.`;
+
+        const resultHtml = await geminiService.generateResponseText(geminiApiKey, geminiModel, `${systemInstructions}\n\n${prompt}\n\nInput HTML/Description:\n${description}`);
         const cleanHtml = resultHtml.replace(/```html/g, '').replace(/```/g, '').trim();
 
         res.json({ success: true, description: cleanHtml });
