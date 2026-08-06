@@ -276,6 +276,21 @@
 
                         <div class="grid-2 mb-2">
                             <div class="form-group">
+                                <label>🌐 Languages targeting <span style="color:var(--text-secondary); font-weight:400;">(Optional - leave blank for All)</span></label>
+                                <div style="position:relative;">
+                                    <div class="form-control tags-input" id="language-tags" style="min-height:44px;flex-wrap:wrap;">
+                                        <input type="text" id="lang-search" placeholder="Search languages (e.g. English)..." style="background:transparent;border:none;color:white;outline:none;flex:1;min-width:120px;">
+                                    </div>
+                                    <div id="lang-dropdown" class="interest-dropdown" style="display:none; position:absolute; z-index:60; background:rgba(26,26,46,0.98); border:1px solid var(--glass-border); border-radius:8px; max-height:220px; overflow-y:auto; width:100%; top:100%; left:0;"></div>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <!-- empty placeholder to maintain grid alignment -->
+                            </div>
+                        </div>
+
+                        <div class="grid-2 mb-2">
+                            <div class="form-group">
                                 <label>✅ Include Custom Audiences
                                     <span id="custom-load-status" style="font-size:0.72rem; color:var(--text-secondary); margin-left:0.5rem;"></span>
                                 </label>

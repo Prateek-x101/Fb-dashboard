@@ -118,6 +118,33 @@
             wireLocationSearch('loc-include-search', 'location-include-tags', 'loc-include-dropdown');
             wireLocationSearch('loc-exclude-search', 'location-exclude-tags', 'loc-exclude-dropdown');
 
+            // Languages search helper (calls API to get locales matching text)
+            function wireLanguageSearch(inputId, tagsContainerId, dropdownId) {
+                const input = document.getElementById(inputId);
+                const dropdown = document.getElementById(dropdownId);
+                const container = document.getElementById(tagsContainerId);
+                if (!input || !dropdown || !container) return;
+
+                let timer = null;
+                input.addEventListener('input', () => {
+                    clearTimeout(timer);
+                    const q = input.value.trim();
+                    if (!q) { dropdown.style.display = 'none'; return; }
+                    timer = setTimeout(async () => {
+                        try {
+                            const results = await window.API.searchLanguages(q);
+                            self._renderLanguageDropdown(dropdown, container, input, results || []);
+                        } catch { dropdown.style.display = 'none'; }
+                    }, 400);
+                });
+                input.addEventListener('blur', () => { setTimeout(() => dropdown.style.display = 'none', 200); });
+                document.addEventListener('click', (e) => {
+                    if (!container.contains(e.target)) dropdown.style.display = 'none';
+                });
+            }
+
+            wireLanguageSearch('lang-search', 'language-tags', 'lang-dropdown');
+
             // Custom / Lookalike audience search helper (from cached API data)
             function wireAudienceSearch(inputId, tagsContainerId, dropdownId, audienceType) {
                 const input = document.getElementById(inputId);
@@ -170,6 +197,36 @@
             tag.setAttribute('data-value', r.name);
             const ico = { country: '🌍', region: '📍', city: '🏙️' }[r.type] || '📍';
             tag.innerHTML = `${r.name} ${ico} <span class="tag-remove" onclick="this.parentElement.remove()">✖</span>`;
+            container.insertBefore(tag, inputEl);
+            if (inputEl) inputEl.value = '';
+        },
+
+        _renderLanguageDropdown: function(dropdown, container, input, results) {
+            dropdown.innerHTML = '';
+            if (!results.length) { dropdown.style.display = 'none'; return; }
+            results.slice(0, 15).forEach(r => {
+                const item = document.createElement('div');
+                item.style.cssText = 'padding:0.6rem 1rem; cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.05); display:flex; gap:0.6rem; align-items:center;';
+                item.innerHTML = `<span style="margin-top:2px;">🗣️</span>
+                    <div><div style="font-weight:600;">${r.name}</div></div>`;
+                item.addEventListener('mouseenter', () => item.style.background = 'rgba(67,97,238,0.2)');
+                item.addEventListener('mouseleave', () => item.style.background = 'transparent');
+                item.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    this._addLanguageTag(container, input, r);
+                    dropdown.style.display = 'none';
+                });
+                dropdown.appendChild(item);
+            });
+            dropdown.style.display = 'block';
+        },
+
+        _addLanguageTag: function(container, inputEl, r) {
+            const tag = document.createElement('span');
+            tag.className = 'tag language-tag';
+            tag.setAttribute('data-key', r.key || r.id || '');
+            tag.setAttribute('data-value', r.name);
+            tag.innerHTML = `${r.name} 🗣️ <span class="tag-remove" onclick="this.parentElement.remove()">✖</span>`;
             container.insertBefore(tag, inputEl);
             if (inputEl) inputEl.value = '';
         },
@@ -517,6 +574,14 @@
                 const lookalikeExclude = [];
                 document.querySelectorAll('#lookalike-exclude-tags .audience-tag').forEach(t => lookalikeExclude.push(t.getAttribute('data-value')));
 
+                const globalLanguages = [];
+                document.querySelectorAll('#language-tags .language-tag').forEach(t => {
+                    globalLanguages.push({
+                        key: t.getAttribute('data-key'),
+                        name: t.getAttribute('data-value')
+                    });
+                });
+
                 // Per-card targeting (all types: interests, behaviors, demographics, job titles, etc.)
                 const audienceCards = document.querySelectorAll('.audience-card');
                 const audiences = [];
@@ -537,6 +602,7 @@
                         ageMin: globalAgeMin,
                         ageMax: globalAgeMax,
                         gender: globalGender,
+                        languages: globalLanguages,
                         customAudiencesInclude: customInclude,
                         customAudiencesExclude: customExclude,
                         lookalikeInclude,

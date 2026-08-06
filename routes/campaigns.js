@@ -219,6 +219,25 @@ router.get('/pixels/:accountId', async (req, res) => {
     }
 });
 
+router.get('/languages', async (req, res) => {
+    try {
+        const { q } = req.query;
+        let token = req.query.token;
+        if (!token) {
+            const storage = getStorage();
+            const first = (storage.accounts || [])[0];
+            if (first) token = first.accessToken;
+            if (!token && storage.settings?.facebookAccessToken) token = storage.settings.facebookAccessToken;
+        }
+        if (!q) return res.status(400).json({ error: 'Missing query' });
+        if (!token) return res.status(400).json({ error: 'No account token available' });
+        const result = await facebookService.searchLanguages(q, token);
+        res.json(result.data || []);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to search languages', details: error.message });
+    }
+});
+
 router.get('/interests', async (req, res) => {
     try {
         const { q } = req.query;
@@ -599,6 +618,9 @@ router.post('/create', async (req, res) => {
                     advantage_audience: enhancements.advantageAudience ? 1 : 0
                 }
             };
+            if (Array.isArray(audience.languages) && audience.languages.length > 0) {
+                targeting.locales = audience.languages.map(l => parseInt(l.key)).filter(Boolean);
+            }
             if (genders.length) targeting.genders = genders;
             if (Object.keys(excludedGeo).length > 0) targeting.excluded_geo_locations = excludedGeo;
             // Support new `targeting` array (mixed types) and legacy `interests` array
@@ -625,7 +647,7 @@ router.post('/create', async (req, res) => {
                     resolvedTargeting.forEach(item => {
                         const field = typeToField[item.type] || 'interests';
                         if (!flexSpec[field]) flexSpec[field] = [];
-                        flexSpec[field].push({ id: item.id, name: item.name });
+                        flexSpec[field].push({ id: item.id });
                     });
                     if (Object.keys(flexSpec).length > 0) targeting.flexible_spec = [flexSpec];
                 } catch (resolveErr) {

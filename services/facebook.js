@@ -372,6 +372,12 @@ const facebookService = {
         return handleResponse(response);
     },
 
+    async searchLanguages(query, token) {
+        const url = `${BASE_URL}/search?type=adlocale&q=${encodeURIComponent(query)}&access_token=${token}`;
+        const response = await fetch(url, { method: 'GET' });
+        return handleResponse(response);
+    },
+
     async getCustomAudiences(accountId, token) {
         const url = `${BASE_URL}/act_${accountId}/customaudiences?fields=id,name,subtype,approximate_count_lower_bound&limit=200&access_token=${token}`;
         const response = await fetch(url, { method: 'GET' });
