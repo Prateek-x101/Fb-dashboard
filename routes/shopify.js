@@ -1170,6 +1170,14 @@ router.post('/universal-import', videoUpload.array('files', 20), async (req, res
                     });
                 }
 
+                const previewProductObj = {
+                    title: analysis.title || '',
+                    description: analysis.description || '',
+                    images: imagesList,
+                    options: options
+                };
+                autoAppendSizeCharts(previewProductObj, storage);
+
                 return res.json({
                     success: true,
                     importMode: 'media',
@@ -1179,12 +1187,12 @@ router.post('/universal-import', videoUpload.array('files', 20), async (req, res
                         filename: path.basename(filePath)
                     })),
                     product: {
-                        title: analysis.title || '',
-                        description: analysis.description || '',
+                        title: previewProductObj.title,
+                        description: previewProductObj.description,
                         vendor: '',
                         type: '',
                         tags: analysis.tags || [],
-                        images: imagesList,
+                        images: previewProductObj.images,
                         options: options.length > 0 ? options : [{"name": "Title", "values": ["Default Title"]}],
                         variants
                     },
@@ -1238,16 +1246,24 @@ router.post('/universal-import', videoUpload.array('files', 20), async (req, res
                     } catch {}
                 }
 
+                const previewProductObj = {
+                    title: product.title || '',
+                    description: product.description || '',
+                    images: images || [],
+                    options: options
+                };
+                autoAppendSizeCharts(previewProductObj, storage);
+
                 return res.json({
                     success: true,
                     importMode: 'scrape',
                     product: {
-                        title: product.title,
-                        description: product.description,
+                        title: previewProductObj.title,
+                        description: previewProductObj.description,
                         vendor: product.vendor,
                         type: product.type,
                         tags: product.tags || [],
-                        images,
+                        images: previewProductObj.images,
                         options: options.length > 0 ? options : [{"name": "Title", "values": ["Default Title"]}],
                         variants
                     },
@@ -1310,16 +1326,24 @@ router.post('/universal-import', videoUpload.array('files', 20), async (req, res
                 } catch {}
             }
 
+            const previewProductObj = {
+                title: structuredProduct.title || pageData.title || 'Imported Product',
+                description: structuredProduct.description || '',
+                images: finalImages || [],
+                options: structuredProduct.options
+            };
+            autoAppendSizeCharts(previewProductObj, storage);
+
             return res.json({
                 success: true,
                 importMode: 'scrape',
                 product: {
-                    title: structuredProduct.title || pageData.title || 'Imported Product',
-                    description: structuredProduct.description || '',
+                    title: previewProductObj.title,
+                    description: previewProductObj.description,
                     vendor: structuredProduct.vendor || '',
                     type: structuredProduct.type || '',
                     tags: structuredProduct.tags || [],
-                    images: finalImages,
+                    images: previewProductObj.images,
                     options: structuredProduct.options && structuredProduct.options.length > 0 
                         ? structuredProduct.options 
                         : [{"name": "Title", "values": ["Default Option"]}],
@@ -1622,5 +1646,46 @@ router.post('/assign-variant-images', async (req, res) => {
         res.status(500).json({ error: 'Failed to assign images to variants', details: error.message });
     }
 });
+
+function autoAppendSizeCharts(product, storage) {
+    if (!product) return;
+    
+    // Check if fashion-related
+    let isFashion = false;
+    if (Array.isArray(product.options)) {
+        const hasSizeOption = product.options.some(opt => 
+            opt.name && /size|größe|taille|talla|beden|boyut/i.test(opt.name)
+        );
+        if (hasSizeOption) isFashion = true;
+    }
+    const fashionKeywords = /apparel|clothing|shirt|dress|pants|shoes|hoodies|jacket|underwear|socks|fashion|outerwear|t-shirt|top|bottom|jeans|sweater|sneakers|sandals|boots|garment|elbise|beden|renk|etek|kombin|pantolon|bluz|ceket|hirka|hırka|kazak/i;
+    if (product.type && fashionKeywords.test(product.type)) isFashion = true;
+    if (product.title && fashionKeywords.test(product.title)) isFashion = true;
+    if (Array.isArray(product.tags) && product.tags.some(t => fashionKeywords.test(t))) isFashion = true;
+    
+    if (isFashion && Array.isArray(storage.settings?.defaultSizeCharts) && storage.settings.defaultSizeCharts.length > 0) {
+        console.log(`[UniversalImport] Fashion listing detected. Appending ${storage.settings.defaultSizeCharts.length} default size chart image(s) to product preview.`);
+        
+        // 1. Add to images list if not present
+        if (!Array.isArray(product.images)) product.images = [];
+        storage.settings.defaultSizeCharts.forEach(scPath => {
+            if (!product.images.includes(scPath)) {
+                product.images.push(scPath);
+            }
+        });
+        
+        // 2. Append size chart HTML to the end of the description if not already present
+        let sizeChartHtml = '';
+        storage.settings.defaultSizeCharts.forEach(scPath => {
+            const scSrc = scPath.startsWith('//') ? 'https:' + scPath : scPath;
+            sizeChartHtml += `<p style="text-align: center;"><img src="${scSrc}" style="max-width: 100%; display: block; margin: 15px auto; border-radius: 8px;" /></p>`;
+        });
+        
+        const descLower = (product.description || '').toLowerCase();
+        if (sizeChartHtml && !descLower.includes('size-chart') && !descLower.includes('size_chart') && !descLower.includes('size chart') && !descLower.includes('beden tablosu')) {
+            product.description = (product.description || '') + `<br/><hr/><h3>📐 Beden Tablosu / Size Chart</h3>` + sizeChartHtml;
+        }
+    }
+}
 
 module.exports = router;

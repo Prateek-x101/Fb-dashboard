@@ -215,9 +215,16 @@
                     .shopify-image-wrapper:hover .shopify-image-delete-badge {
                         opacity: 1 !important;
                     }
+                    .shopify-image-wrapper:hover .shopify-image-insert-badge {
+                        opacity: 1 !important;
+                    }
                     .shopify-image-delete-badge:hover {
                         transform: scale(1.1);
                         background: #ef4444 !important;
+                    }
+                    .shopify-image-insert-badge:hover {
+                        transform: scale(1.1);
+                        background: #059669 !important;
                     }
                 `;
                 document.head.appendChild(style);
@@ -268,6 +275,11 @@
                         <div class="shopify-image-delete-badge" data-index="${idx}" data-src="${imgUrl}" style="position:absolute; top:4px; right:4px; width:18px; height:18px; border-radius:50%; background:rgba(220,38,38,0.95); color:white; display:flex; align-items:center; justify-content:center; font-size:10px; cursor:pointer; font-weight:bold; opacity:0; transition:all 0.2s ease-in-out; border:1px solid rgba(255,255,255,0.2); z-index:11;">
                             ✕
                         </div>
+
+                        <!-- Hover Insert Badge (Top Left) -->
+                        <div class="shopify-image-insert-badge" data-src="${src}" style="position:absolute; top:4px; left:4px; width:18px; height:18px; border-radius:50%; background:rgba(16,185,129,0.95); color:white; display:flex; align-items:center; justify-content:center; font-size:10px; cursor:pointer; font-weight:bold; opacity:0; transition:all 0.2s ease-in-out; border:1px solid rgba(255,255,255,0.2); z-index:11;" title="Insert into Description">
+                            ➕
+                        </div>
                     </div>
                     ${selectHtml}
                 `;
@@ -304,6 +316,18 @@
                         delete this.vtlVariantAssignments[targetUrl];
                         
                         this.renderImagesGrid();
+                    });
+                }
+
+                // Bind insert badge click
+                const insBadge = card.querySelector('.shopify-image-insert-badge');
+                if (insBadge) {
+                    insBadge.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const imgSource = insBadge.getAttribute('data-src');
+                        const imgHtml = `<img src="${imgSource}" style="max-width:100%; display:block; margin:10px auto; border-radius:6px;" />`;
+                        this.insertHtmlAtCursor(imgHtml);
+                        window.AppController.showToast('Image inserted into description! 📸', 'success');
                     });
                 }
             });
@@ -421,12 +445,100 @@
                             strong { color: #111827; }
                         </style>
                     </head>
-                    <body>
+                    <body contenteditable="true" style="outline: none;">
                         ${htmlContent}
                     </body>
                     </html>
                 `;
                 iframe.srcdoc = styledHtml;
+
+                // Bind sync on load to handle live editing inside the phone viewport!
+                iframe.onload = () => {
+                    try {
+                        const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+                        if (iframeDoc && iframeDoc.body) {
+                            const syncFromIframe = () => {
+                                const updatedHtml = iframeDoc.body.innerHTML;
+                                if (textarea.value !== updatedHtml) {
+                                    textarea.value = updatedHtml;
+                                }
+                            };
+                            
+                            iframeDoc.body.addEventListener('input', syncFromIframe);
+                            iframeDoc.body.addEventListener('keyup', syncFromIframe);
+                            iframeDoc.body.addEventListener('blur', syncFromIframe);
+                        }
+                    } catch (e) {
+                        console.warn('[IframeEdit] Could not bind sync events:', e.message);
+                    }
+                };
+            }
+        },
+
+        insertHtmlAtCursor: function(html) {
+            const iframe = document.getElementById('shopify-import-description-preview-iframe');
+            const textarea = document.getElementById('shopify-import-description');
+            if (!textarea) return;
+
+            // If textarea is visible (code mode)
+            if (textarea.style.display !== 'none') {
+                const start = textarea.selectionStart;
+                const end = textarea.selectionEnd;
+                const text = textarea.value;
+                textarea.value = text.substring(0, start) + html + text.substring(end);
+                textarea.dispatchEvent(new Event('input'));
+                textarea.focus();
+                textarea.setSelectionRange(start + html.length, start + html.length);
+            } else {
+                // If iframe is visible (preview/edit mode)
+                if (iframe) {
+                    const iframeWindow = iframe.contentWindow;
+                    const iframeDoc = iframe.contentDocument || iframeWindow?.document;
+                    if (iframeDoc) {
+                        iframeDoc.focus();
+                        
+                        // Try standard selection insert
+                        let inserted = false;
+                        if (iframeWindow.getSelection) {
+                            const sel = iframeWindow.getSelection();
+                            if (sel.getRangeAt && sel.rangeCount) {
+                                try {
+                                    const range = sel.getRangeAt(0);
+                                    range.deleteContents();
+                                    
+                                    // Create temporary container
+                                    const el = iframeDoc.createElement("div");
+                                    el.innerHTML = html;
+                                    
+                                    const frag = iframeDoc.createDocumentFragment();
+                                    let node, lastNode;
+                                    while ((node = el.firstChild)) {
+                                        lastNode = frag.appendChild(node);
+                                    }
+                                    range.insertNode(frag);
+                                    
+                                    if (lastNode) {
+                                        const newRange = range.cloneRange();
+                                        newRange.setStartAfter(lastNode);
+                                        newRange.collapse(true);
+                                        sel.removeAllRanges();
+                                        sel.addRange(newRange);
+                                    }
+                                    inserted = true;
+                                } catch (e) {
+                                    console.warn('Selection insertion failed, fallback to body append', e);
+                                }
+                            }
+                        }
+                        
+                        if (!inserted) {
+                            iframeDoc.body.innerHTML += html;
+                        }
+                        
+                        // Sync back to textarea
+                        textarea.value = iframeDoc.body.innerHTML;
+                    }
+                }
             }
         },
 
