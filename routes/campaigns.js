@@ -475,6 +475,12 @@ router.post('/create', async (req, res) => {
             progress.failedStep = 'media upload';
             progress.failedIndex = adIndex;
             progress.requestParams = { name: ad.name, media: ad.media };
+
+            // Verify if the local file exists on disk (crucial for Render ephemeral storage restarts)
+            if (ad.media && !fs.existsSync(ad.media)) {
+                throw new Error(`The media file for "${ad.name}" was removed because the server restarted. Please re-download or re-upload the video/image.`);
+            }
+
             let imageHash = null;
             let videoId = null;
             let videoThumbnailUrl = null;
