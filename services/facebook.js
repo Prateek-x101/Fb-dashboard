@@ -121,7 +121,7 @@ const facebookService = {
         const initUrl = `https://graph.facebook.com/v25.0/act_${accountId}/advideos`;
         const initParams = new URLSearchParams({
             access_token: token,
-            upload_phase: 'initialize',
+            upload_phase: 'start',
             file_size: String(fileSize)
         });
 
