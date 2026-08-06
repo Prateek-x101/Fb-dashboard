@@ -263,7 +263,9 @@
                 this.updateDashboardStats();
                 
                 if (window.APP.accounts.length > 0) {
-                    window.APP.activeAccount = window.APP.accounts[0];
+                    const savedActiveId = localStorage.getItem('activeFacebookAccountId');
+                    const matchedAcc = window.APP.accounts.find(a => a.id == savedActiveId);
+                    window.APP.activeAccount = matchedAcc || window.APP.accounts[0];
                     const accountSelector = document.getElementById('sidebar-account-select');
                     if (accountSelector) {
                         accountSelector.value = window.APP.activeAccount.id;
@@ -285,6 +287,7 @@
                     const account = window.APP.accounts.find(a => a.id == selectedId);
                     if (account) {
                         window.APP.activeAccount = account;
+                        localStorage.setItem('activeFacebookAccountId', account.id); // Save active selection
                         this.showToast(`Switched to ${account.name || account.label || selectedId}`, 'info');
                         document.dispatchEvent(new CustomEvent('accountChanged', { detail: account }));
                         this.loadRecentCampaigns();

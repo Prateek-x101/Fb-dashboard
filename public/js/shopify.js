@@ -178,6 +178,22 @@
             if (!imagesContainer) return;
             imagesContainer.innerHTML = '';
             
+            // Inject hover style if not exists
+            if (!document.getElementById('shopify-image-hover-styles')) {
+                const style = document.createElement('style');
+                style.id = 'shopify-image-hover-styles';
+                style.textContent = `
+                    .shopify-image-wrapper:hover .shopify-image-delete-badge {
+                        opacity: 1 !important;
+                    }
+                    .shopify-image-delete-badge:hover {
+                        transform: scale(1.1);
+                        background: #ef4444 !important;
+                    }
+                `;
+                document.head.appendChild(style);
+            }
+            
             const images = this.scrapedProduct ? (this.scrapedProduct.images || []) : [];
             const options = this.scrapedProduct ? (this.scrapedProduct.options || []) : [];
             
@@ -215,9 +231,14 @@
                 }
                 
                 card.innerHTML = `
-                    <div style="width:90px; height:90px; border:1px solid var(--glass-border); border-radius:6px; overflow:hidden; background:rgba(0,0,0,0.2); position:relative;">
+                    <div class="shopify-image-wrapper" style="width:90px; height:90px; border:1px solid var(--glass-border); border-radius:6px; overflow:hidden; background:rgba(0,0,0,0.2); position:relative;">
                         <img src="${src}" style="width:100%; height:100%; object-fit:cover;">
                         ${assignedVal ? `<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(124,58,237,0.85);color:white;font-size:0.6rem;text-align:center;padding:2px;font-weight:600;">${this.escapeHtml(assignedVal)}</div>` : ''}
+                        
+                        <!-- Hover Delete Badge -->
+                        <div class="shopify-image-delete-badge" data-index="${idx}" data-src="${imgUrl}" style="position:absolute; top:4px; right:4px; width:18px; height:18px; border-radius:50%; background:rgba(220,38,38,0.95); color:white; display:flex; align-items:center; justify-content:center; font-size:10px; cursor:pointer; font-weight:bold; opacity:0; transition:all 0.2s ease-in-out; border:1px solid rgba(255,255,255,0.2); z-index:11;">
+                            ✕
+                        </div>
                     </div>
                     ${selectHtml}
                 `;
@@ -233,6 +254,26 @@
                         this.vtlVariantAssignments[filename] = selectedVal;
                         this.vtlVariantAssignments[imgUrl] = selectedVal;
                         // Re-render grid to update overlays on images
+                        this.renderImagesGrid();
+                    });
+                }
+                
+                // Bind delete badge click
+                const delBadge = card.querySelector('.shopify-image-delete-badge');
+                if (delBadge) {
+                    delBadge.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const imgIndex = parseInt(delBadge.getAttribute('data-index'));
+                        const targetUrl = delBadge.getAttribute('data-src');
+                        
+                        if (this.scrapedProduct && Array.isArray(this.scrapedProduct.images)) {
+                            this.scrapedProduct.images.splice(imgIndex, 1);
+                        }
+                        
+                        const file = targetUrl.startsWith('/uploads/') ? targetUrl.replace(/^\/uploads\//, '') : targetUrl;
+                        delete this.vtlVariantAssignments[file];
+                        delete this.vtlVariantAssignments[targetUrl];
+                        
                         this.renderImagesGrid();
                     });
                 }

@@ -760,6 +760,21 @@
                 </div>
             </div>
 
+            <!-- Default Size Chart Configurations -->
+            <div class="glass-card mt-3" style="border-color:rgba(124,58,237,0.25);">
+                <h3 class="mb-1" style="color:white; font-size:1.1rem; display:flex; align-items:center; gap:8px;">👕 Default Size Charts <span style="font-size:0.75rem; background:rgba(124,58,237,0.2); color:#a78bfa; padding:2px 6px; border-radius:4px;">Fashion Items</span></h3>
+                <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:1rem;">
+                    Upload up to 3 size chart images. They will be automatically appended to product images if a fashion listing (clothing, shoes, size-related apparel) is imported.
+                </p>
+                <div class="form-group mb-2">
+                    <label>Upload Size Chart Images (Select up to 3)</label>
+                    <input type="file" class="form-control" id="setting-size-charts-files" multiple accept="image/*" style="background:rgba(0,0,0,0.3); border-color:var(--glass-border);">
+                </div>
+                <div id="setting-size-charts-preview" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; min-height:40px; align-items:center;">
+                    <span style="color:var(--text-secondary); font-size:0.78rem;">No size chart images uploaded yet.</span>
+                </div>
+            </div>
+
             <div class="mt-3" style="text-align:right;">
                 <button class="btn btn-primary" id="btn-save-settings">💾 Save All Settings</button>
             </div>

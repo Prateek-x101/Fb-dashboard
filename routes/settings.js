@@ -126,4 +126,29 @@ router.delete('/saved-audiences/:id', (req, res) => {
     }
 });
 
+const multer = require('multer');
+const sizeChartsUpload = multer({
+    dest: path.join(__dirname, '..', 'uploads'),
+    limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+});
+
+router.post('/upload-size-charts', sizeChartsUpload.array('files', 3), (req, res) => {
+    try {
+        const files = req.files || [];
+        const paths = [];
+        
+        for (const file of files) {
+            const extension = path.extname(file.originalname) || '.jpg';
+            const safeName = `sizechart-${uuidv4()}${extension.toLowerCase()}`;
+            const destPath = path.join(__dirname, '..', 'uploads', safeName);
+            fs.renameSync(file.path, destPath);
+            paths.push('/uploads/' + safeName);
+        }
+        
+        res.json({ success: true, paths });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to upload size charts', details: error.message });
+    }
+});
+
 module.exports = router;

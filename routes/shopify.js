@@ -488,6 +488,29 @@ router.post('/import', async (req, res) => {
             };
         });
 
+        // Check if the listing is fashion-related to append size chart
+        let isFashion = false;
+        if (Array.isArray(product.options)) {
+            const hasSizeOption = product.options.some(opt => 
+                opt.name && /size|größe|taille|talla/i.test(opt.name)
+            );
+            if (hasSizeOption) isFashion = true;
+        }
+        const fashionKeywords = /apparel|clothing|shirt|dress|pants|shoes|hoodies|jacket|underwear|socks|fashion|outerwear|t-shirt|top|bottom|jeans|sweater|sneakers|sandals|boots|garment/i;
+        if (product.type && fashionKeywords.test(product.type)) isFashion = true;
+        if (product.title && fashionKeywords.test(product.title)) isFashion = true;
+        if (Array.isArray(product.tags) && product.tags.some(t => fashionKeywords.test(t))) isFashion = true;
+
+        if (isFashion && Array.isArray(storage.settings?.defaultSizeCharts) && storage.settings.defaultSizeCharts.length > 0) {
+            console.log(`[ShopifyImport] Fashion listing detected. Appending ${storage.settings.defaultSizeCharts.length} default size chart image(s).`);
+            if (!Array.isArray(product.images)) product.images = [];
+            storage.settings.defaultSizeCharts.forEach(scPath => {
+                if (!product.images.includes(scPath)) {
+                    product.images.push(scPath);
+                }
+            });
+        }
+
         // Formulate images (append https: if start with //)
         // Formulate images: support external URLs and local /uploads/ files (send as base64 attachment)
         const images = (product.images || []).map((imgUrl, idx) => {

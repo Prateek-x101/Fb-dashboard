@@ -2,6 +2,7 @@
 (function() {
     const SettingsManager = {
         init: function() {
+            this.sizeChartFiles = [];
             this.bindEvents();
             this.wireDefaultExcludeSearch();
             this.bindPostMessageListener();
@@ -198,6 +199,40 @@
             if (btnAddShopify) {
                 btnAddShopify.addEventListener('click', () => this.saveShopifyStore());
             }
+
+            // Size charts file uploader
+            const sizeChartsInput = document.getElementById('setting-size-charts-files');
+            if (sizeChartsInput) {
+                sizeChartsInput.addEventListener('change', async (e) => {
+                    const files = e.target.files;
+                    if (!files.length) return;
+
+                    const formData = new FormData();
+                    for (let i = 0; i < Math.min(3, files.length); i++) {
+                        formData.append('files', files[i]);
+                    }
+
+                    try {
+                        window.AppController.showToast('Uploading size chart images... 📥', 'info');
+                        const response = await fetch('/api/settings/upload-size-charts', {
+                            method: 'POST',
+                            body: formData
+                        });
+                        const result = await response.json();
+                        if (!response.ok) throw new Error(result.error || 'Upload failed');
+
+                        // Append new uploads up to 3 total
+                        this.sizeChartFiles = [...(this.sizeChartFiles || []), ...(result.paths || [])].slice(0, 3);
+                        this.renderSizeChartsPreview();
+                        window.AppController.showToast('Size charts uploaded successfully! 👕✅', 'success');
+                        
+                        // Clear input
+                        sizeChartsInput.value = '';
+                    } catch (err) {
+                        window.AppController.showToast('Failed to upload size charts: ' + err.message, 'error');
+                    }
+                });
+            }
         },
 
         // Wire location search for the "Default Excluded Locations" field in Settings
@@ -279,6 +314,35 @@
             });
         },
 
+        renderSizeChartsPreview: function() {
+            const container = document.getElementById('setting-size-charts-preview');
+            if (!container) return;
+            container.innerHTML = '';
+            
+            if (!this.sizeChartFiles || this.sizeChartFiles.length === 0) {
+                container.innerHTML = '<span style="color:var(--text-secondary); font-size:0.78rem;">No size chart images uploaded yet.</span>';
+                return;
+            }
+            
+            this.sizeChartFiles.forEach((path, idx) => {
+                const wrapper = document.createElement('div');
+                wrapper.style.cssText = 'position:relative; width:80px; height:80px; border-radius:6px; border:1px solid var(--glass-border); overflow:hidden; background:rgba(0,0,0,0.2);';
+                wrapper.innerHTML = `
+                    <img src="${path}" style="width:100%; height:100%; object-fit:cover;">
+                    <div class="delete-size-chart-badge" data-index="${idx}" style="position:absolute; top:2px; right:2px; width:16px; height:16px; border-radius:50%; background:rgba(239,68,68,0.9); color:white; font-size:9px; font-weight:bold; display:flex; align-items:center; justify-content:center; cursor:pointer; border:1px solid rgba(255,255,255,0.2); z-index:12;">✕</div>
+                `;
+                container.appendChild(wrapper);
+                
+                // Bind delete event
+                wrapper.querySelector('.delete-size-chart-badge').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const index = parseInt(e.target.getAttribute('data-index'));
+                    this.sizeChartFiles.splice(index, 1);
+                    this.renderSizeChartsPreview();
+                });
+            });
+        },
+
         loadSettings: async function() {
             try {
                 const settings = await window.API.getSettings();
@@ -300,6 +364,10 @@
                 if (settings.defaultExcludedLocations) {
                     this.renderDefaultExcludedTags(settings.defaultExcludedLocations);
                 }
+
+                // Load default size charts
+                this.sizeChartFiles = settings.defaultSizeCharts || [];
+                this.renderSizeChartsPreview();
             } catch (error) {
                 console.log("Settings not configured yet");
             }
@@ -326,7 +394,8 @@
                     facebookAccessToken: document.getElementById('setting-fb-token')?.value || '',
                     geminiApiKey: document.getElementById('setting-gemini-key')?.value || '',
                     geminiModel: document.getElementById('setting-gemini-model')?.value || 'gemini-1.5-flash',
-                    defaultExcludedLocations
+                    defaultExcludedLocations,
+                    defaultSizeCharts: this.sizeChartFiles || []
                 };
 
                 await window.API.saveSettings(data);
@@ -510,6 +579,7 @@
                 const accountsData = await window.API.getAccounts();
                 window.APP.accounts = accountsData || [];
                 this.accounts = accountsData || [];
+                localStorage.setItem('fb_dashboard_accounts', JSON.stringify(window.APP.accounts));
                 this.renderAccounts();
                 window.AppController.updateAccountSelector();
                 window.AppController.updateDashboardStats();
@@ -726,6 +796,7 @@
                     window.AppController.showToast(`Instagram linked: @${ig.username || ig.name || ig.id} ✅`, 'success');
                     const accountsData = await window.API.getAccounts();
                     window.APP.accounts = accountsData || [];
+                    localStorage.setItem('fb_dashboard_accounts', JSON.stringify(window.APP.accounts));
                     this.renderAccounts();
                 } else {
                     window.AppController.showToast(result.message || 'No Instagram Business account found', 'warning');
@@ -780,6 +851,7 @@
                 // Refresh accounts
                 const accountsData = await window.API.getAccounts();
                 window.APP.accounts = accountsData || [];
+                localStorage.setItem('fb_dashboard_accounts', JSON.stringify(window.APP.accounts));
                 this.renderAccounts();
                 window.AppController.updateAccountSelector();
                 window.AppController.updateDashboardStats();
@@ -878,6 +950,7 @@
                     // Refresh
                     const accountsData = await window.API.getAccounts();
                     window.APP.accounts = accountsData || [];
+                    localStorage.setItem('fb_dashboard_accounts', JSON.stringify(window.APP.accounts));
                     this.renderAccounts();
                     window.AppController.updateAccountSelector();
                     window.AppController.updateDashboardStats();
