@@ -139,7 +139,14 @@
             if (btnUrlDownload && urlListContainer) {
                 btnUrlDownload.addEventListener('click', async () => {
                     const inputs = urlListContainer.querySelectorAll('.shopify-video-url-input');
-                    const urls = Array.from(inputs).map(inp => inp.value.trim()).filter(Boolean);
+                    let urls = [];
+                    inputs.forEach(inp => {
+                        const val = inp.value.trim();
+                        if (val) {
+                            const parts = val.split(/[\s,\n\r]+/).map(p => p.trim()).filter(Boolean);
+                            urls.push(...parts);
+                        }
+                    });
 
                     if (!urls.length) {
                         window.AppController.showToast('Please paste at least one video URL.', 'warning');
