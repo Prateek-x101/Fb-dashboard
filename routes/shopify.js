@@ -1493,19 +1493,38 @@ async function scrapeProductPageViaBrowser(url) {
             };
         });
 
-        // Crawl up to 4 other variants sequentially using the same Puppeteer tab (bypasses Cloudflare & avoids OOM)
+        // Crawl up to 4 other variants sequentially using clean sub-tabs (bypasses Cloudflare & prevents OOM)
         const otherVariantUrls = variantUrls.filter(vUrl => vUrl !== url).slice(0, 4);
         if (otherVariantUrls.length > 0) {
             console.log(`[UniversalScrape] Sibling variants detected: ${otherVariantUrls.length}. Extracting variant images sequentially...`);
             
             for (const vUrl of otherVariantUrls) {
+                let siblingPage = null;
                 try {
-                    console.log(`[UniversalScrape] Sequential navigation to: ${vUrl}`);
-                    await page.goto(vUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
-                    // Wait 1.5 seconds for React/hydration scripts to run and populate media paths
-                    await new Promise(r => setTimeout(r, 1500));
+                    console.log(`[UniversalScrape] Crawling sibling variant: ${vUrl}`);
+                    siblingPage = await page.browser().newPage();
                     
-                    const variantImages = await page.evaluate(() => {
+                    // Enable request interception and block images/media/stylesheets/fonts to save Render memory
+                    await siblingPage.setRequestInterception(true);
+                    siblingPage.on('request', (req) => {
+                        const rt = req.resourceType();
+                        if (['image', 'stylesheet', 'font', 'media'].includes(rt)) {
+                            req.abort().catch(() => {});
+                        } else {
+                            req.continue().catch(() => {});
+                        }
+                    });
+                    
+                    await siblingPage.setUserAgent(
+                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+                    );
+                    
+                    // domcontentloaded is fast and uses minimal RAM
+                    await siblingPage.goto(vUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+                    // Wait for React hydration scripts to update dynamic image elements
+                    await new Promise(r => setTimeout(r, 1200));
+                    
+                    const variantImages = await siblingPage.evaluate(() => {
                         const urls = [];
                         document.querySelectorAll('.product-image img, .gallery img, .main-image img, #main-image img, img.product-gallery-image, img[class*="product-img"], .thumb-list img, .swiper-slide img, .slick-slide img, .carousel img, .slider img, img[class*="gallery"], img[class*="image"], img[class*="product"], img[class*="thumb"]').forEach(img => {
                             let src = img.getAttribute('srcset') || img.getAttribute('srcSet') || img.getAttribute('data-src') || img.src;
@@ -1538,14 +1557,23 @@ async function scrapeProductPageViaBrowser(url) {
                         pageData.images.push(...variantImages);
                     }
                 } catch (e) {
-                    console.error(`[UniversalScrape] Sequential crawl failed for variant URL ${vUrl}:`, e.message);
+                    console.error(`[UniversalScrape] Sibling crawl failed for variant URL ${vUrl}:`, e.message);
+                } finally {
+                    if (siblingPage) {
+                        try {
+                            const client = await siblingPage.target().createCDPSession();
+                            await client.send('Network.clearBrowserCookies').catch(() => {});
+                            await client.send('Network.clearBrowserCache').catch(() => {});
+                        } catch {}
+                        await siblingPage.close().catch(() => {});
+                    }
                 }
             }
             pageData.images = [...new Set(pageData.images)].slice(0, 50); // Cap at 50 images total
         }
         
         return pageData;
-    }, { timeout: 60000, blockImages: false });
+    }, { timeout: 60000, blockImages: true });
 }
 
 // Endpoint to upload manual images in Shopify Importer preview grid
