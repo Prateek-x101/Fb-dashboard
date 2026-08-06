@@ -102,15 +102,19 @@ function parseIsoDate(dateString) {
 router.get('/account-features/:accountId', async (req, res) => {
     try {
         const { accountId } = req.params;
+        const cleanId = accountId.replace('act_', '');
         const storage = getStorage();
-        const account = (storage.accounts || []).find(a => a.accountId === accountId);
+        const account = (storage.accounts || []).find(a => {
+            const aClean = (a.accountId || '').replace('act_', '');
+            return aClean === cleanId;
+        });
         let token = account?.accessToken || storage.settings?.facebookAccessToken;
         if (!token) return res.status(400).json({ error: 'No token for this account' });
 
         // Fetch account capabilities and check for product catalogs in parallel
         const [capRes, catRes] = await Promise.all([
-            fetch(`https://graph.facebook.com/v25.0/act_${accountId}?fields=capabilities,disable_reason&access_token=${token}`),
-            fetch(`https://graph.facebook.com/v25.0/act_${accountId}/product_catalogs?fields=id&limit=1&access_token=${token}`)
+            fetch(`https://graph.facebook.com/v25.0/act_${cleanId}?fields=capabilities,disable_reason&access_token=${token}`),
+            fetch(`https://graph.facebook.com/v25.0/act_${cleanId}/product_catalogs?fields=id&limit=1&access_token=${token}`)
         ]);
 
         let capabilities = [];
@@ -170,15 +174,19 @@ router.get('/locations', async (req, res) => {
 router.get('/custom-audiences/:accountId', async (req, res) => {
     try {
         const { accountId } = req.params;
+        const cleanId = accountId.replace('act_', '');
         let token = req.query.token;
         if (!token) {
             const storage = getStorage();
-            const account = (storage.accounts || []).find(a => a.accountId === accountId);
+            const account = (storage.accounts || []).find(a => {
+                const aClean = (a.accountId || '').replace('act_', '');
+                return aClean === cleanId;
+            });
             if (account) token = account.accessToken;
             if (!token && storage.settings?.facebookAccessToken) token = storage.settings.facebookAccessToken;
         }
         if (!token) return res.status(400).json({ error: 'Missing token' });
-        const result = await facebookService.getCustomAudiences(accountId, token);
+        const result = await facebookService.getCustomAudiences(cleanId, token);
         res.json(result.data || []);
     } catch (error) {
         res.status(500).json({ error: 'Failed to get custom audiences', details: error.message });
@@ -188,19 +196,23 @@ router.get('/custom-audiences/:accountId', async (req, res) => {
 router.get('/pixels/:accountId', async (req, res) => {
     try {
         const { accountId } = req.params;
+        const cleanId = accountId.replace('act_', '');
         let token = req.query.token;
 
         // Auto-lookup token from storage when not provided
         if (!token) {
             const storage = getStorage();
-            const account = (storage.accounts || []).find(a => a.accountId === accountId);
+            const account = (storage.accounts || []).find(a => {
+                const aClean = (a.accountId || '').replace('act_', '');
+                return aClean === cleanId;
+            });
             if (account) token = account.accessToken;
             if (!token && storage.settings?.facebookAccessToken) token = storage.settings.facebookAccessToken;
         }
 
         if (!token) return res.status(400).json({ error: 'Missing token' });
 
-        const result = await facebookService.getPixels(accountId, token);
+        const result = await facebookService.getPixels(cleanId, token);
         res.json(result.data || []);
     } catch (error) {
         res.status(500).json({ error: 'Failed to get pixels', details: error.message });
