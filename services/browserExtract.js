@@ -3,29 +3,27 @@
  * Uses headless Chromium (via browserPool) to render pages and intercept video URLs
  * from network traffic — exactly like DevTools Network tab.
  * 
- * Optimized for maximum speed:
- * - Translates Instagram and Facebook links to public embed links to bypass login walls.
- * - Parses page scripts recursively to extract raw mp4/m3u8 CDN links before playback starts.
- * - Races navigation/interactions with the network intercept, resolving INSTANTLY the moment a video URL is seen.
+ * Ported target-centric extraction logic from pupperter-viewer to ensure we download
+ * the exact requested Meta Ads Library / Instagram video, rather than related/neighbor ads.
  */
 
 const { withTab } = require('./browserPool');
+const fs = require('fs');
+const path = require('path');
 
 // Safe delay helper
 const delay = ms => new Promise(r => setTimeout(r, ms));
 
-// Simple in-memory cache to prevent concurrent/duplicate extraction requests for the same media
+// Simple in-memory cache to prevent concurrent/duplicate extraction requests
 const extractionCache = new Map();
 
 function getCacheKey(url) {
     try {
         const u = new URL(url);
-        // For Facebook Ads Library, the ad ID is the unique key
         if (/facebook\.com\/ads\/library/i.test(url)) {
             const id = u.searchParams.get('id');
             if (id) return `fb_${id}`;
         }
-        // For Instagram/Pinterest, clean the URL (strip query parameters)
         if (/instagram\.com/i.test(url) || /pinterest\.(com|co)/i.test(url) || /pin\.it/i.test(url)) {
             return `${u.origin}${u.pathname}`;
         }
@@ -65,10 +63,19 @@ function decodeJsonEncodedUrls(text) {
 }
 
 function walkForVideoUrls(value) {
-    const found = [];
+    const found = new Map(); // url -> isHD
     const stack = [{ v: value, k: null }];
     let visited = 0;
-    const MAX_NODES = 20000;
+    const MAX_NODES = 40000;
+
+    const add = (url, hd) => {
+        const prev = found.get(url);
+        if (prev === undefined) {
+            found.set(url, hd);
+        } else if (hd && !prev) {
+            found.set(url, true);
+        }
+    };
 
     while (stack.length > 0 && visited < MAX_NODES) {
         const node = stack.pop();
@@ -79,12 +86,13 @@ function walkForVideoUrls(value) {
 
         if (typeof v === "string") {
             const looksLikeMediaKey = k != null && VIDEO_KEY_REGEX.test(k);
+            const isHdKey = k != null && HD_KEY_REGEX.test(k);
             if (looksLikeMediaKey && /^https?:\/\//i.test(v)) {
-                found.push(v);
+                add(v, isHdKey);
             }
             const matches = v.match(URL_REGEX_GLOBAL);
             if (matches) {
-                for (const m of matches) found.push(m);
+                for (const m of matches) add(m, isHdKey);
             }
             continue;
         }
@@ -100,82 +108,170 @@ function walkForVideoUrls(value) {
             }
         }
     }
-    return [...new Set(found)];
+    return Array.from(found.entries()).map(([url, isHD]) => ({ url, isHD }));
 }
+
+function extractHdSdFromText(text) {
+    const out = [];
+    const seen = new Map();
+
+    const HD_KEY_PATTERN = /["']?(?:browser_native_hd_url|video_hd_url|playable_url_quality_hd|hd_src|hd_url)["']?\s*[:=]\s*["']([^"']+\.(?:mp4|m3u8|mpd)[^"']*)["']/gi;
+    const SD_KEY_PATTERN = /["']?(?:browser_native_sd_url|video_sd_url|playable_url|sd_src|sd_url)["']?\s*[:=]\s*["']([^"']+\.(?:mp4|m3u8|mpd)[^"']*)["']/gi;
+
+    const collect = (regex, isHD) => {
+        let m;
+        while ((m = regex.exec(text)) !== null) {
+            const url = m[1];
+            if (!url) continue;
+            const prev = seen.get(url);
+            if (prev === undefined) {
+                seen.set(url, isHD);
+            } else if (isHD && !prev) {
+                seen.set(url, true);
+            }
+        }
+    };
+
+    collect(HD_KEY_PATTERN, true);
+    collect(SD_KEY_PATTERN, false);
+
+    for (const [url, isHD] of seen.entries()) {
+        out.push({ url, isHD });
+    }
+    return out;
+}
+
+function extractTargetId(url) {
+    try {
+        const u = new URL(url);
+        const queryId = u.searchParams.get("id") || u.searchParams.get("v");
+        if (queryId && /^\d{6,}$/.test(queryId)) return queryId;
+
+        const pathSegment = u.pathname;
+        const matches = [
+            /\/videos?\/(\d{6,})/i,
+            /\/reels?\/([A-Za-z0-9_-]+)/i,
+            /\/pin\/(\d{6,})/i,
+            /\/watch\/?\?v=(\d{6,})/i,
+        ];
+        for (const re of matches) {
+            const m = pathSegment.match(re);
+            if (m && m[1]) return m[1];
+        }
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+function extractCdnVideoIdHint(url) {
+    const m = url.match(/(\d{10,})/);
+    return m && m[1] ? m[1] : null;
+}
+
+const COLLECT_VIDEO_ELEMENTS_FN = `
+(() => {
+  const out = [];
+  document.querySelectorAll('video').forEach((v) => {
+    try {
+      const rect = v.getBoundingClientRect();
+      const area = Math.max(0, rect.width) * Math.max(0, rect.height);
+      const top = rect.top + (window.scrollY || 0);
+      const poster = v.getAttribute('poster') || null;
+      const cs = v.currentSrc || '';
+      const s = v.getAttribute('src') || '';
+      if (cs) out.push({ url: cs, poster, area, top });
+      if (s && s !== cs) out.push({ url: s, poster, area, top });
+      v.querySelectorAll('source').forEach((src) => {
+        const u = src.getAttribute('src') || src.src || '';
+        if (u) out.push({ url: u, poster, area, top });
+      });
+    } catch (_e) {}
+  });
+  const filtered = out.filter((v) => (v.area || 0) >= 10000);
+  const final = filtered.length > 0 ? filtered : out;
+  final.sort((a, b) => {
+    if (Math.abs((a.top || 0) - (b.top || 0)) > 80) {
+      return (a.top || 0) - (b.top || 0);
+    }
+    return (b.area || 0) - (a.area || 0);
+  });
+  return final;
+})();
+`;
+
+const COLLECT_JSON_BLOBS_FN = `
+(() => {
+  const blobs = [];
+  for (const key of ['__INITIAL_STATE__', '__INITIAL_DATA__', '_sharedData', '__APOLLO_STATE__', '__NEXT_DATA__']) {
+    try {
+      const val = window[key];
+      if (val) blobs.push({ key, value: val });
+    } catch (_e) {}
+  }
+  document.querySelectorAll('script').forEach((s) => {
+    const txt = s.textContent || '';
+    if (!txt) return;
+    if (s.type === 'application/json' || s.type === 'application/ld+json') {
+      try { blobs.push({ key: 'json:' + (s.id || 'inline'), value: JSON.parse(txt) }); } catch (_e) {}
+    } else if (txt.includes('video_url') || txt.includes('playable_url') || txt.includes('.mp4')) {
+      blobs.push({ key: 'inline-script', value: txt });
+    }
+  });
+  return blobs;
+})();
+`;
 
 async function extractVideoUrl(targetUrl) {
     const cacheKey = getCacheKey(targetUrl);
-    
-    // If there is an active or completed extraction for this key, return it
     if (extractionCache.has(cacheKey)) {
         console.log(`[BrowserExtract] Cache hit for: ${cacheKey}. Reusing extraction.`);
         return extractionCache.get(cacheKey);
     }
     
-    const extractionPromise = (async () => {
-        return performExtraction(targetUrl);
-    })();
-    
-    // Save to cache
+    const extractionPromise = performExtraction(targetUrl);
     extractionCache.set(cacheKey, extractionPromise);
-    
-    // If extraction fails, remove it from cache so the user can retry later
-    extractionPromise.catch(() => {
-        extractionCache.delete(cacheKey);
-    });
-    
+    extractionPromise.catch(() => extractionCache.delete(cacheKey));
     return extractionPromise;
 }
 
 async function performExtraction(targetUrl) {
     return withTab(async (page) => {
         const navigationUrl = transformExtractionUrl(targetUrl);
-        console.log(`[BrowserExtract] Target: ${targetUrl} -> Navigating: ${navigationUrl}`);
+        const targetId = extractTargetId(targetUrl);
+        const isFbAdsLibrary = /facebook\.com\/ads\/library/i.test(targetUrl);
         
-        let resolved = false;
-        let resolveFn = null;
-        let rejectFn = null;
+        console.log(`[BrowserExtract] Target ID: ${targetId} | Navigating: ${navigationUrl}`);
         
-        const videoPromise = new Promise((resolve, reject) => {
-            resolveFn = resolve;
-            rejectFn = reject;
-        });
-
         const startTime = Date.now();
-
-        // Helper to resolve early and clean up
-        const finish = (url, method) => {
-            if (!resolved) {
-                resolved = true;
-                console.log(`[BrowserExtract] SUCCESS! Found video via ${method} in ${((Date.now() - startTime) / 1000).toFixed(1)}s: ${url.slice(0, 80)}...`);
-                resolveFn(url);
-            }
-        };
-
+        const networkVideos = new Map();
         const jsonBodyPromises = [];
 
-        // Response Interception - catches the raw media/CDN URL as it streams
-        page.on('response', async (response) => {
-            if (resolved) return;
+        // LAYER 1 — Network response interception
+        page.on('response', (response) => {
             try {
-                const url = response.url();
-                const contentType = response.headers()['content-type'] || '';
+                const respUrl = response.url();
+                const ct = response.headers()['content-type'] || '';
                 
-                // 1. Check if direct media url matching video types
-                const isVideo = contentType.includes('video') ||
-                                /\.mp4(\?|$)/i.test(url) ||
-                                /fbcdn\.net\/v\//i.test(url) ||
-                                /cdninstagram\.com.*\/v\//i.test(url) ||
-                                /scontent.*cdninstagram/i.test(url) ||
-                                /pinimg\.com.*\.mp4/i.test(url);
+                const isVideo = ct.includes('video') ||
+                                /\.mp4(\?|$)/i.test(respUrl) ||
+                                /fbcdn\.net\/v\//i.test(respUrl) ||
+                                /cdninstagram\.com.*\/v\//i.test(respUrl) ||
+                                /scontent.*cdninstagram/i.test(respUrl) ||
+                                /pinimg\.com.*\.mp4/i.test(respUrl);
 
-                if (isVideo && url.startsWith('http')) {
-                    finish(url, 'Network Intercept');
-                    return;
+                if (isVideo && respUrl.startsWith('http')) {
+                    if (!networkVideos.has(respUrl)) {
+                        networkVideos.set(respUrl, {
+                            url: respUrl,
+                            type: respUrl.includes('.m3u8') ? 'hls' : 'mp4',
+                            source: 'network'
+                        });
+                    }
                 }
 
-                // 2. Queue text/JSON response bodies to parse for GraphQL structure
-                const ctLower = contentType.toLowerCase();
+                // Capture JSON/GraphQL response bodies to search for targetId
+                const ctLower = ct.toLowerCase();
                 const looksLikeJson = ctLower.includes('application/json') ||
                                       ctLower.includes('x-javascript') ||
                                       ctLower.includes('text/javascript');
@@ -183,8 +279,8 @@ async function performExtraction(targetUrl) {
                     jsonBodyPromises.push(
                         response.text()
                             .then(body => {
-                                if (!body || body.length > 4000000) return null;
-                                return body;
+                                if (!body || body.length > 8000000) return null;
+                                return { url: respUrl, body };
                             })
                             .catch(() => null)
                     );
@@ -192,131 +288,180 @@ async function performExtraction(targetUrl) {
             } catch {}
         });
 
-        // Start loading the page in the background
-        page.goto(navigationUrl, { waitUntil: 'domcontentloaded', timeout: 20000 })
+        // Set viewport and user-agent
+        await page.setUserAgent("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1");
+        await page.setViewport({
+            width: 390,
+            height: 844,
+            deviceScaleFactor: 2,
+            isMobile: true,
+            hasTouch: true
+        });
+
+        // Navigate page
+        await page.goto(navigationUrl, { waitUntil: 'domcontentloaded', timeout: 25000 })
             .catch(err => console.warn(`[BrowserExtract] Navigation warning: ${err.message}`));
 
-        // Dynamic polling check loop every 600ms
-        const checkInterval = setInterval(async () => {
-            if (resolved) {
-                clearInterval(checkInterval);
-                return;
+        // Wait for video element
+        try {
+            await page.waitForSelector('video', { timeout: 8000 });
+        } catch {}
+
+        // Settle network
+        await delay(2500);
+
+        // Click trigger buttons to ensure player initiates
+        await page.evaluate(() => {
+            const selectors = [
+                'div[role="button"][aria-label="Play"]',
+                'video',
+                '[data-testid="video_player"]',
+                'div[data-video-id]',
+                'button'
+            ];
+            for (const sel of selectors) {
+                try {
+                    document.querySelectorAll(sel).forEach(el => el.click());
+                } catch {}
             }
-            
-            try {
-                // Simulate click play triggers on DOM
-                await page.evaluate(() => {
-                    const selectors = [
-                        'div[role="button"][aria-label="Play"]',
-                        'video',
-                        '[data-testid="video_player"]',
-                        'div[data-video-id]',
-                        '.playButton',
-                        'a[aria-label="Play video"]',
-                        'button'
-                    ];
-                    for (const sel of selectors) {
-                        const elements = document.querySelectorAll(sel);
-                        for (const el of elements) {
-                            try { el.click(); } catch {}
-                        }
-                    }
-                }).catch(() => {});
+        }).catch(() => {});
 
-                // Bypass IG captcha/cookie notice triggers
-                await page.evaluate(() => {
-                    const buttons = document.querySelectorAll('button');
-                    for (const btn of buttons) {
-                        if (btn.textContent.trim().toLowerCase().includes('not now')) {
-                            btn.click();
-                            break;
-                        }
-                    }
-                }).catch(() => {});
-                
-                // Extract video from simple DOM elements
-                const domUrl = await page.evaluate(() => {
-                    const videos = document.querySelectorAll('video');
-                    for (const v of videos) {
-                        if (v.src && v.src.startsWith('http') && !v.src.includes('blob:')) return v.src;
-                        const srcNode = v.querySelector('source');
-                        if (srcNode && srcNode.src && srcNode.src.startsWith('http')) return srcNode.src;
-                    }
-                    const ogVideo = document.querySelector('meta[property="og:video"]');
-                    if (ogVideo && ogVideo.content && ogVideo.content.startsWith('http')) return ogVideo.content;
-                    return null;
-                }).catch(() => null);
+        // LAYER 0 — Video Element sources (highest signal)
+        const videoElementSources = await page.evaluate(COLLECT_VIDEO_ELEMENTS_FN).catch(() => []);
+        const elementVideos = new Map();
+        for (const v of videoElementSources) {
+            if (!v.url || v.url.startsWith('blob:')) continue;
+            if (!elementVideos.has(v.url)) {
+                elementVideos.set(v.url, {
+                    url: v.url,
+                    type: 'mp4',
+                    source: 'element'
+                });
+            }
+        }
 
-                if (domUrl) {
-                    clearInterval(checkInterval);
-                    finish(domUrl, 'DOM Polling');
-                    return;
+        // LAYER 1.5 — Scan captured network responses for requested Target ID
+        const targetMatchedVideos = new Map();
+        if (targetId) {
+            const responses = (await Promise.all(jsonBodyPromises)).filter(Boolean);
+            for (const r of responses) {
+                if (!r.body.includes(targetId)) continue;
+                const decoded = decodeJsonEncodedUrls(r.body);
+                const walked = extractHdSdFromText(decoded);
+                for (const w of walked) {
+                    const existing = targetMatchedVideos.get(w.url);
+                    if (!existing) {
+                        targetMatchedVideos.set(w.url, {
+                            url: w.url,
+                            type: 'mp4',
+                            source: 'json',
+                            isHD: w.isHD,
+                            targetMatched: true
+                        });
+                    } else if (w.isHD && !existing.isHD) {
+                        existing.isHD = true;
+                    }
                 }
+            }
+        }
 
-                // Parse page scripts for inline JSON payloads
-                const jsonBlobs = await page.evaluate(() => {
-                    const blobs = [];
-                    const keys = ['__INITIAL_STATE__', '__INITIAL_DATA__', '_sharedData', '__NEXT_DATA__', '__APOLLO_STATE__'];
-                    for (const key of keys) {
-                        try {
-                            const val = window[key];
-                            if (val) blobs.push(val);
-                        } catch {}
-                    }
-                    document.querySelectorAll('script').forEach(s => {
-                        const txt = s.textContent || '';
-                        if (!txt) return;
-                        if (s.type === 'application/json' || s.type === 'application/ld+json') {
-                            try { blobs.push(JSON.parse(txt)); } catch {}
-                        } else if (txt.includes('.mp4') || txt.includes('video_url')) {
-                            blobs.push(txt);
-                        }
+        // LAYER 2 — JSON blobs from page scripts
+        const jsonBlobs = await page.evaluate(COLLECT_JSON_BLOBS_FN).catch(() => []);
+        const jsonVideos = new Map();
+        for (const blob of jsonBlobs) {
+            const walked = walkForVideoUrls(blob.value);
+            for (const w of walked) {
+                const existing = jsonVideos.get(w.url);
+                if (!existing) {
+                    jsonVideos.set(w.url, {
+                        url: w.url,
+                        type: 'mp4',
+                        source: 'json',
+                        isHD: w.isHD
                     });
-                    return blobs;
-                }).catch(() => []);
-
-                for (const blob of jsonBlobs) {
-                    const decoded = typeof blob === 'string' ? decodeJsonEncodedUrls(blob) : blob;
-                    const walked = walkForVideoUrls(decoded);
-                    if (walked.length > 0) {
-                        const hdUrl = walked.find(u => HD_KEY_REGEX.test(u)) || walked[0];
-                        if (hdUrl) {
-                            clearInterval(checkInterval);
-                            finish(hdUrl, 'Script parsing');
-                            return;
-                        }
-                    }
+                } else if (w.isHD && !existing.isHD) {
+                    existing.isHD = true;
                 }
+            }
+        }
 
-                // Check intercepted JSON response payloads
-                const bodies = (await Promise.all(jsonBodyPromises)).filter(Boolean);
-                for (const body of bodies) {
-                    const decoded = decodeJsonEncodedUrls(body);
-                    const walked = walkForVideoUrls(decoded);
-                    if (walked.length > 0) {
-                        const hdUrl = walked.find(u => HD_KEY_REGEX.test(u)) || walked[0];
-                        if (hdUrl) {
-                            clearInterval(checkInterval);
-                            finish(hdUrl, 'Network JSON Scan');
-                            return;
-                        }
-                    }
+        // Merging and prioritization
+        const sourceRank = { element: 0, network: 1, json: 2 };
+        const merged = new Map();
+        const ordered = [
+            ...targetMatchedVideos.values(),
+            ...elementVideos.values(),
+            ...networkVideos.values(),
+            ...jsonVideos.values()
+        ];
+
+        for (const v of ordered) {
+            const existing = merged.get(v.url);
+            if (!existing) {
+                merged.set(v.url, { ...v });
+            } else {
+                if (v.isHD && !existing.isHD) existing.isHD = true;
+                if (v.targetMatched && !existing.targetMatched) {
+                    existing.targetMatched = true;
                 }
-            } catch (e) {
-                // Ignore transient frame errors
             }
-        }, 600);
+        }
 
-        // Overall safety timeout (18 seconds)
-        setTimeout(() => {
-            clearInterval(checkInterval);
-            if (!resolved) {
-                rejectFn(new Error('Extraction timed out. Could not locate video source URL.'));
+        // Propagate targetMatched flag to elements sharing CDN IDs
+        if (targetMatchedVideos.size > 0) {
+            const matchedIds = new Set();
+            for (const v of targetMatchedVideos.values()) {
+                const id = extractCdnVideoIdHint(v.url);
+                if (id) matchedIds.add(id);
             }
-        }, 18000);
+            for (const v of merged.values()) {
+                const id = extractCdnVideoIdHint(v.url);
+                if (id && matchedIds.has(id)) v.targetMatched = true;
+            }
+        }
 
-        return videoPromise;
-    }, { timeout: 22000 });
+        // Compile clean candidates
+        let candidates = Array.from(merged.values()).filter(v => !v.url.startsWith('data:') && !v.url.startsWith('blob:'));
+
+        // Rank candidates: target-matched wins first, then HD, then source priority, then type
+        candidates.sort((a, b) => {
+            const tmA = a.targetMatched ? 0 : 1;
+            const tmB = b.targetMatched ? 0 : 1;
+            if (tmA !== tmB) return tmA - tmB;
+
+            const hdA = a.isHD ? 0 : 1;
+            const hdB = b.isHD ? 0 : 1;
+            if (hdA !== hdB) return hdA - hdB;
+
+            const sa = sourceRank[a.source] ?? 2;
+            const sb = sourceRank[b.source] ?? 2;
+            return sa - sb;
+        });
+
+        // Facebook Ads Library specific filtering
+        if (isFbAdsLibrary || targetId) {
+            const matched = candidates.filter(c => c.targetMatched);
+            if (matched.length > 0) {
+                candidates = matched;
+            } else {
+                const elementOnly = candidates.filter(c => c.source === 'element');
+                if (elementOnly.length > 0) {
+                    candidates = [elementOnly[0]];
+                } else {
+                    candidates = [];
+                }
+            }
+        }
+
+        if (candidates.length === 0) {
+            throw new Error('No trusted video sources detected on this page.');
+        }
+
+        // Return highest ranked URL
+        const bestVideoUrl = candidates[0].url;
+        console.log(`[BrowserExtract] Selected best candidate: ${bestVideoUrl.slice(0, 80)}...`);
+        return bestVideoUrl;
+    });
 }
 
 module.exports = {
