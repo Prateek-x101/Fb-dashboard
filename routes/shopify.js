@@ -1225,16 +1225,28 @@ router.post('/universal-import', videoUpload.array('files', 20), async (req, res
                     return img.startsWith('//') ? 'https:' + img : img;
                 });
 
-                // Format variants
-                const variants = (product.variants || []).map(v => ({
-                    title: v.title,
-                    price: (v.price / 100).toFixed(2),
-                    compare_at_price: v.compare_at_price ? (v.compare_at_price / 100).toFixed(2) : null,
-                    option1: v.option1,
-                    option2: v.option2,
-                    option3: v.option3,
-                    sku: v.sku || `sku-${v.id}`
-                }));
+                // Format variants and collect direct image assignments
+                const defaultAssignments = {};
+                const variants = (product.variants || []).map(v => {
+                    const imgUrl = v.featured_image ? v.featured_image.src : null;
+                    if (imgUrl) {
+                        const normalizedUrl = imgUrl.startsWith('//') ? 'https:' + imgUrl : imgUrl;
+                        const cleanUrl = normalizedUrl.split('?')[0];
+                        if (v.option1) {
+                            defaultAssignments[cleanUrl] = v.option1;
+                            defaultAssignments[normalizedUrl] = v.option1;
+                        }
+                    }
+                    return {
+                        title: v.title,
+                        price: (v.price / 100).toFixed(2),
+                        compare_at_price: v.compare_at_price ? (v.compare_at_price / 100).toFixed(2) : null,
+                        option1: v.option1,
+                        option2: v.option2,
+                        option3: v.option3,
+                        sku: v.sku || `sku-${v.id}`
+                    };
+                });
 
                 // Get suggested collections via Gemini
                 let suggestedCollectionIds = [];
@@ -1257,6 +1269,7 @@ router.post('/universal-import', videoUpload.array('files', 20), async (req, res
                 return res.json({
                     success: true,
                     importMode: 'scrape',
+                    assignments: defaultAssignments,
                     product: {
                         title: previewProductObj.title,
                         description: previewProductObj.description,
@@ -1643,13 +1656,31 @@ router.post('/assign-variant-images', async (req, res) => {
         const geminiModel = storage.settings?.geminiModel || 'gemini-1.5-flash';
         if (!geminiApiKey) return res.status(400).json({ error: 'Gemini API Key is not configured. Please add it in Settings.' });
 
+        const fetch = require('node-fetch');
         const uploadsDir = path.join(__dirname, '..', 'uploads');
-        const framesBase64 = frameFilenames.map(filename => {
-            const filePath = path.join(uploadsDir, filename);
-            return fs.readFileSync(filePath).toString('base64');
-        });
+        const framesBase64 = await Promise.all(frameFilenames.map(async (filenameOrUrl) => {
+            if (filenameOrUrl.startsWith('http://') || filenameOrUrl.startsWith('https://')) {
+                try {
+                    const fetchRes = await fetch(filenameOrUrl);
+                    if (!fetchRes.ok) throw new Error(`HTTP ${fetchRes.status}`);
+                    const buffer = await fetchRes.buffer();
+                    return buffer.toString('base64');
+                } catch (err) {
+                    console.error(`[AssignVariantImages] Failed to fetch remote image ${filenameOrUrl}:`, err.message);
+                    return '';
+                }
+            } else {
+                const filePath = path.join(uploadsDir, filenameOrUrl);
+                if (fs.existsSync(filePath)) {
+                    return fs.readFileSync(filePath).toString('base64');
+                }
+                return '';
+            }
+        }));
 
-        const result = await geminiService.assignImagesToVariants(geminiApiKey, geminiModel, framesBase64, variantOption, variantValues);
+        const validFramesBase64 = framesBase64.filter(b64 => b64 !== '');
+
+        const result = await geminiService.assignImagesToVariants(geminiApiKey, geminiModel, validFramesBase64, variantOption, variantValues);
         res.json({ success: true, assignments: result.assignments || {} });
     } catch (error) {
         console.error('Assign variant images error:', error.message);

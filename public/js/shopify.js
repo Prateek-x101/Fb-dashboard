@@ -964,35 +964,44 @@
                 // Reset variant assignments
                 this.vtlVariantAssignments = {};
 
-                // Auto-run variant image assignment using Gemini!
-                const options = this.scrapedProduct.options || [];
-                const primaryOption = options[0];
-                const images = this.scrapedProduct.images || [];
-
-                if (primaryOption && primaryOption.values && primaryOption.values.length >= 2 && images.length > 0) {
-                    console.log('[ShopifyImporter] Auto-assigning variant images with Gemini...');
-                    fetch('/api/shopify/assign-variant-images', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            frameFilenames: images,
-                            variantOption: primaryOption.name,
-                            variantValues: primaryOption.values
-                        })
-                    })
-                    .then(res => res.json())
-                    .then(resData => {
-                        if (resData.success && resData.assignments) {
-                            Object.keys(resData.assignments).forEach(key => {
-                                this.vtlVariantAssignments[key] = resData.assignments[key];
-                            });
-                            this.renderImagesGrid();
-                            window.AppController.showToast('Images automatically classified to variants! 🤖🎨', 'success');
-                        }
-                    })
-                    .catch(err => {
-                        console.error('[ShopifyImporter] Auto image assignment failed:', err.message);
+                // Load direct assignments from backend (Shopify JSON mapping)
+                if (data.assignments && Object.keys(data.assignments).length > 0) {
+                    console.log('[ShopifyImporter] Direct variant-image assignments loaded from Shopify JSON.');
+                    Object.keys(data.assignments).forEach(key => {
+                        this.vtlVariantAssignments[key] = data.assignments[key];
                     });
+                    window.AppController.showToast('Variants auto-matched from Shopify data! ✅', 'success');
+                } else {
+                    // Fallback: Auto-run variant image assignment using Gemini Vision
+                    const options = this.scrapedProduct.options || [];
+                    const primaryOption = options[0];
+                    const images = this.scrapedProduct.images || [];
+
+                    if (primaryOption && primaryOption.values && primaryOption.values.length >= 2 && images.length > 0) {
+                        console.log('[ShopifyImporter] No direct assignments. Auto-assigning with Gemini Vision...');
+                        fetch('/api/shopify/assign-variant-images', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                frameFilenames: images,
+                                variantOption: primaryOption.name,
+                                variantValues: primaryOption.values
+                            })
+                        })
+                        .then(res => res.json())
+                        .then(resData => {
+                            if (resData.success && resData.assignments) {
+                                Object.keys(resData.assignments).forEach(key => {
+                                    this.vtlVariantAssignments[key] = resData.assignments[key];
+                                });
+                                this.renderImagesGrid();
+                                window.AppController.showToast('Images automatically classified to variants! 🤖🎨', 'success');
+                            }
+                        })
+                        .catch(err => {
+                            console.error('[ShopifyImporter] Auto image assignment failed:', err.message);
+                        });
+                    }
                 }
 
                 // Render Images Grid with assignments
