@@ -1424,7 +1424,7 @@ async function scrapeProductPageViaBrowser(url) {
                 });
             } else {
                 // Generic page fallback + prominent e-commerce main images
-                document.querySelectorAll('.product-image img, .gallery img, .main-image img, #main-image img, img.product-gallery-image, img[class*="product-img"], .thumb-list img').forEach(img => {
+                document.querySelectorAll('.product-image img, .gallery img, .main-image img, #main-image img, img.product-gallery-image, img[class*="product-img"], .thumb-list img, .swiper-slide img, .slick-slide img, .carousel img, .slider img, img[class*="gallery"], img[class*="image"], img[class*="product"], img[class*="thumb"], img[class*="media"], img[class*="slider"], img[class*="carousel"]').forEach(img => {
                     let src = img.getAttribute('srcset') || img.getAttribute('srcSet') || img.getAttribute('data-src') || img.src;
                     if (src) {
                         const srcLower = src.toLowerCase();
@@ -1472,7 +1472,7 @@ async function scrapeProductPageViaBrowser(url) {
                                 const width = img.naturalWidth || parseInt(img.getAttribute('width')) || 0;
                                 const height = img.naturalHeight || parseInt(img.getAttribute('height')) || 0;
                                 const className = img.className || '';
-                                const isProductImage = className.includes('product') || className.includes('gallery') || className.includes('main') || className.includes('detail');
+                                const isProductImage = className.includes('product') || className.includes('gallery') || className.includes('main') || className.includes('detail') || className.includes('swiper') || className.includes('slide') || className.includes('carousel') || className.includes('thumb');
                                 
                                 if (isProductImage || (width === 0 || width > 200) && (height === 0 || height > 200)) {
                                     imageUrls.push(src);
@@ -1484,7 +1484,7 @@ async function scrapeProductPageViaBrowser(url) {
             }
             
             // Deduplicate and filter out invalid values
-            const uniqueImages = [...new Set(imageUrls.filter(Boolean))].slice(0, 15);
+            const uniqueImages = [...new Set(imageUrls.filter(Boolean))].slice(0, 30);
             
             return {
                 title,
@@ -1545,7 +1545,7 @@ async function scrapeProductPageViaBrowser(url) {
                     pageData.images.push(...res.value);
                 }
             });
-            pageData.images = [...new Set(pageData.images)].slice(0, 20); // Cap at 20 images total
+            pageData.images = [...new Set(pageData.images)].slice(0, 50); // Cap at 50 images total
         }
         
         return pageData;
