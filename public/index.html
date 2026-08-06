@@ -887,11 +887,8 @@
                         </div>
                     </div>
                     <div>
-                <div class="row">
-                    <!-- Left: Description Editor -->
-                    <div class="col-md-7">
-                        <div class="form-group">
-                            <div class="flex justify-between align-center mb-1" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                        <div class="form-group" style="display: flex; flex-direction: column; height: 100%;">
+                            <div class="flex justify-between align-center mb-1" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
                                 <label style="margin-bottom:0;">Product Description</label>
                                 <div class="flex gap-2" style="display:flex; gap:8px;">
                                     <button class="btn btn-info btn-xs" id="btn-shopify-toggle-code" type="button" style="padding: 3px 8px; font-size: 0.75rem; border-radius: 4px; background:#4b5563; border-color:#4b5563; color:white;">💻 View Code</button>
@@ -899,26 +896,22 @@
                                     <button class="btn btn-primary btn-xs" id="btn-shopify-ai-recreate" type="button" style="padding: 3px 8px; font-size: 0.75rem; border-radius: 4px; background: var(--accent-blue); border-color: var(--accent-blue);">🪄 AI Recreate</button>
                                 </div>
                             </div>
-                            <!-- Visual Preview Div (Shown by default) -->
-                            <div id="shopify-description-visual-preview" style="height:480px; overflow-y:auto; background:white; color:#374151; padding:15px; border-radius:8px; border:1px solid var(--glass-border); font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height:1.5;">
-                                <p style="color:#9ca3af; font-style:italic;">No description scraped yet.</p>
-                            </div>
-                            <!-- Code Editor Textarea (Hidden by default) -->
-                            <textarea class="form-control" rows="18" id="shopify-import-description" style="height:480px; font-family:monospace; font-size:0.85rem; background:rgba(0,0,0,0.3); border-color:var(--glass-border); color:white; display:none;"></textarea>
-                        </div>
-                    </div>
-                    
-                    <!-- Right: Mobile Live Preview -->
-                    <div class="col-md-5" style="display:flex; flex-direction:column; align-items:center; justify-content:center; padding:10px;">
-                        <label class="mb-2" style="font-weight:600; font-size:0.85rem; color:#a78bfa; margin-bottom:8px;">📱 Mobile Live Preview</label>
-                        <div class="phone-mockup-wrapper" style="position:relative; width:260px; height:480px; background:#000; border:6px solid #2e2a3c; border-radius:32px; box-shadow:0 12px 32px rgba(0,0,0,0.5); overflow:hidden; display:flex; flex-direction:column;">
-                            <!-- Speaker / Camera Notch -->
-                            <div style="position:absolute; top:0; left:50%; transform:translateX(-50%); width:100px; height:16px; background:#2e2a3c; border-bottom-left-radius:10px; border-bottom-right-radius:10px; z-index:10; display:flex; align-items:center; justify-content:center;">
-                                <div style="width:40px; height:3px; background:#1e1b29; border-radius:2px;"></div>
-                            </div>
-                            <!-- Screen Viewport -->
-                            <div style="flex:1; width:100%; height:100%; background:#fff; padding-top:20px; overflow:hidden;">
-                                <iframe id="shopify-import-description-preview-iframe" style="width:100%; height:100%; border:none; background:white; overflow-y:auto;" sandbox="allow-same-origin allow-scripts"></iframe>
+                            
+                            <!-- Container for phone frame / code textarea -->
+                            <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:480px; background:rgba(0,0,0,0.15); border-radius:12px; border:1px solid var(--glass-border); padding:15px;">
+                                <!-- 1. Smartphone Live Preview Mockup (Shown by default) -->
+                                <div id="shopify-description-phone-wrapper" style="position:relative; width:260px; height:480px; background:#000; border:6px solid #2e2a3c; border-radius:32px; box-shadow:0 12px 32px rgba(0,0,0,0.5); overflow:hidden; display:flex; flex-direction:column;">
+                                    <!-- Speaker / Camera Notch -->
+                                    <div style="position:absolute; top:0; left:50%; transform:translateX(-50%); width:100px; height:16px; background:#2e2a3c; border-bottom-left-radius:10px; border-bottom-right-radius:10px; z-index:10; display:flex; align-items:center; justify-content:center;">
+                                        <div style="width:40px; height:3px; background:#1e1b29; border-radius:2px;"></div>
+                                    </div>
+                                    <!-- Screen Viewport -->
+                                    <div style="flex:1; width:100%; height:100%; background:#fff; padding-top:20px; overflow:hidden;">
+                                        <iframe id="shopify-import-description-preview-iframe" style="width:100%; height:100%; border:none; background:white; overflow-y:auto;" sandbox="allow-same-origin allow-scripts"></iframe>
+                                    </div>
+                                </div>
+                                <!-- 2. Code Editor Textarea (Hidden by default) -->
+                                <textarea class="form-control" rows="18" id="shopify-import-description" style="width:100%; height:480px; font-family:monospace; font-size:0.85rem; background:rgba(0,0,0,0.3); border-color:var(--glass-border); color:white; display:none; resize:none;"></textarea>
                             </div>
                         </div>
                     </div>

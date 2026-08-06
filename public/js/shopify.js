@@ -56,22 +56,21 @@
             }
 
             const descTextarea = document.getElementById('shopify-import-description');
-            const visualPreview = document.getElementById('shopify-description-visual-preview');
+            const phoneWrapper = document.getElementById('shopify-description-phone-wrapper');
             const btnToggleCode = document.getElementById('btn-shopify-toggle-code');
             
-            if (btnToggleCode && visualPreview && descTextarea) {
+            if (btnToggleCode && phoneWrapper && descTextarea) {
                 let isShowingCode = false;
                 btnToggleCode.addEventListener('click', () => {
                     isShowingCode = !isShowingCode;
                     if (isShowingCode) {
-                        visualPreview.style.display = 'none';
+                        phoneWrapper.style.display = 'none';
                         descTextarea.style.display = 'block';
                         btnToggleCode.textContent = '👁️ View Preview';
                         btnToggleCode.style.background = 'var(--accent-blue)';
                         btnToggleCode.style.borderColor = 'var(--accent-blue)';
                     } else {
-                        visualPreview.innerHTML = descTextarea.value;
-                        visualPreview.style.display = 'block';
+                        phoneWrapper.style.display = 'flex';
                         descTextarea.style.display = 'none';
                         btnToggleCode.textContent = '💻 View Code';
                         btnToggleCode.style.background = '#4b5563';
@@ -375,15 +374,9 @@
         updateDescriptionMobilePreview: function() {
             const textarea = document.getElementById('shopify-import-description');
             const iframe = document.getElementById('shopify-import-description-preview-iframe');
-            const visualPreview = document.getElementById('shopify-description-visual-preview');
             if (!textarea) return;
             
             const htmlContent = textarea.value || '';
-
-            // Sync visual preview div on the left
-            if (visualPreview) {
-                visualPreview.innerHTML = htmlContent || '<p style="color:#9ca3af; font-style:italic;">No description scraped yet.</p>';
-            }
 
             if (iframe) {
                 const styledHtml = `
