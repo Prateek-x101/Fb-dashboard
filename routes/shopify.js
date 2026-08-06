@@ -1356,6 +1356,32 @@ async function scrapeProductPageViaBrowser(url) {
         // Wait 3 seconds for dynamic content / React loading
         await new Promise(r => setTimeout(r, 3000));
         
+        // Find other variant color URLs on the page (matching path but different query parameters)
+        const variantUrls = await page.evaluate((targetUrl) => {
+            const currentUrl = new URL(targetUrl);
+            const basePath = currentUrl.pathname;
+            const hostname = currentUrl.hostname;
+            
+            const links = Array.from(document.querySelectorAll('a'));
+            const matches = [];
+            
+            links.forEach(a => {
+                try {
+                    const href = a.getAttribute('href');
+                    if (!href) return;
+                    
+                    const absoluteUrl = new URL(href, currentUrl.href);
+                    if (absoluteUrl.hostname === hostname && absoluteUrl.pathname === basePath) {
+                        const search = absoluteUrl.search;
+                        if (search.includes('renk=') || search.includes('color=') || search.includes('colour=') || search.includes('variant=')) {
+                            matches.push(absoluteUrl.href);
+                        }
+                    }
+                } catch(e) {}
+            });
+            return [...new Set(matches)];
+        }, url);
+
         const pageData = await page.evaluate(() => {
             const title = document.title || '';
             const bodyText = document.body.innerText || '';
@@ -1375,14 +1401,12 @@ async function scrapeProductPageViaBrowser(url) {
                 document.querySelectorAll('#altImages img, #imageBlock img').forEach(img => {
                     const src = img.src || img.getAttribute('data-old-hires') || img.getAttribute('data-a-dynamic-image') || img.getAttribute('src');
                     if (src && !src.includes('sprite') && !src.includes('play-button') && !src.includes('videoplayer')) {
-                        // Amazon thumbnail URL patterns look like: /images/I/xxxx._AC_US40_.jpg
-                        // We replace the suffix to get the large high-res version: /images/I/xxxx.jpg
                         const hires = src.replace(/\._[A-Z0-9_-]+\./i, '.');
                         imageUrls.push(hires);
                     }
                 });
                 
-                // 3. Amazon APlus description images (high probability of product detail images)
+                // 3. Amazon APlus description images
                 document.querySelectorAll('#aplus img, .aplus-v2 img').forEach(img => {
                     const src = img.src;
                     if (src && !src.includes('pixel') && !src.includes('logo') && src.startsWith('http')) {
@@ -1394,16 +1418,22 @@ async function scrapeProductPageViaBrowser(url) {
                 document.querySelectorAll('.thumb-list img, .detail-description img').forEach(img => {
                     const src = img.src || img.getAttribute('data-src') || img.getAttribute('src');
                     if (src && !src.includes('pixel') && !src.includes('logo') && src.startsWith('http')) {
-                        // Remove dimensions suffix like _50x50.jpg to get large version
                         const hires = src.replace(/_\d+x\d+.*$/, '');
                         imageUrls.push(hires);
                     }
                 });
             } else {
-                // Generic page fallback
+                // Generic page fallback + prominent e-commerce main images
+                document.querySelectorAll('.product-image img, .gallery img, .main-image img, #main-image img, img.product-gallery-image, img[class*="product-img"], .thumb-list img').forEach(img => {
+                    const src = img.src || img.getAttribute('data-src') || img.getAttribute('src');
+                    if (src && src.startsWith('http') && !src.includes('logo') && !src.includes('pixel') && !src.includes('sprite')) {
+                        imageUrls.push(src);
+                    }
+                });
+
                 const imgElements = document.querySelectorAll('img');
                 imgElements.forEach(img => {
-                    const src = img.src || img.getAttribute('data-old-hires') || img.getAttribute('data-a-dynamic-image');
+                    const src = img.src || img.getAttribute('data-old-hires') || img.getAttribute('data-a-dynamic-image') || img.getAttribute('src');
                     if (src && src.startsWith('http') && !src.includes('sprite') && !src.includes('pixel') && !src.includes('logo') && !src.includes('banner')) {
                         const width = img.naturalWidth || 0;
                         const height = img.naturalHeight || 0;
@@ -1423,9 +1453,62 @@ async function scrapeProductPageViaBrowser(url) {
                 images: uniqueImages
             };
         });
+
+        // Fetch up to 4 other variants
+        const otherVariantUrls = variantUrls.filter(vUrl => vUrl !== url).slice(0, 4);
+        if (otherVariantUrls.length > 0) {
+            console.log(`[UniversalScrape] Sibling variants detected: ${otherVariantUrls.length}. Extracting variant images in parallel...`);
+            const browser = page.browser();
+            
+            const variantPromises = otherVariantUrls.map(async (vUrl) => {
+                let tempPage = null;
+                try {
+                    tempPage = await browser.newPage();
+                    await tempPage.setUserAgent(await page.evaluate(() => navigator.userAgent));
+                    
+                    // Fast load: Block images, stylesheets, fonts since we just want to load DOM and grab src
+                    await tempPage.setRequestInterception(true);
+                    tempPage.on('request', r => {
+                        const rt = r.resourceType();
+                        if (['stylesheet', 'font', 'image'].includes(rt)) {
+                            r.abort();
+                        } else {
+                            r.continue();
+                        }
+                    });
+                    
+                    await tempPage.goto(vUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+                    
+                    return await tempPage.evaluate(() => {
+                        const urls = [];
+                        // Select prominent product gallery images
+                        document.querySelectorAll('.product-image img, .gallery img, .main-image img, #main-image img, img.product-gallery-image, img[class*="product"]').forEach(img => {
+                            const src = img.src || img.getAttribute('data-src') || img.getAttribute('src');
+                            if (src && src.startsWith('http') && !src.includes('logo') && !src.includes('pixel') && !src.includes('sprite')) {
+                                urls.push(src);
+                            }
+                        });
+                        return [...new Set(urls)].slice(0, 4); // return top 4 variant photos
+                    });
+                } catch (e) {
+                    console.error(`[UniversalScrape] Failed to extract variant ${vUrl}:`, e.message);
+                    return [];
+                } finally {
+                    if (tempPage) await tempPage.close().catch(() => {});
+                }
+            });
+
+            const results = await Promise.allSettled(variantPromises);
+            results.forEach(res => {
+                if (res.status === 'fulfilled' && Array.isArray(res.value)) {
+                    pageData.images.push(...res.value);
+                }
+            });
+            pageData.images = [...new Set(pageData.images)].slice(0, 20); // Cap at 20 images total
+        }
         
         return pageData;
-    }, { timeout: 45000 });
+    }, { timeout: 60000 });
 }
 
 // 8. Assign extracted images to variant values using Gemini Vision
