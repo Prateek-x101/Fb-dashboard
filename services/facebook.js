@@ -112,15 +112,80 @@ const facebookService = {
     },
 
     async uploadVideo(accountId, token, filePath) {
-        const url = `${BASE_URL}/act_${accountId}/advideos?access_token=${token}`;
-        const form = new FormData();
-        form.append('source', fs.createReadStream(filePath));
-        
-        const response = await fetch(url, {
-            method: 'POST',
-            body: form
+        const fileStats = fs.statSync(filePath);
+        const fileSize = fileStats.size;
+
+        console.log(`[FacebookService] Starting chunked upload for video (${(fileSize / (1024 * 1024)).toFixed(2)} MB): ${filePath}`);
+
+        // 1. Initialize upload session
+        const initUrl = `https://graph.facebook.com/v25.0/act_${accountId}/advideos`;
+        const initParams = new URLSearchParams({
+            access_token: token,
+            upload_phase: 'initialize',
+            file_size: String(fileSize)
         });
-        return handleResponse(response);
+
+        const initRes = await fetch(`${initUrl}?${initParams.toString()}`, { method: 'POST' });
+        const initData = await initRes.json();
+        if (initRes.status >= 400 || initData.error) {
+            throw new Error(`Facebook video upload init failed: ${JSON.stringify(initData.error || initData)}`);
+        }
+
+        const { video_id, upload_session_id } = initData;
+        let startOffset = parseInt(initData.start_offset || '0');
+
+        // 2. Transfer chunks loop
+        const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB chunks
+        const fileFd = fs.openSync(filePath, 'r');
+
+        try {
+            while (startOffset < fileSize) {
+                const currentChunkSize = Math.min(CHUNK_SIZE, fileSize - startOffset);
+                const buffer = Buffer.alloc(currentChunkSize);
+                fs.readSync(fileFd, buffer, 0, currentChunkSize, startOffset);
+
+                const form = new FormData();
+                form.append('upload_phase', 'transfer');
+                form.append('upload_session_id', upload_session_id);
+                form.append('start_offset', String(startOffset));
+                form.append('video_file_chunk', buffer, {
+                    filename: 'chunk.mp4',
+                    contentType: 'video/mp4'
+                });
+
+                const transferUrl = `https://graph.facebook.com/v25.0/act_${accountId}/advideos?access_token=${token}`;
+                const transferRes = await fetch(transferUrl, {
+                    method: 'POST',
+                    body: form,
+                    headers: form.getHeaders()
+                });
+
+                const transferData = await transferRes.json();
+                if (transferRes.status >= 400 || transferData.error) {
+                    throw new Error(`Facebook video chunk transfer failed at offset ${startOffset}: ${JSON.stringify(transferData.error || transferData)}`);
+                }
+
+                startOffset = parseInt(transferData.start_offset || String(startOffset + currentChunkSize));
+            }
+        } finally {
+            fs.closeSync(fileFd);
+        }
+
+        // 3. Finish upload session
+        const finishParams = new URLSearchParams({
+            access_token: token,
+            upload_phase: 'finish',
+            upload_session_id: upload_session_id
+        });
+
+        const finishRes = await fetch(`${initUrl}?${finishParams.toString()}`, { method: 'POST' });
+        const finishData = await finishRes.json();
+        if (finishRes.status >= 400 || finishData.error) {
+            throw new Error(`Facebook video upload finish failed: ${JSON.stringify(finishData.error || finishData)}`);
+        }
+
+        console.log(`[FacebookService] Chunked upload completed. Video ID: ${video_id}`);
+        return { id: video_id };
     },
 
     async getPixels(accountId, token) {
