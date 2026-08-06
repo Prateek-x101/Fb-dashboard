@@ -992,7 +992,15 @@
                         .then(resData => {
                             if (resData.success && resData.assignments) {
                                 Object.keys(resData.assignments).forEach(key => {
-                                    this.vtlVariantAssignments[key] = resData.assignments[key];
+                                    const idx = parseInt(key);
+                                    const imgUrl = images[idx];
+                                    if (imgUrl) {
+                                        this.vtlVariantAssignments[imgUrl] = resData.assignments[key];
+                                        // Also set bare filename for /uploads/ paths
+                                        if (imgUrl.startsWith('/uploads/')) {
+                                            this.vtlVariantAssignments[imgUrl.replace(/^\/uploads\//, '')] = resData.assignments[key];
+                                        }
+                                    }
                                 });
                                 this.renderImagesGrid();
                                 window.AppController.showToast('Images automatically classified to variants! 🤖🎨', 'success');
@@ -1888,6 +1896,44 @@
 
             // Render images grid with assignments
             this.renderImagesGrid();
+
+            // Auto-assign variant images using Gemini Vision (for media imports)
+            if (popupOptions.length > 0 && imageUrls.length > 0) {
+                const primaryOption = popupOptions[0];
+                if (primaryOption && primaryOption.values && primaryOption.values.length >= 2) {
+                    console.log('[ShopifyImporter] Auto-assigning media variant images with Gemini Vision...');
+                    window.AppController.showToast('Assigning images to variants with AI... ⏳', 'info');
+                    fetch('/api/shopify/assign-variant-images', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            frameFilenames: imageUrls,
+                            variantOption: primaryOption.name,
+                            variantValues: primaryOption.values
+                        })
+                    })
+                    .then(res => res.json())
+                    .then(resData => {
+                        if (resData.success && resData.assignments) {
+                            Object.keys(resData.assignments).forEach(key => {
+                                const idx = parseInt(key);
+                                const imgUrl = imageUrls[idx];
+                                if (imgUrl) {
+                                    this.vtlVariantAssignments[imgUrl] = resData.assignments[key];
+                                    if (imgUrl.startsWith('/uploads/')) {
+                                        this.vtlVariantAssignments[imgUrl.replace(/^\/uploads\//, '')] = resData.assignments[key];
+                                    }
+                                }
+                            });
+                            this.renderImagesGrid();
+                            window.AppController.showToast('Variants auto-matched to images! 🤖🎨', 'success');
+                        }
+                    })
+                    .catch(err => {
+                        console.error('[ShopifyImporter] Media auto image assignment failed:', err.message);
+                    });
+                }
+            }
 
             // Show the shared preview container (same as scraper result)
             const previewTitle = document.getElementById('shopify-preview-title');

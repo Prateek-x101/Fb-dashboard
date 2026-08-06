@@ -423,12 +423,12 @@ async function extractFrames(videoPath, maxFrames = 20) {
     const framesDir = path.join(path.dirname(videoPath), `frames_${Date.now()}`);
     fs.mkdirSync(framesDir, { recursive: true });
 
-    // 1 frame every 2 seconds, scaled to 720px wide, max `maxFrames` frames
+    // 1 frame every second, scaled to 1080px wide, max `maxFrames` frames, high quality JPEG
     const args = [
         '-y', '-i', videoPath,
-        '-vf', 'fps=0.5,scale=720:-2',
+        '-vf', 'fps=1,scale=1080:-2',
         '-vframes', String(maxFrames),
-        '-q:v', '4',
+        '-q:v', '2',
         '-f', 'image2',
         path.join(framesDir, 'frame_%03d.jpg')
     ];

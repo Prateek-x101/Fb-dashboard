@@ -807,9 +807,9 @@ router.post('/video-to-listing', videoUpload.array('files', 20), async (req, res
             ? [...analysis.selectedIndices]
             : [];
         
-        // Ensure at least 5-10 frames are extracted if available
-        if (selectedIndices.length < 5 && allFrames.length > 0) {
-            const limit = Math.min(10, allFrames.length);
+        // Ensure at least 8-15 frames are extracted if available
+        if (selectedIndices.length < 8 && allFrames.length > 0) {
+            const limit = Math.min(15, allFrames.length);
             for (let i = 0; i < allFrames.length; i++) {
                 if (!selectedIndices.includes(i)) {
                     selectedIndices.push(i);
@@ -943,8 +943,8 @@ router.post('/universal-import', videoUpload.array('files', 20), async (req, res
                 ? [...analysis.selectedIndices]
                 : [];
             
-            if (selectedIndices.length < 5 && allFrames.length > 0) {
-                const limit = Math.min(10, allFrames.length);
+            if (selectedIndices.length < 8 && allFrames.length > 0) {
+                const limit = Math.min(15, allFrames.length);
                 for (let i = 0; i < allFrames.length; i++) {
                     if (!selectedIndices.includes(i)) {
                         selectedIndices.push(i);
@@ -1099,8 +1099,8 @@ router.post('/universal-import', videoUpload.array('files', 20), async (req, res
                     ? [...analysis.selectedIndices]
                     : [];
                 
-                if (selectedIndices.length < 5 && allFrames.length > 0) {
-                    const limit = Math.min(10, allFrames.length);
+                if (selectedIndices.length < 8 && allFrames.length > 0) {
+                    const limit = Math.min(15, allFrames.length);
                     for (let i = 0; i < allFrames.length; i++) {
                         if (!selectedIndices.includes(i)) {
                             selectedIndices.push(i);
@@ -1670,18 +1670,44 @@ router.post('/assign-variant-images', async (req, res) => {
                     return '';
                 }
             } else {
-                const filePath = path.join(uploadsDir, filenameOrUrl);
+                // Handle /uploads/filename.jpg paths (from media imports) and bare filenames
+                let localName = filenameOrUrl;
+                if (localName.startsWith('/uploads/')) {
+                    localName = localName.replace('/uploads/', '');
+                }
+                const filePath = path.join(uploadsDir, localName);
                 if (fs.existsSync(filePath)) {
                     return fs.readFileSync(filePath).toString('base64');
                 }
+                console.warn(`[AssignVariantImages] Local file not found: ${filePath}`);
                 return '';
             }
         }));
 
-        const validFramesBase64 = framesBase64.filter(b64 => b64 !== '');
+        // Track valid indices for re-mapping Gemini's 0-based output back to original filenames
+        const validIndices = [];
+        const validFramesBase64 = [];
+        framesBase64.forEach((b64, idx) => {
+            if (b64 !== '') {
+                validIndices.push(idx);
+                validFramesBase64.push(b64);
+            }
+        });
 
         const result = await geminiService.assignImagesToVariants(geminiApiKey, geminiModel, validFramesBase64, variantOption, variantValues);
-        res.json({ success: true, assignments: result.assignments || {} });
+        
+        // Re-map: Gemini returns assignments keyed by sequential index (0, 1, 2...)
+        // We need to map these back to the ORIGINAL frameFilenames indices
+        const remappedAssignments = {};
+        if (result.assignments) {
+            Object.keys(result.assignments).forEach(geminiIdx => {
+                const originalIdx = validIndices[parseInt(geminiIdx)];
+                if (originalIdx !== undefined) {
+                    remappedAssignments[String(originalIdx)] = result.assignments[geminiIdx];
+                }
+            });
+        }
+        res.json({ success: true, assignments: remappedAssignments });
     } catch (error) {
         console.error('Assign variant images error:', error.message);
         res.status(500).json({ error: 'Failed to assign images to variants', details: error.message });
