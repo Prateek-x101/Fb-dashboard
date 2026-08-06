@@ -4,7 +4,8 @@
  * from network traffic — exactly like DevTools Network tab.
  * 
  * Optimized for maximum speed:
- * - Uses 'domcontentloaded' navigation so pages finish loading in 1-2 seconds.
+ * - Translates Instagram and Facebook links to public embed links to bypass login walls.
+ * - Parses page scripts recursively to extract raw mp4/m3u8 CDN links before playback starts.
  * - Races navigation/interactions with the network intercept, resolving INSTANTLY the moment a video URL is seen.
  */
 
@@ -30,6 +31,76 @@ function getCacheKey(url) {
         }
     } catch {}
     return url;
+}
+
+// Transform gated post links into public embed links to bypass authentication walls
+function transformExtractionUrl(url) {
+    try {
+        const u = new URL(url);
+        const host = u.hostname.toLowerCase();
+        if (host.includes("instagram.com")) {
+            const m = u.pathname.match(/^\/(reel|reels|p|tv)\/([A-Za-z0-9_-]+)\/?/);
+            if (m) {
+                const kind = m[1] === "reels" ? "reel" : m[1];
+                return `https://www.instagram.com/${kind}/${m[2]}/embed/captioned/`;
+            }
+        }
+        return url;
+    } catch {
+        return url;
+    }
+}
+
+const HD_KEY_REGEX = /(hd[_-]?(?:src|url)|browser[_-]?native[_-]?hd[_-]?url|playable[_-]?url[_-]?quality[_-]?hd|representative[_-]?thumb[_-]?hd|video[_-]?hd[_-]?src|video[_-]?dash[_-]?prefetch[_-]?representations)/i;
+const VIDEO_KEY_REGEX = /(video[_-]?url|playback[_-]?url|content[_-]?url|hd[_-]?src|sd[_-]?src|browser[_-]?native[_-]?(?:hd|sd)[_-]?url|playable[_-]?url(?:[_-]?quality[_-]?(?:hd|sd))?|representative[_-]?thumb|src)$/i;
+const URL_REGEX_GLOBAL = /https?:\/\/[^\s"'<>{}|\\^`\]\[]+\.(?:mp4|m3u8|mpd)(?:\?[^\s"'<>{}|\\^`\]\[]*)?/gi;
+
+function decodeJsonEncodedUrls(text) {
+    if (typeof text !== 'string') return '';
+    return text
+        .replace(/\\\//g, "/")
+        .replace(/\\u0026/g, "&")
+        .replace(/\\u003d/g, "=")
+        .replace(/\\u003f/g, "?");
+}
+
+function walkForVideoUrls(value) {
+    const found = [];
+    const stack = [{ v: value, k: null }];
+    let visited = 0;
+    const MAX_NODES = 20000;
+
+    while (stack.length > 0 && visited < MAX_NODES) {
+        const node = stack.pop();
+        if (!node) continue;
+        const { v, k } = node;
+        visited++;
+        if (v == null) continue;
+
+        if (typeof v === "string") {
+            const looksLikeMediaKey = k != null && VIDEO_KEY_REGEX.test(k);
+            if (looksLikeMediaKey && /^https?:\/\//i.test(v)) {
+                found.push(v);
+            }
+            const matches = v.match(URL_REGEX_GLOBAL);
+            if (matches) {
+                for (const m of matches) found.push(m);
+            }
+            continue;
+        }
+
+        if (Array.isArray(v)) {
+            for (const item of v) stack.push({ v: item, k });
+            continue;
+        }
+
+        if (typeof v === "object") {
+            for (const [key, child] of Object.entries(v)) {
+                stack.push({ v: child, k: key });
+            }
+        }
+    }
+    return [...new Set(found)];
 }
 
 async function extractVideoUrl(targetUrl) {
@@ -58,7 +129,8 @@ async function extractVideoUrl(targetUrl) {
 
 async function performExtraction(targetUrl) {
     return withTab(async (page) => {
-        console.log(`[BrowserExtract] Starting extraction for: ${targetUrl}`);
+        const navigationUrl = transformExtractionUrl(targetUrl);
+        console.log(`[BrowserExtract] Target: ${targetUrl} -> Navigating: ${navigationUrl}`);
         
         let resolved = false;
         let resolveFn = null;
@@ -80,6 +152,8 @@ async function performExtraction(targetUrl) {
             }
         };
 
+        const jsonBodyPromises = [];
+
         // Response Interception - catches the raw media/CDN URL as it streams
         page.on('response', async (response) => {
             if (resolved) return;
@@ -87,6 +161,7 @@ async function performExtraction(targetUrl) {
                 const url = response.url();
                 const contentType = response.headers()['content-type'] || '';
                 
+                // 1. Check if direct media url matching video types
                 const isVideo = contentType.includes('video') ||
                                 /\.mp4(\?|$)/i.test(url) ||
                                 /fbcdn\.net\/v\//i.test(url) ||
@@ -96,13 +171,29 @@ async function performExtraction(targetUrl) {
 
                 if (isVideo && url.startsWith('http')) {
                     finish(url, 'Network Intercept');
+                    return;
+                }
+
+                // 2. Queue text/JSON response bodies to parse for GraphQL structure
+                const ctLower = contentType.toLowerCase();
+                const looksLikeJson = ctLower.includes('application/json') ||
+                                      ctLower.includes('x-javascript') ||
+                                      ctLower.includes('text/javascript');
+                if (looksLikeJson) {
+                    jsonBodyPromises.push(
+                        response.text()
+                            .then(body => {
+                                if (!body || body.length > 4000000) return null;
+                                return body;
+                            })
+                            .catch(() => null)
+                    );
                 }
             } catch {}
         });
 
         // Start loading the page in the background
-        // Use 'domcontentloaded' for fast parsing startup
-        page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 20000 })
+        page.goto(navigationUrl, { waitUntil: 'domcontentloaded', timeout: 20000 })
             .catch(err => console.warn(`[BrowserExtract] Navigation warning: ${err.message}`));
 
         // Dynamic polling check loop every 600ms
@@ -113,7 +204,7 @@ async function performExtraction(targetUrl) {
             }
             
             try {
-                // Simulate play click on all possible elements to force video load
+                // Simulate click play triggers on DOM
                 await page.evaluate(() => {
                     const selectors = [
                         'div[role="button"][aria-label="Play"]',
@@ -132,7 +223,7 @@ async function performExtraction(targetUrl) {
                     }
                 }).catch(() => {});
 
-                // If Instagram login wall button appears, click it
+                // Bypass IG captcha/cookie notice triggers
                 await page.evaluate(() => {
                     const buttons = document.querySelectorAll('button');
                     for (const btn of buttons) {
@@ -143,52 +234,89 @@ async function performExtraction(targetUrl) {
                     }
                 }).catch(() => {});
                 
-                // Extract video from DOM
+                // Extract video from simple DOM elements
                 const domUrl = await page.evaluate(() => {
-                    // 1. Direct video tags
                     const videos = document.querySelectorAll('video');
                     for (const v of videos) {
                         if (v.src && v.src.startsWith('http') && !v.src.includes('blob:')) return v.src;
                         const srcNode = v.querySelector('source');
                         if (srcNode && srcNode.src && srcNode.src.startsWith('http')) return srcNode.src;
                     }
-                    // 2. Meta tags
                     const ogVideo = document.querySelector('meta[property="og:video"]');
                     if (ogVideo && ogVideo.content && ogVideo.content.startsWith('http')) return ogVideo.content;
-                    
-                    // 3. Check iframe videos
-                    const iframes = document.querySelectorAll('iframe');
-                    for (const iframe of iframes) {
-                        try {
-                            const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
-                            if (iframeDoc) {
-                                const v = iframeDoc.querySelector('video');
-                                if (v && v.src && v.src.startsWith('http')) return v.src;
-                            }
-                        } catch {}
-                    }
                     return null;
                 }).catch(() => null);
 
                 if (domUrl) {
                     clearInterval(checkInterval);
                     finish(domUrl, 'DOM Polling');
+                    return;
+                }
+
+                // Parse page scripts for inline JSON payloads
+                const jsonBlobs = await page.evaluate(() => {
+                    const blobs = [];
+                    const keys = ['__INITIAL_STATE__', '__INITIAL_DATA__', '_sharedData', '__NEXT_DATA__', '__APOLLO_STATE__'];
+                    for (const key of keys) {
+                        try {
+                            const val = window[key];
+                            if (val) blobs.push(val);
+                        } catch {}
+                    }
+                    document.querySelectorAll('script').forEach(s => {
+                        const txt = s.textContent || '';
+                        if (!txt) return;
+                        if (s.type === 'application/json' || s.type === 'application/ld+json') {
+                            try { blobs.push(JSON.parse(txt)); } catch {}
+                        } else if (txt.includes('.mp4') || txt.includes('video_url')) {
+                            blobs.push(txt);
+                        }
+                    });
+                    return blobs;
+                }).catch(() => []);
+
+                for (const blob of jsonBlobs) {
+                    const decoded = typeof blob === 'string' ? decodeJsonEncodedUrls(blob) : blob;
+                    const walked = walkForVideoUrls(decoded);
+                    if (walked.length > 0) {
+                        const hdUrl = walked.find(u => HD_KEY_REGEX.test(u)) || walked[0];
+                        if (hdUrl) {
+                            clearInterval(checkInterval);
+                            finish(hdUrl, 'Script parsing');
+                            return;
+                        }
+                    }
+                }
+
+                // Check intercepted JSON response payloads
+                const bodies = (await Promise.all(jsonBodyPromises)).filter(Boolean);
+                for (const body of bodies) {
+                    const decoded = decodeJsonEncodedUrls(body);
+                    const walked = walkForVideoUrls(decoded);
+                    if (walked.length > 0) {
+                        const hdUrl = walked.find(u => HD_KEY_REGEX.test(u)) || walked[0];
+                        if (hdUrl) {
+                            clearInterval(checkInterval);
+                            finish(hdUrl, 'Network JSON Scan');
+                            return;
+                        }
+                    }
                 }
             } catch (e) {
                 // Ignore transient frame errors
             }
         }, 600);
 
-        // Overall safety timeout (15 seconds)
+        // Overall safety timeout (18 seconds)
         setTimeout(() => {
             clearInterval(checkInterval);
             if (!resolved) {
                 rejectFn(new Error('Extraction timed out. Could not locate video source URL.'));
             }
-        }, 15000);
+        }, 18000);
 
         return videoPromise;
-    }, { timeout: 18000 });
+    }, { timeout: 22000 });
 }
 
 module.exports = {
