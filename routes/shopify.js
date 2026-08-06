@@ -703,7 +703,7 @@ router.post('/import', async (req, res) => {
 // 6. AI description enhancer/recreator
 router.post('/ai-description', async (req, res) => {
     try {
-        const { action, description, productTitle } = req.body;
+        const { action, description, productTitle, images } = req.body;
         if (!description || !action) {
             return res.status(400).json({ error: 'Description and action are required.' });
         }
@@ -716,16 +716,33 @@ router.post('/ai-description', async (req, res) => {
             return res.status(400).json({ error: 'Gemini API Key is not configured. Please add it in Settings.' });
         }
 
+        let imagesContext = '';
+        if (Array.isArray(images) && images.length > 0) {
+            // Clean up image URLs (prepend https: if protocol relative)
+            const cleanedImages = images.map(img => img.startsWith('//') ? 'https:' + img : img);
+            imagesContext = `
+
+Here is a list of available product image URLs that you MUST insert into the description HTML:
+${cleanedImages.map((img, i) => `- Image URL ${i + 1}: ${img}`).join('\n')}
+
+IMPORTANT IMAGE RULES:
+1. Position 2 to 4 of these image URLs at natural, high-converting places in the description HTML (e.g., one below the main headline/hook, one near specification lists, and one before the satisfaction guarantee).
+2. For each image, you MUST output this exact HTML markup:
+<img src="IMAGE_URL" style="max-width: 100%; display: block; margin: 15px auto; border-radius: 8px;" />
+Replace IMAGE_URL with the exact URL from the list above. Do not modify or invent URLs.
+3. If the input HTML already contains <img> tags, prioritize keeping and styling them, but feel free to add more from the list if needed to make the description look extremely premium.`;
+        }
+
         let prompt = '';
         if (action === 'enhance') {
             prompt = `You are a professional e-commerce copywriter. Enhance and polish the following product description HTML for the product "${productTitle || ''}". 
 Improve the copy, make it persuasive and professional, fix grammatical errors, and ensure it looks clean and attractive when rendered. 
-Do NOT completely rewrite the entire structure or discard key product details unless they are spammy or irrelevant. 
+Do NOT completely rewrite the entire structure or discard key product details unless they are spammy or irrelevant.${imagesContext}
 Return ONLY the enhanced HTML code. Do not include any markdown block formatting (like \`\`\`html or \`\`\`), backticks, or introduction/explanation.`;
         } else if (action === 'recreate') {
             prompt = `You are a professional e-commerce copywriter. Recreate a brand-new, extremely high-converting and beautifully structured product description in HTML for the product "${productTitle || ''}".
 Use modern copywriting techniques (hook, problem, solution, benefit bullet points, specifications, and trust badges or satisfaction guarantee).
-Make it visually appealing with clean HTML formatting (use elements like <h3>, <p>, <ul>, <li>, and <strong>). Do not include any CSS styles or scripts.
+Make it visually appealing with clean HTML formatting (use elements like <h3>, <p>, <ul>, <li>, and <strong>). Do not include any CSS styles or scripts.${imagesContext}
 The original description is:
 "${description}"
 
