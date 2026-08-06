@@ -1185,6 +1185,10 @@
                     thumbnailFile: this.floatingVideos[0]?.thumbnailFile || null
                 };
 
+                if (result.warning) {
+                    window.AppController.showToast(result.warning, 'warning');
+                }
+
                 // Hide preview and clear URL
                 document.getElementById('shopify-preview-container').style.display = 'none';
                 document.getElementById('shopify-scrape-url').value = '';

@@ -530,6 +530,7 @@ router.post('/import', async (req, res) => {
 
         // Handle optional floating videos upload
         const metafields = [];
+        let videoUploadError = null;
         if (Array.isArray(floatingVideos) && floatingVideos.length > 0) {
             try {
                 console.log(`Uploading ${floatingVideos.length} Floating Video(s) to Shopify...`);
@@ -538,19 +539,22 @@ router.post('/import', async (req, res) => {
                     if (vid.filePath && fs.existsSync(vid.filePath)) {
                         const fileId = await uploadFileToShopify(store.shopUrl, store.accessToken, vid.filePath, vid.filename || path.basename(vid.filePath));
                         return fileId;
+                    } else {
+                        throw new Error(`Video file "${vid.filename || 'unknown.mp4'}" was not found on server disk. Please re-download it.`);
                     }
-                    return null;
                 });
                 
                 const uploadResults = await Promise.allSettled(uploadPromises);
+                const fileIds = [];
+                
                 uploadResults.forEach((r, idx) => {
-                    if (r.status === 'rejected') {
+                    if (r.status === 'fulfilled' && r.value) {
+                        fileIds.push(r.value);
+                    } else if (r.status === 'rejected') {
+                        videoUploadError = r.reason?.message || 'Unknown S3/GraphQL error';
                         console.error(`Video upload ${idx} failed:`, r.reason);
                     }
                 });
-                const fileIds = uploadResults
-                    .filter(r => r.status === 'fulfilled' && r.value)
-                    .map(r => r.value);
                 
                 if (fileIds.length > 0) {
                     // Get the exact metafield definition type
@@ -567,6 +571,7 @@ router.post('/import', async (req, res) => {
                     });
                 }
             } catch (err) {
+                videoUploadError = err.message;
                 console.error('Failed to upload floating videos to Shopify Files:', err.message);
             }
         }
@@ -694,7 +699,7 @@ router.post('/import', async (req, res) => {
         }
 
         const productUrl = `https://${actualDomain}/products/${createdProduct.handle}`;
-        res.json({ success: true, productId: createdProductId, title: createdProduct.title, productUrl });
+        res.json({ success: true, productId: createdProductId, title: createdProduct.title, productUrl, warning: videoUploadError });
     } catch (error) {
         res.status(500).json({ error: 'Failed to import product to Shopify', details: error.message });
     }
