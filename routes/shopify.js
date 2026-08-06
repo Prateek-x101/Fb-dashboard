@@ -1047,50 +1047,77 @@ router.post('/universal-import', videoUpload.array('files', 20), async (req, res
 
         // CASE B: URL provided
         if (url) {
-            // Sub-case 1: Is it a media link (FB Ads Library, Instagram, Pinterest, YouTube, direct video)
-            const isMediaUrl = /facebook\.com\/ads\/library/i.test(url) ||
-                               /instagram\.com/i.test(url) ||
-                               /pinterest\.(com|co)/i.test(url) ||
-                               /pin\.it/i.test(url) ||
-                               /youtube\.com/i.test(url) ||
-                               /youtu\.be/i.test(url) ||
-                               /\.(mp4|mov|m4v|png|jpg|jpeg|webp)(\?|$)/i.test(url);
+            // Split URL by commas, spaces, or newlines to support multiple links
+            const urls = url.split(/[\s,\n\r]+/).map(u => u.trim()).filter(Boolean);
+            if (urls.length === 0) {
+                return res.status(400).json({ error: 'No valid URL provided.' });
+            }
+
+            // Check if any of the URLs is a media URL
+            const isMediaUrl = urls.some(u => 
+                /facebook\.com\/ads\/library/i.test(u) ||
+                /instagram\.com/i.test(u) ||
+                /pinterest\.(com|co)/i.test(u) ||
+                /pin\.it/i.test(u) ||
+                /youtube\.com/i.test(u) ||
+                /youtu\.be/i.test(u) ||
+                /\.(mp4|mov|m4v|png|jpg|jpeg|webp)(\?|$)/i.test(u)
+            );
 
             if (isMediaUrl) {
                 if (!geminiApiKey) return res.status(400).json({ error: 'Gemini API Key is required to analyze media links. Configure it in Settings.' });
 
-                console.log(`[UniversalImport] Downloading target media URL: ${url}`);
                 const videoProcessor = require('../services/videoProcessor');
-                const targetFilename = `dl-import-${Date.now()}.mp4`;
                 
                 // Get facebook token for Ads Library download if available
                 let fbAccessToken = null;
                 const accs = storage.accounts || [];
                 if (accs.length > 0) fbAccessToken = accs[0].accessToken || null;
 
-                const downloadedPath = await videoProcessor.downloadVideo(url, targetFilename, fbAccessToken);
-                tempMediaPaths.push(downloadedPath);
-
                 const allFrames = [];
-                // Check if downloaded file is an image or video
-                const isImg = /\.(png|jpg|jpeg|webp)$/i.test(downloadedPath);
-                if (isImg) {
-                    const imgBase64 = fs.readFileSync(downloadedPath).toString('base64');
-                    allFrames.push({ base64: imgBase64, filePath: downloadedPath, sourceType: 'image' });
-                } else {
-                    console.log(`[UniversalImport] Extracting frames from downloaded video...`);
-                    const videoFrames = await videoProcessor.extractFrames(downloadedPath, 20);
-                    videoFrames.forEach(f => allFrames.push({ ...f, sourceType: 'video' }));
-                    allExtractedFrames.push(...videoFrames);
 
-                    // Preserve video for metafield listing uploads
-                    const safeName = `floating-${uuidv4()}.mp4`;
-                    const preservedPath = path.join(uploadsDir, safeName);
-                    fs.copyFileSync(downloadedPath, preservedPath);
-                    preservedVideoPaths.push(preservedPath);
+                // Process each media URL
+                for (let i = 0; i < urls.length; i++) {
+                    const singleUrl = urls[i];
+                    // Skip if it doesn't look like a media link
+                    const isSingleMedia = /facebook\.com\/ads\/library/i.test(singleUrl) ||
+                                         /instagram\.com/i.test(singleUrl) ||
+                                         /pinterest\.(com|co)/i.test(singleUrl) ||
+                                         /pin\.it/i.test(singleUrl) ||
+                                         /youtube\.com/i.test(singleUrl) ||
+                                         /youtu\.be/i.test(singleUrl) ||
+                                         /\.(mp4|mov|m4v|png|jpg|jpeg|webp)(\?|$)/i.test(singleUrl);
+                    if (!isSingleMedia) continue;
+
+                    console.log(`[UniversalImport] Downloading target media URL (${i + 1}/${urls.length}): ${singleUrl}`);
+                    try {
+                        const targetFilename = `dl-import-${Date.now()}-${i}.mp4`;
+                        const downloadedPath = await videoProcessor.downloadVideo(singleUrl, targetFilename, fbAccessToken);
+                        tempMediaPaths.push(downloadedPath);
+
+                        // Check if downloaded file is an image or video
+                        const isImg = /\.(png|jpg|jpeg|webp)$/i.test(downloadedPath);
+                        if (isImg) {
+                            const imgBase64 = fs.readFileSync(downloadedPath).toString('base64');
+                            allFrames.push({ base64: imgBase64, filePath: downloadedPath, sourceType: 'image' });
+                        } else {
+                            console.log(`[UniversalImport] Extracting frames from downloaded video...`);
+                            const videoFrames = await videoProcessor.extractFrames(downloadedPath, 20);
+                            videoFrames.forEach(f => allFrames.push({ ...f, sourceType: 'video' }));
+                            allExtractedFrames.push(...videoFrames);
+
+                            // Preserve video for metafield listing uploads
+                            const safeName = `floating-${uuidv4()}.mp4`;
+                            const preservedPath = path.join(uploadsDir, safeName);
+                            fs.copyFileSync(downloadedPath, preservedPath);
+                            preservedVideoPaths.push(preservedPath);
+                        }
+                    } catch (downloadErr) {
+                        console.error(`[UniversalImport] Failed to process media URL: ${singleUrl}`, downloadErr);
+                    }
                 }
 
-                if (!allFrames.length) throw new Error('No usable media frames could be extracted from downloaded URL.');
+                if (!allFrames.length) throw new Error('No usable media frames could be extracted from downloaded URL(s).');
                 
                 const framesBase64 = allFrames.map(f => f.base64);
                 const analysis = await geminiService.analyzeProductFromFrames(geminiApiKey, geminiModel, framesBase64);
