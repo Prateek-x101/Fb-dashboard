@@ -1438,12 +1438,17 @@ async function scrapeProductPageViaBrowser(url) {
                     }
                 });
             } else if (isAlibaba) {
-                // Alibaba thumbnail list and description images
-                document.querySelectorAll('.thumb-list img, .detail-description img').forEach(img => {
-                    const src = img.src || img.getAttribute('data-src') || img.getAttribute('src');
-                    if (src && !src.includes('pixel') && !src.includes('logo') && src.startsWith('http')) {
-                        const hires = src.replace(/_\d+x\d+.*$/, '');
-                        imageUrls.push(hires);
+                // Alibaba thumbnail list, description images, and main gallery selectors
+                document.querySelectorAll('.thumb-list img, .detail-description img, .main-image-container img, .image-viewer img, .detail-gallery img, .icbu-pc-detail-gallery img, .gallery-img-wrapper img, .main-layout img').forEach(img => {
+                    let src = img.getAttribute('src') || img.getAttribute('data-src') || img.src || '';
+                    if (src) {
+                        if (src.startsWith('//')) {
+                            src = 'https:' + src;
+                        }
+                        if (!src.includes('pixel') && !src.includes('logo') && (src.startsWith('http') || src.includes('alicdn.com'))) {
+                            const hires = src.replace(/_\d+x\d+.*$/, '');
+                            imageUrls.push(hires);
+                        }
                     }
                 });
             } else {
@@ -1451,6 +1456,9 @@ async function scrapeProductPageViaBrowser(url) {
                 document.querySelectorAll('.product-image img, .gallery img, .main-image img, #main-image img, img.product-gallery-image, img[class*="product-img"], .thumb-list img, .swiper-slide img, .slick-slide img, .carousel img, .slider img, img[class*="gallery"], img[class*="image"], img[class*="product"], img[class*="thumb"], img[class*="media"], img[class*="slider"], img[class*="carousel"]').forEach(img => {
                     let src = img.getAttribute('srcset') || img.getAttribute('srcSet') || img.getAttribute('data-src') || img.src;
                     if (src) {
+                        if (src.startsWith('//')) {
+                            src = 'https:' + src;
+                        }
                         const srcLower = src.toLowerCase();
                         const isIgnored = [
                             'logo', 'banner', 'pixel', 'sprite', 'icon', 'button', 'loading', 'placeholder', 
@@ -1463,8 +1471,10 @@ async function scrapeProductPageViaBrowser(url) {
                         if (!isIgnored) {
                             if (src.includes(' ')) {
                                 const parts = src.split(',').map(p => p.trim().split(' ')[0]);
-                                const highRes = parts.filter(p => p.startsWith('http')).pop();
-                                if (highRes) src = highRes;
+                                const highRes = parts.filter(p => p.startsWith('http') || p.startsWith('//')).pop();
+                                if (highRes) {
+                                    src = highRes.startsWith('//') ? 'https:' + highRes : highRes;
+                                }
                             }
                             if (src && src.startsWith('http')) {
                                 imageUrls.push(src);
@@ -1683,7 +1693,7 @@ function autoAppendSizeCharts(product, storage) {
         
         const descLower = (product.description || '').toLowerCase();
         if (sizeChartHtml && !descLower.includes('size-chart') && !descLower.includes('size_chart') && !descLower.includes('size chart') && !descLower.includes('beden tablosu')) {
-            product.description = (product.description || '') + `<br/><hr/><h3>📐 Beden Tablosu / Size Chart</h3>` + sizeChartHtml;
+            product.description = (product.description || '') + `<br/><hr/><h3 style="color: #e67e23; margin-top: 15px; margin-bottom: 8px;">📐 Beden Tablosu / Size Chart</h3>` + sizeChartHtml;
         }
     }
 }

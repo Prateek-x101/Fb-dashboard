@@ -177,14 +177,17 @@ async function withTab(extractFn, opts = {}) {
         const br = await ensureBrowser();
         page = await br.newPage();
 
-        // Block images, fonts, stylesheets — only keep scripts/documents/media
+        // Block fonts, stylesheets, and intercept images to return a 1x1 transparent GIF to prevent lazy-load failures
         await page.setRequestInterception(true);
         page.on('request', req => {
             const rt = req.resourceType();
-            const shouldBlock = blockImages 
-                ? ['image', 'stylesheet', 'font'].includes(rt)
-                : ['stylesheet', 'font'].includes(rt);
-            if (shouldBlock) {
+            if (rt === 'image' && blockImages) {
+                req.respond({
+                    status: 200,
+                    contentType: 'image/gif',
+                    body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64')
+                });
+            } else if (['stylesheet', 'font'].includes(rt)) {
                 req.abort();
             } else {
                 req.continue();
