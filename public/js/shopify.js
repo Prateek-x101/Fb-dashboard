@@ -278,6 +278,68 @@
                     });
                 }
             });
+
+            // Render a "➕ Add Image" upload card at the end of the grid!
+            const uploadCard = document.createElement('div');
+            uploadCard.className = 'shopify-image-card manual-upload-trigger-card';
+            uploadCard.style.cssText = 'display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; width:100px; height:120px; flex-shrink:0; cursor:pointer;';
+            uploadCard.innerHTML = `
+                <div style="width:90px; height:90px; border:2px dashed var(--accent-purple); border-radius:6px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; background:rgba(124,58,237,0.05); transition:all 0.2s ease-in-out;" class="manual-upload-box-hover">
+                    <span style="font-size:1.5rem; color:#a78bfa;">➕</span>
+                    <span style="font-size:0.65rem; color:var(--text-secondary); font-weight:600; text-align:center;">Add Image</span>
+                </div>
+                <input type="file" multiple accept="image/*" class="shopify-manual-image-file-input" style="display:none;">
+            `;
+            imagesContainer.appendChild(uploadCard);
+
+            const uploadBox = uploadCard.querySelector('.manual-upload-box-hover');
+            uploadCard.addEventListener('mouseenter', () => {
+                uploadBox.style.background = 'rgba(124,58,237,0.15)';
+                uploadBox.style.borderColor = '#c084fc';
+            });
+            uploadCard.addEventListener('mouseleave', () => {
+                uploadBox.style.background = 'rgba(124,58,237,0.05)';
+                uploadBox.style.borderColor = 'var(--accent-purple)';
+            });
+
+            const fileInput = uploadCard.querySelector('.shopify-manual-image-file-input');
+            uploadCard.addEventListener('click', () => {
+                fileInput.click();
+            });
+
+            fileInput.addEventListener('click', (e) => {
+                e.stopPropagation();
+            });
+
+            fileInput.addEventListener('change', async (e) => {
+                const files = e.target.files;
+                if (!files.length) return;
+
+                const formData = new FormData();
+                for (let i = 0; i < files.length; i++) {
+                    formData.append('files', files[i]);
+                }
+
+                try {
+                    window.AppController.showToast('Uploading manual image(s)... 📤', 'info');
+                    const response = await fetch('/api/shopify/upload-scraped-images', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    const result = await response.json();
+                    if (!response.ok) throw new Error(result.error || 'Upload failed');
+
+                    if (!this.scrapedProduct) this.scrapedProduct = { images: [] };
+                    if (!this.scrapedProduct.images) this.scrapedProduct.images = [];
+                    
+                    this.scrapedProduct.images.push(...(result.paths || []));
+                    
+                    this.renderImagesGrid();
+                    window.AppController.showToast('Images added successfully! 📸✅', 'success');
+                } catch (err) {
+                    window.AppController.showToast('Failed to upload images: ' + err.message, 'error');
+                }
+            });
         },
 
         renderFloatingVideoPreview: function() {

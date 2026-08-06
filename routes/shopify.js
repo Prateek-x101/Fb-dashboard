@@ -1426,14 +1426,25 @@ async function scrapeProductPageViaBrowser(url) {
                 // Generic page fallback + prominent e-commerce main images
                 document.querySelectorAll('.product-image img, .gallery img, .main-image img, #main-image img, img.product-gallery-image, img[class*="product-img"], .thumb-list img').forEach(img => {
                     let src = img.getAttribute('srcset') || img.getAttribute('srcSet') || img.getAttribute('data-src') || img.src;
-                    if (src && !src.includes('logo') && !src.includes('pixel') && !src.includes('sprite')) {
-                        if (src.includes(' ')) {
-                            const parts = src.split(',').map(p => p.trim().split(' ')[0]);
-                            const highRes = parts.filter(p => p.startsWith('http')).pop();
-                            if (highRes) src = highRes;
-                        }
-                        if (src && src.startsWith('http')) {
-                            imageUrls.push(src);
+                    if (src) {
+                        const srcLower = src.toLowerCase();
+                        const isIgnored = [
+                            'logo', 'banner', 'pixel', 'sprite', 'icon', 'button', 'loading', 'placeholder', 
+                            'avatar', 'svg', 'theme', 'checkout', 'badge', 'trust', 'payment', 'shipping', 
+                            'carrier', 'dhl', 'hepsijet', 'troy', 'visa', 'mastercard', 'maestro', 'amex', 
+                            'klarna', 'stripe', 'paypal', 'facebook.com/tr', 'google-analytics', 'yandex', 
+                            'doubleclick', 'facebook-pixel', 'connect.facebook.net', 'tracking', 'advert'
+                        ].some(kw => srcLower.includes(kw)) || src.includes('.svg') || src.startsWith('data:image');
+
+                        if (!isIgnored) {
+                            if (src.includes(' ')) {
+                                const parts = src.split(',').map(p => p.trim().split(' ')[0]);
+                                const highRes = parts.filter(p => p.startsWith('http')).pop();
+                                if (highRes) src = highRes;
+                            }
+                            if (src && src.startsWith('http')) {
+                                imageUrls.push(src);
+                            }
                         }
                     }
                 });
@@ -1441,22 +1452,31 @@ async function scrapeProductPageViaBrowser(url) {
                 const imgElements = document.querySelectorAll('img');
                 imgElements.forEach(img => {
                     let src = img.getAttribute('srcset') || img.getAttribute('srcSet') || img.getAttribute('data-src') || img.src;
-                    if (src && !src.includes('sprite') && !src.includes('pixel') && !src.includes('logo') && !src.includes('banner')) {
-                        if (src.includes(' ')) {
-                            const parts = src.split(',').map(p => p.trim().split(' ')[0]);
-                            const highRes = parts.filter(p => p.startsWith('http')).pop();
-                            if (highRes) src = highRes;
-                        }
-                        if (src && src.startsWith('http')) {
-                            // Check naturalWidth only if naturalWidth is > 0 (meaning image loaded)
-                            // Otherwise, since image is blocked, we check width attribute or class or class name contains product
-                            const width = img.naturalWidth || parseInt(img.getAttribute('width')) || 0;
-                            const height = img.naturalHeight || parseInt(img.getAttribute('height')) || 0;
-                            const className = img.className || '';
-                            const isProductImage = className.includes('product') || className.includes('gallery') || className.includes('main') || className.includes('detail');
-                            
-                            if (isProductImage || (width === 0 || width > 200) && (height === 0 || height > 200)) {
-                                imageUrls.push(src);
+                    if (src) {
+                        const srcLower = src.toLowerCase();
+                        const isIgnored = [
+                            'logo', 'banner', 'pixel', 'sprite', 'icon', 'button', 'loading', 'placeholder', 
+                            'avatar', 'svg', 'theme', 'checkout', 'badge', 'trust', 'payment', 'shipping', 
+                            'carrier', 'dhl', 'hepsijet', 'troy', 'visa', 'mastercard', 'maestro', 'amex', 
+                            'klarna', 'stripe', 'paypal', 'facebook.com/tr', 'google-analytics', 'yandex', 
+                            'doubleclick', 'facebook-pixel', 'connect.facebook.net', 'tracking', 'advert'
+                        ].some(kw => srcLower.includes(kw)) || src.includes('.svg') || src.startsWith('data:image');
+
+                        if (!isIgnored) {
+                            if (src.includes(' ')) {
+                                const parts = src.split(',').map(p => p.trim().split(' ')[0]);
+                                const highRes = parts.filter(p => p.startsWith('http')).pop();
+                                if (highRes) src = highRes;
+                            }
+                            if (src && src.startsWith('http')) {
+                                const width = img.naturalWidth || parseInt(img.getAttribute('width')) || 0;
+                                const height = img.naturalHeight || parseInt(img.getAttribute('height')) || 0;
+                                const className = img.className || '';
+                                const isProductImage = className.includes('product') || className.includes('gallery') || className.includes('main') || className.includes('detail');
+                                
+                                if (isProductImage || (width === 0 || width > 200) && (height === 0 || height > 200)) {
+                                    imageUrls.push(src);
+                                }
                             }
                         }
                     }
@@ -1531,6 +1551,26 @@ async function scrapeProductPageViaBrowser(url) {
         return pageData;
     }, { timeout: 60000 });
 }
+
+// Endpoint to upload manual images in Shopify Importer preview grid
+router.post('/upload-scraped-images', videoUpload.array('files', 10), (req, res) => {
+    try {
+        const files = req.files || [];
+        const paths = [];
+        
+        for (const file of files) {
+            const extension = path.extname(file.originalname) || '.jpg';
+            const safeName = `manual-${uuidv4()}${extension.toLowerCase()}`;
+            const destPath = path.join(__dirname, '..', 'uploads', safeName);
+            fs.renameSync(file.path, destPath);
+            paths.push('/uploads/' + safeName);
+        }
+        
+        res.json({ success: true, paths });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to upload scraped images', details: error.message });
+    }
+});
 
 // 8. Assign extracted images to variant values using Gemini Vision
 router.post('/assign-variant-images', async (req, res) => {
