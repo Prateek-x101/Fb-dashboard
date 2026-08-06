@@ -836,6 +836,16 @@ router.post('/video-to-listing', videoUpload.array('files', 20), async (req, res
             }
         }
 
+        // Replace placeholder image tags in description with actual uploaded file paths
+        let bodyHtml = analysis.description || '';
+        savedFrames.forEach(frame => {
+            const placeholder = new RegExp(`\\[IMAGE_${frame.index}\\]`, 'g');
+            bodyHtml = bodyHtml.replace(placeholder, `<img src="${frame.url}" style="max-width: 100%; display: block; margin: 15px auto; border-radius: 8px;" />`);
+        });
+        // Clean up unmatched placeholders
+        bodyHtml = bodyHtml.replace(/\[IMAGE_\d+\]/g, '');
+        analysis.description = bodyHtml;
+
         res.json({
             success: true,
             frames: savedFrames,
@@ -971,6 +981,16 @@ router.post('/universal-import', videoUpload.array('files', 20), async (req, res
                     suggestedCollectionIds = normalizeSuggestedCollectionIds(suggestion, userCollections);
                 } catch {}
             }
+
+            // Replace placeholder image tags in description with actual uploaded file paths
+            let bodyHtml = analysis.description || '';
+            savedFrames.forEach(frame => {
+                const placeholder = new RegExp(`\\[IMAGE_${frame.index}\\]`, 'g');
+                bodyHtml = bodyHtml.replace(placeholder, `<img src="${frame.url}" style="max-width: 100%; display: block; margin: 15px auto; border-radius: 8px;" />`);
+            });
+            // Clean up unmatched placeholders
+            bodyHtml = bodyHtml.replace(/\[IMAGE_\d+\]/g, '');
+            analysis.description = bodyHtml;
 
             // Map options and variants for scraper-compatible preview format
             const options = (analysis.detectedAttributes || []).map(attr => ({
@@ -1113,6 +1133,16 @@ router.post('/universal-import', videoUpload.array('files', 20), async (req, res
                     } catch {}
                 }
 
+                // Replace placeholder image tags in description with actual uploaded file paths
+                let bodyHtml = analysis.description || '';
+                savedFrames.forEach(frame => {
+                    const placeholder = new RegExp(`\\[IMAGE_${frame.index}\\]`, 'g');
+                    bodyHtml = bodyHtml.replace(placeholder, `<img src="${frame.url}" style="max-width: 100%; display: block; margin: 15px auto; border-radius: 8px;" />`);
+                });
+                // Clean up unmatched placeholders
+                bodyHtml = bodyHtml.replace(/\[IMAGE_\d+\]/g, '');
+                analysis.description = bodyHtml;
+
                 const options = (analysis.detectedAttributes || []).map(attr => ({
                     name: attr.name,
                     values: attr.values
@@ -1240,13 +1270,25 @@ router.post('/universal-import', videoUpload.array('files', 20), async (req, res
             const structuredProduct = await geminiService.analyzeProductFromScrapedText(
                 geminiApiKey,
                 geminiModel,
-                `Page Title: ${pageData.title}\n\nPage Text:\n${pageData.bodyText}`
+                `Page Title: ${pageData.title}\n\nPage Text:\n${pageData.bodyText}`,
+                pageData.images || []
             );
 
             // Merge scraped browser images with Gemini's response
             const finalImages = pageData.images && pageData.images.length > 0 
                 ? pageData.images 
                 : (structuredProduct.images || []);
+
+            // Replace placeholder image tags in description with actual scraped image urls
+            let bodyHtml = structuredProduct.description || '';
+            finalImages.forEach((imgUrl, i) => {
+                const placeholder = new RegExp(`\\[IMAGE_${i}\\]`, 'g');
+                const src = imgUrl.startsWith('//') ? 'https:' + imgUrl : imgUrl;
+                bodyHtml = bodyHtml.replace(placeholder, `<img src="${src}" style="max-width: 100%; display: block; margin: 15px auto; border-radius: 8px;" />`);
+            });
+            // Clean up unmatched placeholders
+            bodyHtml = bodyHtml.replace(/\[IMAGE_\d+\]/g, '');
+            structuredProduct.description = bodyHtml;
 
             // Ensure variants have correct defaults/skus if lacking
             const variants = (structuredProduct.variants || []).map((v, i) => ({

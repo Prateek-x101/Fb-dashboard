@@ -197,6 +197,13 @@ Your tasks:
 2. Detect product attributes visible in the images (colors, designs, styles, patterns, etc.) — these will be used to suggest product variants.
 3. Generate a Shopify product listing from those images.
 
+In the generated "description" HTML, you must embed the product description images that explain the product features! Place placeholder tags like [IMAGE_X] (where X is the 0-indexed index of the image from framesBase64, e.g. [IMAGE_0], [IMAGE_3]) contextually between paragraphs where they make sense to display. For example:
+<p><strong>ALL CAPS NAME</strong> - Description of feature.</p>
+[IMAGE_2]
+<p><strong>ANOTHER FEATURE</strong> - Description.</p>
+[IMAGE_5]
+This makes the Shopify listing description highly visual and premium! Only use indices that are valid in the list.
+
 CRITICAL — The description HTML MUST follow this EXACT format and structure (use this as a template):
 
 <p><span style="color: #e67e23;"><strong>FEATURES</strong></span></p>
@@ -266,12 +273,22 @@ Return ONLY valid JSON (no markdown, no backticks):
     },
 
     // Convert scraped e-commerce page text (Amazon, Alibaba, etc.) into structured Shopify listing
-    async analyzeProductFromScrapedText(apiKey, model, scrapedText) {
+    async analyzeProductFromScrapedText(apiKey, model, scrapedText, imageUrls = []) {
         const url = `${BASE_URL}/models/${normalizeModel(model)}:generateContent?key=${apiKey}`;
         
-        const prompt = `You are a professional e-commerce product manager. You will receive scraped text from an external product page (like Amazon, Alibaba, or any other web store).
+        const prompt = `You are a professional e-commerce product manager. You will receive scraped text and images from an external product page (like Amazon, Alibaba, or any other web store).
         
 Your task: Convert this messy product information into a clean, professional Shopify listing structure.
+
+Here is a list of product images extracted from the page (0-indexed):
+${(imageUrls || []).map((imgUrl, i) => `[IMAGE_${i}]: ${imgUrl}`).join('\n')}
+
+In the generated "description" HTML, you must embed the product description images that explain the product features! Place placeholder tags like [IMAGE_X] (where X is the 0-indexed index of the image from the list, e.g. [IMAGE_0], [IMAGE_3]) contextually between paragraphs where they make sense to display. For example:
+<p><strong>ALL CAPS NAME</strong> - Description of feature.</p>
+[IMAGE_2]
+<p><strong>ANOTHER FEATURE</strong> - Description.</p>
+[IMAGE_5]
+This makes the Shopify listing description highly visual and premium! Only use indices that are valid in the list.
 
 CRITICAL - The product description HTML MUST follow this EXACT format and structure (use this as a template):
 
