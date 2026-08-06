@@ -1493,58 +1493,54 @@ async function scrapeProductPageViaBrowser(url) {
             };
         });
 
-        // Fetch up to 4 other variants via simple memory-efficient node fetch
+        // Crawl up to 4 other variants sequentially using the same Puppeteer tab (bypasses Cloudflare & avoids OOM)
         const otherVariantUrls = variantUrls.filter(vUrl => vUrl !== url).slice(0, 4);
         if (otherVariantUrls.length > 0) {
-            console.log(`[UniversalScrape] Sibling variants detected: ${otherVariantUrls.length}. Extracting variant images via memory-safe HTTP fetch...`);
+            console.log(`[UniversalScrape] Sibling variants detected: ${otherVariantUrls.length}. Extracting variant images sequentially...`);
             
-            // Import fetch if not present in Node context, otherwise use native fetch
-            const nodeFetch = typeof fetch === 'function' ? fetch : require('node-fetch');
-
-            const variantPromises = otherVariantUrls.map(async (vUrl) => {
+            for (const vUrl of otherVariantUrls) {
                 try {
-                    const res = await nodeFetch(vUrl, {
-                        headers: {
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                        },
-                        signal: AbortSignal.timeout(12000)
-                    });
-                    if (!res.ok) return [];
-                    const html = await res.text();
+                    console.log(`[UniversalScrape] Sequential navigation to: ${vUrl}`);
+                    await page.goto(vUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+                    // Wait 1.5 seconds for React/hydration scripts to run and populate media paths
+                    await new Promise(r => setTimeout(r, 1500));
                     
-                    // Regex extract raw img sources from HTML payload
-                    const imgRegex = /<img[^>]+(?:src|srcset|srcSet|data-src)="([^"]+)"/gi;
-                    let match;
-                    const urls = [];
-                    while ((match = imgRegex.exec(html)) !== null) {
-                        let src = match[1];
-                        // Clean up escaped HTML chars like &amp;
-                        src = src.replace(/&amp;/g, '&');
-                        if (src && !src.includes('logo') && !src.includes('pixel') && !src.includes('sprite')) {
-                            // Extract URL from srcset if it exists
-                            if (src.includes(' ')) {
-                                const parts = src.split(',').map(p => p.trim().split(' ')[0]);
-                                const highRes = parts.filter(p => p.startsWith('http')).pop();
-                                if (highRes) src = highRes;
-                            }
-                            if (src && src.startsWith('http')) {
-                                urls.push(src);
-                            }
-                        }
-                    }
-                    return [...new Set(urls)].slice(0, 4); // return top 4 variant photos
-                } catch (e) {
-                    console.error(`[UniversalScrape] Failed HTTP fetch for variant ${vUrl}:`, e.message);
-                    return [];
-                }
-            });
+                    const variantImages = await page.evaluate(() => {
+                        const urls = [];
+                        document.querySelectorAll('.product-image img, .gallery img, .main-image img, #main-image img, img.product-gallery-image, img[class*="product-img"], .thumb-list img, .swiper-slide img, .slick-slide img, .carousel img, .slider img, img[class*="gallery"], img[class*="image"], img[class*="product"], img[class*="thumb"]').forEach(img => {
+                            let src = img.getAttribute('srcset') || img.getAttribute('srcSet') || img.getAttribute('data-src') || img.src;
+                            if (src) {
+                                const srcLower = src.toLowerCase();
+                                const isIgnored = [
+                                    'logo', 'banner', 'pixel', 'sprite', 'icon', 'button', 'loading', 'placeholder', 
+                                    'avatar', 'svg', 'theme', 'checkout', 'badge', 'trust', 'payment', 'shipping', 
+                                    'carrier', 'dhl', 'hepsijet', 'troy', 'visa', 'mastercard', 'maestro', 'amex', 
+                                    'klarna', 'stripe', 'paypal', 'facebook.com/tr', 'google-analytics', 'yandex', 
+                                    'doubleclick', 'facebook-pixel', 'connect.facebook.net', 'tracking', 'advert'
+                                ].some(kw => srcLower.includes(kw)) || src.includes('.svg') || src.startsWith('data:image');
 
-            const results = await Promise.allSettled(variantPromises);
-            results.forEach(res => {
-                if (res.status === 'fulfilled' && Array.isArray(res.value)) {
-                    pageData.images.push(...res.value);
+                                if (!isIgnored) {
+                                    if (src.includes(' ')) {
+                                        const parts = src.split(',').map(p => p.trim().split(' ')[0]);
+                                        const highRes = parts.filter(p => p.startsWith('http')).pop();
+                                        if (highRes) src = highRes;
+                                    }
+                                    if (src && src.startsWith('http')) {
+                                        urls.push(src);
+                                    }
+                                }
+                            }
+                        });
+                        return [...new Set(urls)].slice(0, 5); // top 5 pictures per variant
+                    });
+                    
+                    if (variantImages && variantImages.length > 0) {
+                        pageData.images.push(...variantImages);
+                    }
+                } catch (e) {
+                    console.error(`[UniversalScrape] Sequential crawl failed for variant URL ${vUrl}:`, e.message);
                 }
-            });
+            }
             pageData.images = [...new Set(pageData.images)].slice(0, 50); // Cap at 50 images total
         }
         
