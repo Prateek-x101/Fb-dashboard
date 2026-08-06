@@ -1225,16 +1225,26 @@ router.post('/universal-import', videoUpload.array('files', 20), async (req, res
                     return img.startsWith('//') ? 'https:' + img : img;
                 });
 
-                // Format variants and collect direct image assignments
+                // Format variants and collect direct image assignments (ONE image per variant value)
                 const defaultAssignments = {};
+                const assignedVariantValues = new Set(); // Track which variant values already have an image
                 const variants = (product.variants || []).map(v => {
                     const imgUrl = v.featured_image ? v.featured_image.src : null;
-                    if (imgUrl) {
-                        const normalizedUrl = imgUrl.startsWith('//') ? 'https:' + imgUrl : imgUrl;
-                        const cleanUrl = normalizedUrl.split('?')[0];
-                        if (v.option1) {
-                            defaultAssignments[cleanUrl] = v.option1;
-                            defaultAssignments[normalizedUrl] = v.option1;
+                    if (imgUrl && v.option1 && !assignedVariantValues.has(v.option1)) {
+                        const normalizedVariantImg = imgUrl.startsWith('//') ? 'https:' + imgUrl : imgUrl;
+                        const cleanVariantImg = normalizedVariantImg.split('?')[0];
+                        
+                        // Find the matching image in the product images array
+                        const matchedProductImg = images.find(prodImg => {
+                            const cleanProdImg = prodImg.split('?')[0];
+                            return cleanProdImg === cleanVariantImg;
+                        });
+                        
+                        if (matchedProductImg) {
+                            defaultAssignments[matchedProductImg] = v.option1;
+                            // Also store clean URL version for fallback matching
+                            defaultAssignments[matchedProductImg.split('?')[0]] = v.option1;
+                            assignedVariantValues.add(v.option1);
                         }
                     }
                     return {

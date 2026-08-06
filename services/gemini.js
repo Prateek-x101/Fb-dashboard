@@ -367,14 +367,20 @@ Return ONLY valid JSON (no markdown, no backticks, no comments):
 
 The product has a variant option called "${variantOption}" with these possible values: ${variantValues.join(', ')}.
 
-For EACH image, determine which variant value it most likely represents based on visual characteristics (color, style, design, pattern, etc.). If an image is ambiguous, assign it to the closest matching value.
+Your task: Pick exactly ONE best image for EACH variant value. Choose the image that most clearly and prominently shows that specific variant (color, style, pattern, etc.).
+
+IMPORTANT RULES:
+- Each variant value gets exactly ONE image (the single best match)
+- Each image can only be assigned to ONE variant value
+- If there are more images than variants, leave the extra images UNASSIGNED (do not include them)
+- Pick the clearest, most representative image for each variant
 
 Return ONLY valid JSON (no markdown, no backticks):
 {
-  "assignments": {"0": "${variantValues[0]}", "1": "${variantValues[1] || variantValues[0]}"}
+  "assignments": {"<imageIndex>": "${variantValues[0]}", "<imageIndex>": "${variantValues[1] || variantValues[0]}"}
 }
 
-Keys are image indices as strings. Every index from 0 to ${framesBase64.length - 1} must appear. Values must be one of: ${variantValues.join(', ')}`
+Keys are image indices as strings. Only include ${variantValues.length} entries (one per variant). Values must be one of: ${variantValues.join(', ')}`
             }
         ];
 

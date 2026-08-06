@@ -244,9 +244,10 @@
             images.forEach((imgUrl, idx) => {
                 const src = imgUrl.startsWith('//') ? 'https:' + imgUrl : imgUrl;
                 const filename = imgUrl.startsWith('/uploads/') ? imgUrl.replace(/^\/uploads\//, '') : imgUrl;
+                const cleanUrl = imgUrl.split('?')[0]; // URL without query params for fallback matching
                 
                 // Retrieve assigned value (either pre-set by VTL or manually changed)
-                let assignedVal = this.vtlVariantAssignments[filename] || this.vtlVariantAssignments[imgUrl] || '';
+                let assignedVal = this.vtlVariantAssignments[filename] || this.vtlVariantAssignments[imgUrl] || this.vtlVariantAssignments[cleanUrl] || this.vtlVariantAssignments[src] || '';
                 
                 const card = document.createElement('div');
                 card.className = 'shopify-image-card';
