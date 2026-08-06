@@ -559,6 +559,101 @@
                 if (variants.length > 1) {
                     variantsContainer.style.display = 'block';
                     variantsTbody.innerHTML = '';
+
+                    const options = this.scrapedProduct.options || [];
+                    const sizeOptionIndex = options.findIndex(opt => ['size', 'beden', 'taille', 'size (us)'].includes((opt.name || '').toLowerCase()));
+                    const pricingGroups = {};
+
+                    variants.forEach((v, idx) => {
+                        let keyParts = [];
+                        if (options.length > 0) {
+                            options.forEach((opt, oIdx) => {
+                                if (oIdx !== sizeOptionIndex) {
+                                    const val = v[`option${oIdx + 1}`] || '';
+                                    if (val) keyParts.push(val);
+                                }
+                            });
+                        }
+                        const key = keyParts.join(' / ') || 'All Sizes';
+                        
+                        if (!pricingGroups[key]) {
+                            pricingGroups[key] = {
+                                label: key,
+                                variantsList: [],
+                                initialPrice: v.price || '29.99',
+                                initialCompare: v.compare_at_price || ''
+                            };
+                        }
+                        pricingGroups[key].variantsList.push({ variant: v, originalIndex: idx });
+                    });
+
+                    // Build and render grouped pricing rows
+                    const groupsContainer = document.getElementById('shopify-import-pricing-groups-container');
+                    const groupsWrapper = document.getElementById('shopify-import-pricing-groups-wrapper');
+                    
+                    if (groupsContainer && groupsWrapper) {
+                        groupsContainer.innerHTML = '';
+                        const keys = Object.keys(pricingGroups);
+                        
+                        if (keys.length > 0 && keys.length < variants.length) {
+                            groupsWrapper.style.display = 'block';
+                            keys.forEach(key => {
+                                const group = pricingGroups[key];
+                                const sizeValues = group.variantsList.map(item => {
+                                    return sizeOptionIndex !== -1 ? item.variant[`option${sizeOptionIndex + 1}`] : '';
+                                }).filter(Boolean);
+
+                                const groupRow = document.createElement('div');
+                                groupRow.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; padding:8px; background:rgba(255,255,255,0.03); border-radius:4px; border:1px solid rgba(255,255,255,0.05);';
+                                groupRow.innerHTML = `
+                                    <div style="flex:1; min-width:180px;">
+                                        <div style="font-weight:600; color:white; font-size:0.82rem;">${this.escapeHtml(group.label)}</div>
+                                        ${sizeValues.length > 0 ? `<div style="font-size:0.68rem; color:var(--text-secondary);">Applies to size: ${this.escapeHtml(sizeValues.join(', '))}</div>` : ''}
+                                    </div>
+                                    <div style="display:flex; gap:10px; align-items:center;">
+                                        <div style="display:flex; align-items:center; gap:4px;">
+                                            <span style="font-size:0.7rem; color:var(--text-secondary);">Price:</span>
+                                            <input type="number" step="0.01" class="form-control shopify-pricing-group-price" data-group-key="${this.escapeHtml(key)}" value="${group.initialPrice}" style="width:85px; padding:2px 6px; font-size:0.75rem; height:24px; background:rgba(0,0,0,0.4); border-color:var(--glass-border); color:white;">
+                                        </div>
+                                        <div style="display:flex; align-items:center; gap:4px;">
+                                            <span style="font-size:0.7rem; color:var(--text-secondary);">Compare:</span>
+                                            <input type="number" step="0.01" class="form-control shopify-pricing-group-compare" data-group-key="${this.escapeHtml(key)}" value="${group.initialCompare}" style="width:85px; padding:2px 6px; font-size:0.75rem; height:24px; background:rgba(0,0,0,0.4); border-color:var(--glass-border); color:white;">
+                                        </div>
+                                    </div>
+                                `;
+                                groupsContainer.appendChild(groupRow);
+
+                                // Sync event listeners
+                                const priceInput = groupRow.querySelector('.shopify-pricing-group-price');
+                                const compareInput = groupRow.querySelector('.shopify-pricing-group-compare');
+                                
+                                const syncToTable = () => {
+                                    const pVal = priceInput.value.trim();
+                                    const cVal = compareInput.value.trim();
+                                    
+                                    group.variantsList.forEach(item => {
+                                        const tblPriceInput = document.querySelector(`.shopify-variant-price-input[data-index="${item.originalIndex}"]`);
+                                        const tblCompareInput = document.querySelector(`.shopify-variant-compare-input[data-index="${item.originalIndex}"]`);
+                                        
+                                        if (tblPriceInput) {
+                                            tblPriceInput.value = pVal;
+                                            variants[item.originalIndex].price = pVal;
+                                        }
+                                        if (tblCompareInput) {
+                                            tblCompareInput.value = cVal;
+                                            variants[item.originalIndex].compare_at_price = cVal || null;
+                                        }
+                                    });
+                                };
+                                
+                                priceInput.addEventListener('input', syncToTable);
+                                compareInput.addEventListener('input', syncToTable);
+                            });
+                        } else {
+                            groupsWrapper.style.display = 'none';
+                        }
+                    }
+
                     variants.forEach((v, idx) => {
                         const tr = document.createElement('tr');
                         tr.style.borderBottom = '1px solid rgba(255,255,255,0.05)';

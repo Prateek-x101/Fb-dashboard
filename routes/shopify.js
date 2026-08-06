@@ -1425,20 +1425,39 @@ async function scrapeProductPageViaBrowser(url) {
             } else {
                 // Generic page fallback + prominent e-commerce main images
                 document.querySelectorAll('.product-image img, .gallery img, .main-image img, #main-image img, img.product-gallery-image, img[class*="product-img"], .thumb-list img').forEach(img => {
-                    const src = img.src || img.getAttribute('data-src') || img.getAttribute('src');
-                    if (src && src.startsWith('http') && !src.includes('logo') && !src.includes('pixel') && !src.includes('sprite')) {
-                        imageUrls.push(src);
+                    let src = img.getAttribute('srcset') || img.getAttribute('srcSet') || img.getAttribute('data-src') || img.src;
+                    if (src && !src.includes('logo') && !src.includes('pixel') && !src.includes('sprite')) {
+                        if (src.includes(' ')) {
+                            const parts = src.split(',').map(p => p.trim().split(' ')[0]);
+                            const highRes = parts.filter(p => p.startsWith('http')).pop();
+                            if (highRes) src = highRes;
+                        }
+                        if (src && src.startsWith('http')) {
+                            imageUrls.push(src);
+                        }
                     }
                 });
 
                 const imgElements = document.querySelectorAll('img');
                 imgElements.forEach(img => {
-                    const src = img.src || img.getAttribute('data-old-hires') || img.getAttribute('data-a-dynamic-image') || img.getAttribute('src');
-                    if (src && src.startsWith('http') && !src.includes('sprite') && !src.includes('pixel') && !src.includes('logo') && !src.includes('banner')) {
-                        const width = img.naturalWidth || 0;
-                        const height = img.naturalHeight || 0;
-                        if (width > 200 && height > 200) {
-                            imageUrls.push(src);
+                    let src = img.getAttribute('srcset') || img.getAttribute('srcSet') || img.getAttribute('data-src') || img.src;
+                    if (src && !src.includes('sprite') && !src.includes('pixel') && !src.includes('logo') && !src.includes('banner')) {
+                        if (src.includes(' ')) {
+                            const parts = src.split(',').map(p => p.trim().split(' ')[0]);
+                            const highRes = parts.filter(p => p.startsWith('http')).pop();
+                            if (highRes) src = highRes;
+                        }
+                        if (src && src.startsWith('http')) {
+                            // Check naturalWidth only if naturalWidth is > 0 (meaning image loaded)
+                            // Otherwise, since image is blocked, we check width attribute or class or class name contains product
+                            const width = img.naturalWidth || parseInt(img.getAttribute('width')) || 0;
+                            const height = img.naturalHeight || parseInt(img.getAttribute('height')) || 0;
+                            const className = img.className || '';
+                            const isProductImage = className.includes('product') || className.includes('gallery') || className.includes('main') || className.includes('detail');
+                            
+                            if (isProductImage || (width === 0 || width > 200) && (height === 0 || height > 200)) {
+                                imageUrls.push(src);
+                            }
                         }
                     }
                 });
@@ -1454,47 +1473,49 @@ async function scrapeProductPageViaBrowser(url) {
             };
         });
 
-        // Fetch up to 4 other variants
+        // Fetch up to 4 other variants via simple memory-efficient node fetch
         const otherVariantUrls = variantUrls.filter(vUrl => vUrl !== url).slice(0, 4);
         if (otherVariantUrls.length > 0) {
-            console.log(`[UniversalScrape] Sibling variants detected: ${otherVariantUrls.length}. Extracting variant images in parallel...`);
-            const browser = page.browser();
+            console.log(`[UniversalScrape] Sibling variants detected: ${otherVariantUrls.length}. Extracting variant images via memory-safe HTTP fetch...`);
             
+            // Import fetch if not present in Node context, otherwise use native fetch
+            const nodeFetch = typeof fetch === 'function' ? fetch : require('node-fetch');
+
             const variantPromises = otherVariantUrls.map(async (vUrl) => {
-                let tempPage = null;
                 try {
-                    tempPage = await browser.newPage();
-                    await tempPage.setUserAgent(await page.evaluate(() => navigator.userAgent));
-                    
-                    // Fast load: Block images, stylesheets, fonts since we just want to load DOM and grab src
-                    await tempPage.setRequestInterception(true);
-                    tempPage.on('request', r => {
-                        const rt = r.resourceType();
-                        if (['stylesheet', 'font', 'image'].includes(rt)) {
-                            r.abort();
-                        } else {
-                            r.continue();
-                        }
+                    const res = await nodeFetch(vUrl, {
+                        headers: {
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                        },
+                        signal: AbortSignal.timeout(12000)
                     });
+                    if (!res.ok) return [];
+                    const html = await res.text();
                     
-                    await tempPage.goto(vUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-                    
-                    return await tempPage.evaluate(() => {
-                        const urls = [];
-                        // Select prominent product gallery images
-                        document.querySelectorAll('.product-image img, .gallery img, .main-image img, #main-image img, img.product-gallery-image, img[class*="product"]').forEach(img => {
-                            const src = img.src || img.getAttribute('data-src') || img.getAttribute('src');
-                            if (src && src.startsWith('http') && !src.includes('logo') && !src.includes('pixel') && !src.includes('sprite')) {
+                    // Regex extract raw img sources from HTML payload
+                    const imgRegex = /<img[^>]+(?:src|srcset|srcSet|data-src)="([^"]+)"/gi;
+                    let match;
+                    const urls = [];
+                    while ((match = imgRegex.exec(html)) !== null) {
+                        let src = match[1];
+                        // Clean up escaped HTML chars like &amp;
+                        src = src.replace(/&amp;/g, '&');
+                        if (src && !src.includes('logo') && !src.includes('pixel') && !src.includes('sprite')) {
+                            // Extract URL from srcset if it exists
+                            if (src.includes(' ')) {
+                                const parts = src.split(',').map(p => p.trim().split(' ')[0]);
+                                const highRes = parts.filter(p => p.startsWith('http')).pop();
+                                if (highRes) src = highRes;
+                            }
+                            if (src && src.startsWith('http')) {
                                 urls.push(src);
                             }
-                        });
-                        return [...new Set(urls)].slice(0, 4); // return top 4 variant photos
-                    });
+                        }
+                    }
+                    return [...new Set(urls)].slice(0, 4); // return top 4 variant photos
                 } catch (e) {
-                    console.error(`[UniversalScrape] Failed to extract variant ${vUrl}:`, e.message);
+                    console.error(`[UniversalScrape] Failed HTTP fetch for variant ${vUrl}:`, e.message);
                     return [];
-                } finally {
-                    if (tempPage) await tempPage.close().catch(() => {});
                 }
             });
 
