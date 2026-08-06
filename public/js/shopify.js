@@ -156,14 +156,21 @@
                     try {
                         btnUrlDownload.disabled = true;
                         btnUrlDownload.textContent = '⏳ Downloading...';
-                        window.AppController.showToast(`Downloading and cleaning ${urls.length} video(s) in parallel... 📥`, 'info');
+                        window.AppController.showToast(`Downloading and cleaning ${urls.length} video(s) sequentially... 📥`, 'info');
 
-                        const promises = urls.map(async (url) => {
-                            const result = await window.API.downloadVideoFromUrl(url, 'original');
-                            return result;
-                        });
+                        const results = [];
+                        for (let i = 0; i < urls.length; i++) {
+                            const url = urls[i];
+                            window.AppController.showToast(`Downloading video ${i + 1} of ${urls.length}... 📥`, 'info');
+                            try {
+                                const result = await window.API.downloadVideoFromUrl(url, 'original');
+                                results.push({ status: 'fulfilled', value: result });
+                            } catch (err) {
+                                console.error(`Download failed for URL: ${url}`, err);
+                                results.push({ status: 'rejected', reason: err });
+                            }
+                        }
 
-                        const results = await Promise.allSettled(promises);
                         let successCount = 0;
 
                         results.forEach((res) => {
