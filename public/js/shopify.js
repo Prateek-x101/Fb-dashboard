@@ -883,6 +883,12 @@
                 return;
             }
 
+            let importToast = null;
+            let importProgressInterval = null;
+            let importRamInterval = null;
+            let importSeconds = 0;
+            let importRamText = '';
+
             try {
                 btnImport.disabled = true;
                 btnImport.textContent = '⏳ Processing...';
@@ -897,7 +903,63 @@
                     procMsg.textContent = `Uploading ${files.length} file(s) to server...`;
                     files.forEach(f => formData.append('files', f));
                 } else {
-                    procMsg.textContent = 'Scraping page details and running AI analysis...';
+                    procMsg.textContent = 'Launching scraper...';
+                }
+
+                // --- Progress Toast with RAM Monitoring (like video processor) ---
+                const isUrlImport = !!url && !files.length;
+
+                if (isUrlImport) {
+                    // Determine log steps based on URL type
+                    const isShopifyUrl = /myshopify\.com|shopify\.com/i.test(url);
+                    const logSteps = isShopifyUrl ? [
+                        { time: 0, text: "Connecting to Shopify store... 🏪" },
+                        { time: 2, text: "Fetching product data via API... 📦" },
+                        { time: 5, text: "Downloading product images... 🖼️" },
+                        { time: 8, text: "Mapping variants & options... 🧩" },
+                        { time: 12, text: "Generating listing preview... ✨" }
+                    ] : [
+                        { time: 0, text: "Launching headless browser... 🌐" },
+                        { time: 2, text: "Loading product page... 📄" },
+                        { time: 5, text: "Waiting for page render & JS hydration... ⚡" },
+                        { time: 8, text: "Extracting images from DOM... 🖼️" },
+                        { time: 11, text: "Detecting color/size variant links... 🔍" },
+                        { time: 14, text: "Crawling sibling variant pages (1 tab only)... 🧲" },
+                        { time: 18, text: "Sending data to Gemini AI for analysis... 🤖" },
+                        { time: 22, text: "AI generating title, tags, variants, description... ✍️" },
+                        { time: 28, text: "Matching collections & finalizing... 🎯" },
+                        { time: 35, text: "Almost done... hold on... ⏳" }
+                    ];
+
+                    importToast = window.AppController.showToast(
+                        `🛍️ Import: ${logSteps[0].text}`, 'info', null
+                    );
+
+                    // RAM polling every 2s
+                    importRamInterval = setInterval(async () => {
+                        try {
+                            const ramData = await window.API.getRamStatus();
+                            if (ramData && typeof ramData.free === 'number') {
+                                importRamText = ` | 🧠 RAM: ${ramData.free}MB free`;
+                            }
+                        } catch {}
+                    }, 2000);
+
+                    // Progress step updates every 500ms
+                    importProgressInterval = setInterval(() => {
+                        importSeconds += 0.5;
+                        let currentStepText = logSteps[0].text;
+                        for (const step of logSteps) {
+                            if (importSeconds >= step.time) {
+                                currentStepText = step.text;
+                            }
+                        }
+                        if (importToast) {
+                            importToast.update(
+                                `🛍️ Import: ${currentStepText} <br/><small style="opacity:0.75; font-size:11px;">⏱️ ${importSeconds.toFixed(1)}s${importRamText}</small>`
+                            );
+                        }
+                    }, 500);
                 }
 
                 const response = await fetch('/api/shopify/universal-import', {
@@ -906,7 +968,23 @@
                 });
 
                 const data = await response.json();
-                if (!response.ok) throw new Error(data.error || data.details || 'Failed to process import');
+
+                // Cleanup progress toast
+                if (importProgressInterval) clearInterval(importProgressInterval);
+                if (importRamInterval) clearInterval(importRamInterval);
+
+                if (!response.ok) {
+                    if (importToast) {
+                        importToast.update(`❌ Import failed: ${data.error || 'Unknown error'} <br/><small style="opacity:0.75; font-size:11px;">After ${importSeconds.toFixed(1)}s${importRamText}</small>`, 'error');
+                        setTimeout(() => importToast.dismiss(), 5000);
+                    }
+                    throw new Error(data.error || data.details || 'Failed to process import');
+                }
+
+                if (importToast) {
+                    importToast.update(`✅ Import complete! Product listing generated. <br/><small style="opacity:0.75; font-size:11px;">Completed in ${importSeconds.toFixed(1)}s${importRamText}</small>`, 'success');
+                    setTimeout(() => importToast.dismiss(), 3000);
+                }
 
                 processing.style.display = 'none';
 
@@ -1176,6 +1254,12 @@
                 window.AppController.showToast('Product listings analyzed and generated successfully! 🛍️', 'success');
 
             } catch (err) {
+                if (importProgressInterval) clearInterval(importProgressInterval);
+                if (importRamInterval) clearInterval(importRamInterval);
+                if (importToast) {
+                    importToast.update(`❌ Import failed: ${err.message}`, 'error');
+                    setTimeout(() => importToast.dismiss(), 5000);
+                }
                 processing.style.display = 'none';
                 window.AppController.showToast('Failed to import and analyze: ' + err.message, 'error');
             } finally {

@@ -1380,22 +1380,26 @@ router.post('/universal-import', videoUpload.array('files', 20), async (req, res
             }
 
             // Sub-case 3: External e-commerce sites (Amazon, Alibaba, etc.)
-            console.log(`[UniversalImport] Scraping external e-commerce product page via browser: ${url}`);
+            const os = require('os');
+            const freeRam = () => Math.round(os.freemem() / 1024 / 1024);
+            console.log(`[UniversalImport] Step 1/4: Launching browser scraper for: ${url} | Free RAM: ${freeRam()}MB`);
             
             // Use browser extraction to extract page details
             const pageData = await scrapeProductPageViaBrowser(url);
+            console.log(`[UniversalImport] Step 2/4: Scraping complete. ${pageData.images.length} images found. | Free RAM: ${freeRam()}MB`);
             
             if (!geminiApiKey) {
                 return res.status(400).json({ error: 'Gemini API Key is required to convert Amazon/Alibaba listings. Configure it in Settings.' });
             }
 
-            console.log(`[UniversalImport] Analyzing page details with Gemini AI...`);
+            console.log(`[UniversalImport] Step 3/4: Analyzing with Gemini AI... | Free RAM: ${freeRam()}MB`);
             const structuredProduct = await geminiService.analyzeProductFromScrapedText(
                 geminiApiKey,
                 geminiModel,
                 `Page Title: ${pageData.title}\n\nPage Text:\n${pageData.bodyText}`,
                 pageData.images || []
             );
+            console.log(`[UniversalImport] Step 4/4: AI analysis complete. Building preview... | Free RAM: ${freeRam()}MB`);
 
             // Merge scraped browser images with Gemini's response
             const finalImages = pageData.images && pageData.images.length > 0 
@@ -1644,38 +1648,23 @@ async function scrapeProductPageViaBrowser(url) {
             };
         });
 
-        // Crawl up to 4 other variants sequentially using clean sub-tabs (bypasses Cloudflare & prevents OOM)
-        const otherVariantUrls = variantUrls.filter(vUrl => vUrl !== url).slice(0, 4);
+        // Crawl up to 2 sibling variants by REUSING the same tab (saves ~100MB RAM vs newPage)
+        const otherVariantUrls = variantUrls.filter(vUrl => vUrl !== url).slice(0, 2);
         if (otherVariantUrls.length > 0) {
-            console.log(`[UniversalScrape] Sibling variants detected: ${otherVariantUrls.length}. Extracting variant images sequentially...`);
+            const os = require('os');
+            const freeRamMB = () => Math.round(os.freemem() / 1024 / 1024);
+            console.log(`[UniversalScrape] Sibling variants detected: ${otherVariantUrls.length}. Reusing same tab for extraction. Free RAM: ${freeRamMB()}MB`);
             
-            for (const vUrl of otherVariantUrls) {
-                let siblingPage = null;
+            for (let vi = 0; vi < otherVariantUrls.length; vi++) {
+                const vUrl = otherVariantUrls[vi];
                 try {
-                    console.log(`[UniversalScrape] Crawling sibling variant: ${vUrl}`);
-                    siblingPage = await page.browser().newPage();
+                    console.log(`[UniversalScrape] Crawling sibling ${vi+1}/${otherVariantUrls.length}: ${vUrl} | Free RAM: ${freeRamMB()}MB`);
                     
-                    // Enable request interception and block images/media/stylesheets/fonts to save Render memory
-                    await siblingPage.setRequestInterception(true);
-                    siblingPage.on('request', (req) => {
-                        const rt = req.resourceType();
-                        if (['image', 'stylesheet', 'font', 'media'].includes(rt)) {
-                            req.abort().catch(() => {});
-                        } else {
-                            req.continue().catch(() => {});
-                        }
-                    });
-                    
-                    await siblingPage.setUserAgent(
-                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
-                    );
-                    
-                    // domcontentloaded is fast and uses minimal RAM
-                    await siblingPage.goto(vUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-                    // Wait for React hydration scripts to update dynamic image elements
+                    // Reuse existing page — navigate to sibling URL (no new tab = no extra RAM)
+                    await page.goto(vUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
                     await new Promise(r => setTimeout(r, 1200));
                     
-                    const variantImages = await siblingPage.evaluate(() => {
+                    const variantImages = await page.evaluate(() => {
                         const parseSrcset = (srcsetStr) => {
                             if (!srcsetStr || !srcsetStr.includes(' ')) return srcsetStr;
                             const parts = srcsetStr.split(',').map(p => p.trim().split(/\s+/));
@@ -1711,28 +1700,21 @@ async function scrapeProductPageViaBrowser(url) {
                                 }
                             }
                         });
-                        return [...new Set(urls)].slice(0, 5); // top 5 pictures per variant
+                        return [...new Set(urls)].slice(0, 5);
                     });
                     
                     if (variantImages && variantImages.length > 0) {
+                        console.log(`[UniversalScrape] Got ${variantImages.length} images from sibling ${vi+1}`);
                         pageData.images.push(...variantImages);
                     }
                 } catch (e) {
-                    console.error(`[UniversalScrape] Sibling crawl failed for variant URL ${vUrl}:`, e.message);
-                } finally {
-                    if (siblingPage) {
-                        try {
-                            const client = await siblingPage.target().createCDPSession();
-                            await client.send('Network.clearBrowserCookies').catch(() => {});
-                            await client.send('Network.clearBrowserCache').catch(() => {});
-                        } catch {}
-                        await siblingPage.close().catch(() => {});
-                    }
+                    console.error(`[UniversalScrape] Sibling crawl failed for ${vUrl}:`, e.message);
                 }
             }
-            pageData.images = [...new Set(pageData.images)].slice(0, 50); // Cap at 50 images total
+            pageData.images = [...new Set(pageData.images)].slice(0, 30);
         }
         
+        console.log(`[UniversalScrape] Extraction complete. Total images: ${pageData.images.length}. Free RAM: ${Math.round(require('os').freemem() / 1024 / 1024)}MB`);
         return pageData;
     }, { timeout: 60000, blockImages: true });
 }
