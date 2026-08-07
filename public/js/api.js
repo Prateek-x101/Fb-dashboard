@@ -97,6 +97,7 @@
             method: 'POST',
             body: JSON.stringify({ url, canvasType })
         }),
+        getRamStatus: () => API.request('/api/system/ram'),
 
         // Publisher Tab
         generatePostCaption: (topic, style) => API.request('/api/publish/generate-caption', {

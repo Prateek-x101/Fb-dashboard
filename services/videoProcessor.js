@@ -378,12 +378,9 @@ async function processVideo(inputPath, outputFilename, canvasType = 'original') 
     
     console.log(`Processing video with FFmpeg. Canvas mode: ${canvasType}. Output: ${finalOutputPath}`);
     
-    // Command parameters:
-    // -preset ultrafast: encode video instantly
-    // -map_metadata -1: clear metadata
-    let args = [];
     if (filterString) {
-        args = [
+        // Resizing requested: must re-encode to apply video filters
+        const args = [
             '-y',
             '-i', inputPath,
             '-vf', filterString,
@@ -395,45 +392,64 @@ async function processVideo(inputPath, outputFilename, canvasType = 'original') 
             '-b:a', '128k',
             finalOutputPath
         ];
-    } else {
-        // No resize filter, just clear metadata and re-encode/refresh hash
-        args = [
-            '-y',
-            '-i', inputPath,
-            '-c:v', 'libx264',
-            '-crf', '20',
-            '-preset', 'ultrafast',
-            '-map_metadata', '-1',
-            '-c:a', 'aac',
-            '-b:a', '128k',
-            finalOutputPath
-        ];
-    }
-    
-    return new Promise((resolve, reject) => {
-        execFile(ffmpegPath, args, (error, stdout, stderr) => {
-            // Clean up temporary downloaded file
-            try {
-                if (fs.existsSync(inputPath)) {
-                    fs.unlinkSync(inputPath);
+        return new Promise((resolve, reject) => {
+            execFile(ffmpegPath, args, (error, stdout, stderr) => {
+                // Clean up temporary downloaded file
+                try { if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath); } catch {}
+                if (error) {
+                    console.error("FFmpeg execution error (with filters):", error);
+                    return reject(new Error(`Failed to process video: ${error.message}`));
                 }
-            } catch (cleanupErr) {
-                console.error("Failed to clean up temp video file:", cleanupErr.message);
-            }
-            
-            if (error) {
-                console.error("FFmpeg execution error:", error);
-                console.error("FFmpeg stderr:", stderr);
-                return reject(new Error(`Failed to clean/process video creative: ${error.message}`));
-            }
-            
-            console.log(`FFmpeg processing finished: ${finalOutputPath}`);
-            resolve({
-                filePath: finalOutputPath,
-                filename: outputFilename
+                console.log(`FFmpeg filter processing finished: ${finalOutputPath}`);
+                resolve({ filePath: finalOutputPath, filename: outputFilename });
             });
         });
-    });
+    } else {
+        // FAST PATH: If canvas is original, try to copy the stream directly and strip metadata
+        // This is instantaneous (takes 0.1s instead of 20s!)
+        console.log(`Attempting fast stream copy for original canvas video...`);
+        const fastArgs = [
+            '-y',
+            '-i', inputPath,
+            '-c', 'copy',
+            '-map_metadata', '-1',
+            finalOutputPath
+        ];
+        
+        return new Promise((resolve, reject) => {
+            execFile(ffmpegPath, fastArgs, (error, stdout, stderr) => {
+                if (!error) {
+                    console.log(`FFmpeg fast stream copy finished successfully: ${finalOutputPath}`);
+                    // Clean up temporary downloaded file
+                    try { if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath); } catch {}
+                    return resolve({ filePath: finalOutputPath, filename: outputFilename });
+                }
+                
+                console.warn(`FFmpeg fast stream copy failed, falling back to full re-encoding: ${stderr}`);
+                // Fallback: full re-encode
+                const fallbackArgs = [
+                    '-y',
+                    '-i', inputPath,
+                    '-c:v', 'libx264',
+                    '-crf', '22',
+                    '-preset', 'ultrafast',
+                    '-map_metadata', '-1',
+                    '-c:a', 'aac',
+                    '-b:a', '128k',
+                    finalOutputPath
+                ];
+                execFile(ffmpegPath, fallbackArgs, (err, out, errSt) => {
+                    try { if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath); } catch {}
+                    if (err) {
+                        console.error("FFmpeg fallback execution error:", err);
+                        return reject(new Error(`Failed to process video: ${err.message}`));
+                    }
+                    console.log(`FFmpeg fallback re-encoding finished: ${finalOutputPath}`);
+                    resolve({ filePath: finalOutputPath, filename: outputFilename });
+                });
+            });
+        });
+    }
 }
 
 // Extract evenly-spaced frames from a video for AI analysis

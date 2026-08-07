@@ -142,6 +142,16 @@ app.get('/api/media/debug-ytdlp', async (req, res) => {
     }
 });
 
+// Diagnostic route to check live RAM status on the server
+app.get('/api/system/ram', (req, res) => {
+    try {
+        const { getMemoryStats } = require('./services/browserPool');
+        res.json(getMemoryStats ? getMemoryStats() : { free: 0, total: 0 });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Diagnostic route to check what Facebook returns to Render for public Ad Library links
 app.get('/api/media/debug-fb', async (req, res) => {
     try {

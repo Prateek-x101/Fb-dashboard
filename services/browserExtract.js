@@ -377,8 +377,8 @@ async function performExtraction(targetUrl) {
 
         // Navigate page
         await page.goto(navigationUrl, {
-            waitUntil: 'networkidle2',
-            timeout: 30000
+            waitUntil: 'load',
+            timeout: 25000
         }).catch(err => console.warn(`[BrowserExtract] Navigation warning: ${err.message}`));
 
         // Wait specifically for a <video> element

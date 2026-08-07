@@ -182,6 +182,16 @@
                                 { time: 16, text: "Cleaning metadata & finalizing files... 💾" }
                             ];
                             
+                            let serverRamText = '';
+                            const ramCheckInterval = setInterval(async () => {
+                                try {
+                                    const ramData = await window.API.getRamStatus();
+                                    if (ramData && typeof ramData.free === 'number') {
+                                        serverRamText = ` | Server Free RAM: ${ramData.free}MB`;
+                                    }
+                                } catch {}
+                            }, 2000);
+
                             const interval = setInterval(() => {
                                 secondsElapsed += 0.5;
                                 let currentStepText = logSteps[0].text;
@@ -192,7 +202,7 @@
                                 }
                                 if (toastController) {
                                     toastController.update(
-                                        `Video ${i + 1}/${urls.length}: ${currentStepText} <br/><small style="opacity:0.75; font-size:11px;">Elapsed time: ${secondsElapsed.toFixed(1)}s</small>`
+                                        `Video ${i + 1}/${urls.length}: ${currentStepText} <br/><small style="opacity:0.75; font-size:11px;">Elapsed time: ${secondsElapsed.toFixed(1)}s${serverRamText}</small>`
                                     );
                                 }
                             }, 500);
@@ -201,14 +211,16 @@
                                 const result = await window.API.downloadVideoFromUrl(url, 'original');
                                 results.push({ status: 'fulfilled', value: result });
                                 clearInterval(interval);
+                                clearInterval(ramCheckInterval);
                                 if (toastController) {
-                                    toastController.update(`Video ${i + 1}/${urls.length}: Downloaded & Processed! ✅ <br/><small style="opacity:0.75; font-size:11px;">Completed in ${secondsElapsed.toFixed(1)}s</small>`, 'success');
+                                    toastController.update(`Video ${i + 1}/${urls.length}: Downloaded & Processed! ✅ <br/><small style="opacity:0.75; font-size:11px;">Completed in ${secondsElapsed.toFixed(1)}s${serverRamText}</small>`, 'success');
                                     setTimeout(() => toastController.dismiss(), 2000);
                                 }
                             } catch (err) {
                                 console.error(`Download failed for URL: ${url}`, err);
                                 results.push({ status: 'rejected', reason: err });
                                 clearInterval(interval);
+                                clearInterval(ramCheckInterval);
                                 if (toastController) {
                                     toastController.update(`Video ${i + 1}/${urls.length} failed: ${err.message || 'Error'} ❌`, 'error');
                                     setTimeout(() => toastController.dismiss(), 5000);
