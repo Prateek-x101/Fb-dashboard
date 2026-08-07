@@ -229,20 +229,22 @@ async function downloadVideo(url, outputFilename, accessToken) {
     // ── Facebook Ads Library: use dedicated browser extractor ────────────────
     const isFbAdsLib = /facebook\.com\/ads\/library/i.test(url);
     if (isFbAdsLib) {
+        // Try the fast HTML scraper first (extremely quick - under 1s!)
         try {
-            const { extractVideoUrl } = require('./browserExtract');
-            console.log(`[Browser] Extracting Facebook Ads Library video via headless Chromium: ${url.slice(0, 80)}...`);
-            const videoUrl = await extractVideoUrl(url);
-            console.log(`[Browser] Got Facebook video URL, downloading: ${videoUrl.slice(0, 80)}...`);
+            console.log(`[FBAdsLib] Trying fast HTML scraper first: ${url.slice(0, 80)}...`);
+            const videoUrl = await extractFbAdsLibraryVideo(url, accessToken);
+            console.log(`[FBAdsLib] Fast HTML scraper succeeded! Downloading: ${videoUrl.slice(0, 80)}...`);
             return downloadDirectUrl(videoUrl, outputFilename);
-        } catch (browserErr) {
-            console.warn(`[Browser] Browser extraction failed: ${browserErr.message}`);
-            // Fallback to HTML scraper
+        } catch (scraperErr) {
+            console.warn(`[FBAdsLib] Fast HTML scraper failed (${scraperErr.message}). Falling back to headless browser extractor...`);
             try {
-                const videoUrl = await extractFbAdsLibraryVideo(url, accessToken);
+                const { extractVideoUrl } = require('./browserExtract');
+                console.log(`[Browser] Extracting Facebook Ads Library video via headless Chromium: ${url.slice(0, 80)}...`);
+                const videoUrl = await extractVideoUrl(url);
+                console.log(`[Browser] Got Facebook video URL, downloading: ${videoUrl.slice(0, 80)}...`);
                 return downloadDirectUrl(videoUrl, outputFilename);
-            } catch (scraperErr) {
-                console.warn(`[Scraper] HTML scraper also failed: ${scraperErr.message}`);
+            } catch (browserErr) {
+                console.error(`[Browser] Headless browser extraction also failed: ${browserErr.message}`);
                 throw new Error(`Could not extract video. Try copying the direct .mp4 URL from the browser's Inspect Element and pasting it here.`);
             }
         }

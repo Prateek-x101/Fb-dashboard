@@ -119,27 +119,50 @@
             }
         },
 
-        showToast: function(message, type = 'info') {
+        showToast: function(message, type = 'info', duration = 4000) {
             const container = document.getElementById('toast-container');
-            if (!container) return;
+            if (!container) return null;
 
             const icons = { success: '✅', error: '❌', warning: '⚠️', info: 'ℹ️' };
             const toast = document.createElement('div');
             toast.className = `toast ${type}`;
-            toast.innerHTML = `<span>${icons[type] || 'ℹ️'}</span> ${message}`;
+            toast.innerHTML = `<span>${icons[type] || 'ℹ️'}</span> <span class="toast-text">${message}</span>`;
             
             container.appendChild(toast);
             
-            // Auto-dismiss after 4 seconds
-            setTimeout(() => {
+            let removeTimeout;
+            const dismiss = () => {
                 toast.style.opacity = '0';
                 toast.style.transform = 'translateX(100%)';
-                setTimeout(() => {
+                removeTimeout = setTimeout(() => {
                     if (container.contains(toast)) {
                         container.removeChild(toast);
                     }
                 }, 300);
-            }, 4000);
+            };
+
+            if (duration && duration > 0) {
+                setTimeout(dismiss, duration);
+            }
+
+            return {
+                element: toast,
+                update: function(newMessage, newType = type) {
+                    const textSpan = toast.querySelector('.toast-text');
+                    if (textSpan) {
+                        textSpan.innerHTML = newMessage;
+                    }
+                    if (newType !== type) {
+                        toast.className = `toast ${newType}`;
+                        const iconSpan = toast.querySelector('span:first-child');
+                        if (iconSpan) {
+                            iconSpan.textContent = icons[newType] || 'ℹ️';
+                        }
+                        type = newType;
+                    }
+                },
+                dismiss: dismiss
+            };
         },
 
         showLoading: function(elementId) {

@@ -156,18 +156,63 @@
                     try {
                         btnUrlDownload.disabled = true;
                         btnUrlDownload.textContent = '⏳ Downloading...';
-                        window.AppController.showToast(`Downloading and cleaning ${urls.length} video(s) sequentially... 📥`, 'info');
 
                         const results = [];
                         for (let i = 0; i < urls.length; i++) {
                             const url = urls[i];
-                            window.AppController.showToast(`Downloading video ${i + 1} of ${urls.length}... 📥`, 'info');
+                            
+                            // Create a persistent toast
+                            const toastController = window.AppController.showToast(
+                                `Preparing download for video ${i + 1} of ${urls.length}... ⏳`, 
+                                'info', 
+                                null
+                            );
+                            
+                            let secondsElapsed = 0;
+                            const logSteps = [
+                                { time: 0, text: "Connecting to media server... 🌐" },
+                                { time: 1.5, text: "Extracting stream URLs... 🔍" },
+                                { time: 3, text: "Validating video format & response... ⚡" },
+                                { time: 4.5, text: "Bypassing Facebook blocking headers... 🛡️" },
+                                { time: 6, text: "Spinning up browser-emulation layer... 🚀" },
+                                { time: 8, text: "Navigating to Ad archive library... 🤖" },
+                                { time: 10, text: "Intercepting GraphQL payload assets... 📊" },
+                                { time: 12, text: "Resolving direct CDN link... 🎯" },
+                                { time: 14, text: "Downloading video raw stream... 📥" },
+                                { time: 16, text: "Cleaning metadata & finalizing files... 💾" }
+                            ];
+                            
+                            const interval = setInterval(() => {
+                                secondsElapsed += 0.5;
+                                let currentStepText = logSteps[0].text;
+                                for (const step of logSteps) {
+                                    if (secondsElapsed >= step.time) {
+                                        currentStepText = step.text;
+                                    }
+                                }
+                                if (toastController) {
+                                    toastController.update(
+                                        `Video ${i + 1}/${urls.length}: ${currentStepText} <br/><small style="opacity:0.75; font-size:11px;">Elapsed time: ${secondsElapsed.toFixed(1)}s</small>`
+                                    );
+                                }
+                            }, 500);
+
                             try {
                                 const result = await window.API.downloadVideoFromUrl(url, 'original');
                                 results.push({ status: 'fulfilled', value: result });
+                                clearInterval(interval);
+                                if (toastController) {
+                                    toastController.update(`Video ${i + 1}/${urls.length}: Downloaded & Processed! ✅ <br/><small style="opacity:0.75; font-size:11px;">Completed in ${secondsElapsed.toFixed(1)}s</small>`, 'success');
+                                    setTimeout(() => toastController.dismiss(), 2000);
+                                }
                             } catch (err) {
                                 console.error(`Download failed for URL: ${url}`, err);
                                 results.push({ status: 'rejected', reason: err });
+                                clearInterval(interval);
+                                if (toastController) {
+                                    toastController.update(`Video ${i + 1}/${urls.length} failed: ${err.message || 'Error'} ❌`, 'error');
+                                    setTimeout(() => toastController.dismiss(), 5000);
+                                }
                             }
                         }
 
