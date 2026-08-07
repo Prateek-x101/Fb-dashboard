@@ -72,6 +72,23 @@ function parseVideoUrlFromHtml(html) {
     return null;
 }
 
+async function fetchWithTimeout(url, options = {}) {
+    const { timeout = 8000 } = options;
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
+    try {
+        const response = await fetch(url, {
+            ...options,
+            signal: controller.signal
+        });
+        clearTimeout(id);
+        return response;
+    } catch (err) {
+        clearTimeout(id);
+        throw err;
+    }
+}
+
 // Returns a direct CDN video URL for an fb.com/ads/library/?id=XXX page (HTML scraper fallback).
 async function extractFbAdsLibraryVideo(pageUrl, accessToken) {
     // Parse the ad ID from the URL
@@ -86,12 +103,13 @@ async function extractFbAdsLibraryVideo(pageUrl, accessToken) {
     const publicUrl = `https://www.facebook.com/ads/library/?id=${adId}`;
     try {
         console.log(`[FBAdsLib] Attempting public extraction (no token) for ad ID: ${adId}`);
-        const htmlRes = await fetch(publicUrl, {
+        const htmlRes = await fetchWithTimeout(publicUrl, {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.9'
-            }
+            },
+            timeout: 8000
         });
         if (htmlRes.ok) {
             const html = await htmlRes.text();
@@ -110,12 +128,13 @@ async function extractFbAdsLibraryVideo(pageUrl, accessToken) {
         try {
             console.log(`[FBAdsLib] Falling back to token-based snapshot extraction for ad ID: ${adId}`);
             const snapshotUrl = `https://www.facebook.com/ads/archive/render_ad/?id=${adId}&access_token=${encodeURIComponent(accessToken)}`;
-            const htmlRes = await fetch(snapshotUrl, {
+            const htmlRes = await fetchWithTimeout(snapshotUrl, {
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                     'Accept-Language': 'en-US,en;q=0.9'
-                }
+                },
+                timeout: 8000
             });
             const html = await htmlRes.text();
 
@@ -229,22 +248,19 @@ async function downloadVideo(url, outputFilename, accessToken) {
     // ── Facebook Ads Library: use dedicated browser extractor ────────────────
     const isFbAdsLib = /facebook\.com\/ads\/library/i.test(url);
     if (isFbAdsLib) {
-        // Try the fast HTML scraper first (extremely quick - under 1s!)
         try {
-            console.log(`[FBAdsLib] Trying fast HTML scraper first: ${url.slice(0, 80)}...`);
-            const videoUrl = await extractFbAdsLibraryVideo(url, accessToken);
-            console.log(`[FBAdsLib] Fast HTML scraper succeeded! Downloading: ${videoUrl.slice(0, 80)}...`);
+            const { extractVideoUrl } = require('./browserExtract');
+            console.log(`[Browser] Extracting Facebook Ads Library video via headless Chromium: ${url.slice(0, 80)}...`);
+            const videoUrl = await extractVideoUrl(url);
+            console.log(`[Browser] Got Facebook video URL, downloading: ${videoUrl.slice(0, 80)}...`);
             return downloadDirectUrl(videoUrl, outputFilename);
-        } catch (scraperErr) {
-            console.warn(`[FBAdsLib] Fast HTML scraper failed (${scraperErr.message}). Falling back to headless browser extractor...`);
+        } catch (browserErr) {
+            console.warn(`[Browser] Headless browser extraction failed (${browserErr.message}). Falling back to HTML scraper...`);
             try {
-                const { extractVideoUrl } = require('./browserExtract');
-                console.log(`[Browser] Extracting Facebook Ads Library video via headless Chromium: ${url.slice(0, 80)}...`);
-                const videoUrl = await extractVideoUrl(url);
-                console.log(`[Browser] Got Facebook video URL, downloading: ${videoUrl.slice(0, 80)}...`);
+                const videoUrl = await extractFbAdsLibraryVideo(url, accessToken);
                 return downloadDirectUrl(videoUrl, outputFilename);
-            } catch (browserErr) {
-                console.error(`[Browser] Headless browser extraction also failed: ${browserErr.message}`);
+            } catch (scraperErr) {
+                console.error(`[Scraper] HTML scraper also failed: ${scraperErr.message}`);
                 throw new Error(`Could not extract video. Try copying the direct .mp4 URL from the browser's Inspect Element and pasting it here.`);
             }
         }
