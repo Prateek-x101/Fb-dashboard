@@ -9,7 +9,51 @@
  *     an idle period (no active tabs for 60 s).
  */
 
-const MAX_TABS = 6;
+const fs = require('fs');
+const os = require('os');
+
+function getOptimalMaxTabs() {
+    // 1. Environmental Override
+    if (process.env.MAX_CONCURRENT_TABS) {
+        const val = parseInt(process.env.MAX_CONCURRENT_TABS);
+        if (!isNaN(val) && val > 0) return val;
+    }
+
+    // 2. Linux Container (cgroups v1/v2) memory limit detection
+    let containerMemoryLimit = null;
+    try {
+        if (process.platform === 'linux') {
+            if (fs.existsSync('/sys/fs/cgroup/memory.max')) {
+                const limitStr = fs.readFileSync('/sys/fs/cgroup/memory.max', 'utf8').trim();
+                if (limitStr !== 'max') containerMemoryLimit = parseInt(limitStr);
+            }
+            if (!containerMemoryLimit && fs.existsSync('/sys/fs/cgroup/memory/memory.limit_in_bytes')) {
+                const limitStr = fs.readFileSync('/sys/fs/cgroup/memory/memory.limit_in_bytes', 'utf8').trim();
+                containerMemoryLimit = parseInt(limitStr);
+            }
+        }
+    } catch (e) {
+        console.warn('[BrowserPool] Failed to read cgroup memory limit:', e.message);
+    }
+
+    const totalMemoryBytes = containerMemoryLimit || os.totalmem();
+    const totalMemoryMB = Math.round(totalMemoryBytes / (1024 * 1024));
+
+    console.log(`[BrowserPool] Detected memory limit: ${totalMemoryMB} MB`);
+
+    // Heuristics:
+    // - <= 600MB (e.g. Render 512MB): Max 1 tab (strict sequential)
+    // - <= 1200MB (e.g. 1GB): Max 2 tabs
+    // - <= 2400MB (e.g. 2GB): Max 4 tabs
+    // - > 2400MB: Max 6 tabs
+    if (totalMemoryMB <= 600) return 1;
+    if (totalMemoryMB <= 1200) return 2;
+    if (totalMemoryMB <= 2400) return 4;
+    return 6;
+}
+
+const MAX_TABS = getOptimalMaxTabs();
+console.log(`[BrowserPool] Configured MAX_TABS = ${MAX_TABS}`);
 
 let browser = null;          // shared Puppeteer Browser instance
 let activeTabCount = 0;       // currently open tabs
