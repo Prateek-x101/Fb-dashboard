@@ -336,6 +336,30 @@ async function downloadVideo(url, outputFilename, accessToken) {
     };
 
     return new Promise((resolve, reject) => {
+        const handleFailure = (err, stderr) => {
+            const isInstaOrPin = /instagram\.com|pinterest\.(com|co)|pin\.it/i.test(url);
+            if (isInstaOrPin) {
+                console.log(`[Fallback] yt-dlp failed for Instagram/Pinterest. Trying browserExtract...`);
+                try {
+                    const { extractVideoUrl } = require('./browserExtract');
+                    extractVideoUrl(url)
+                        .then(videoUrl => {
+                            console.log(`[Fallback] browserExtract succeeded, downloading direct: ${videoUrl.slice(0, 80)}...`);
+                            return downloadDirectUrl(videoUrl, outputFilename);
+                        })
+                        .then(resolve)
+                        .catch(fallbackErr => {
+                            console.error('[Fallback] browserExtract also failed:', fallbackErr.message);
+                            reject(new Error(`Failed to download video from URL: ${err.message}`));
+                        });
+                } catch (requireErr) {
+                    reject(new Error(`Failed to download video from URL: ${err.message}`));
+                }
+            } else {
+                reject(new Error(`Failed to download video from URL: ${err.message}`));
+            }
+        };
+
         runYtdlp(args)
             .then(() => resolveActualPath(resolve, reject, tempOutputPath, uploadsDir, outputFilename))
             .catch(({ error, stderr }) => {
@@ -350,12 +374,12 @@ async function downloadVideo(url, outputFilename, accessToken) {
                         .catch(({ error: err2, stderr: serr2 }) => {
                             console.error('yt-dlp fallback error:', err2.message);
                             console.error('yt-dlp fallback stderr:', serr2);
-                            reject(new Error(`Failed to download video from URL: ${err2.message}`));
+                            handleFailure(err2, serr2);
                         });
                 } else {
                     console.error("yt-dlp execution error:", error.message);
                     console.error("yt-dlp stderr:", stderr);
-                    reject(new Error(`Failed to download video from URL: ${error.message}`));
+                    handleFailure(error, stderr);
                 }
             });
     });
