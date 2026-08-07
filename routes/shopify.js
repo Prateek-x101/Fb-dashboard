@@ -1504,7 +1504,7 @@ async function scrapeProductPageViaBrowser(url) {
                     const absoluteUrl = new URL(href, currentUrl.href);
                     if (absoluteUrl.hostname === hostname && absoluteUrl.pathname === basePath) {
                         const search = absoluteUrl.search;
-                        if (search.includes('renk=') || search.includes('color=') || search.includes('colour=') || search.includes('variant=')) {
+                        if (search.includes('renk=') || search.includes('color=') || search.includes('colour=') || search.includes('variant=') || search.includes('beden=') || search.includes('boyut=') || search.includes('stil=') || search.includes('size=') || search.includes('style=')) {
                             matches.push(absoluteUrl.href);
                         }
                     }
@@ -1559,9 +1559,28 @@ async function scrapeProductPageViaBrowser(url) {
                     }
                 });
             } else {
+                // Helper: extract best (highest-res) single URL from a srcset string
+                const parseSrcset = (srcsetStr) => {
+                    if (!srcsetStr || !srcsetStr.includes(' ')) return srcsetStr;
+                    const parts = srcsetStr.split(',').map(p => p.trim().split(/\s+/));
+                    let best = null, bestW = 0;
+                    parts.forEach(([url, descriptor]) => {
+                        if (!url) return;
+                        const w = descriptor ? parseInt(descriptor) : 0;
+                        if (w > bestW || !best) { best = url; bestW = w; }
+                    });
+                    return best || srcsetStr;
+                };
+
                 // Generic page fallback + prominent e-commerce main images
                 document.querySelectorAll('.product-image img, .gallery img, .main-image img, #main-image img, img.product-gallery-image, img[class*="product-img"], .thumb-list img, .swiper-slide img, .slick-slide img, .carousel img, .slider img, img[class*="gallery"], img[class*="image"], img[class*="product"], img[class*="thumb"], img[class*="media"], img[class*="slider"], img[class*="carousel"]').forEach(img => {
-                    let src = img.getAttribute('srcset') || img.getAttribute('srcSet') || img.getAttribute('data-src') || img.src;
+                    // Prefer clean single-URL attributes; only fall back to srcset
+                    let src = img.getAttribute('data-src') || img.src;
+                    if ((!src || src.startsWith('data:')) && img.getAttribute('srcset')) {
+                        src = parseSrcset(img.getAttribute('srcset'));
+                    } else if (!src || src.startsWith('data:')) {
+                        src = parseSrcset(img.getAttribute('srcSet'));
+                    }
                     if (src) {
                         if (src.startsWith('//')) {
                             src = 'https:' + src;
@@ -1575,25 +1594,23 @@ async function scrapeProductPageViaBrowser(url) {
                             'doubleclick', 'facebook-pixel', 'connect.facebook.net', 'tracking', 'advert'
                         ].some(kw => srcLower.includes(kw)) || src.includes('.svg') || src.startsWith('data:image');
 
-                        if (!isIgnored) {
-                            if (src.includes(' ')) {
-                                const parts = src.split(',').map(p => p.trim().split(' ')[0]);
-                                const highRes = parts.filter(p => p.startsWith('http') || p.startsWith('//')).pop();
-                                if (highRes) {
-                                    src = highRes.startsWith('//') ? 'https:' + highRes : highRes;
-                                }
-                            }
-                            if (src && src.startsWith('http')) {
-                                imageUrls.push(src);
-                            }
+                        if (!isIgnored && src.startsWith('http')) {
+                            imageUrls.push(src);
                         }
                     }
                 });
 
                 const imgElements = document.querySelectorAll('img');
                 imgElements.forEach(img => {
-                    let src = img.getAttribute('srcset') || img.getAttribute('srcSet') || img.getAttribute('data-src') || img.src;
+                    // Prefer clean single-URL attributes; only fall back to srcset
+                    let src = img.getAttribute('data-src') || img.src;
+                    if ((!src || src.startsWith('data:')) && img.getAttribute('srcset')) {
+                        src = parseSrcset(img.getAttribute('srcset'));
+                    } else if (!src || src.startsWith('data:')) {
+                        src = parseSrcset(img.getAttribute('srcSet'));
+                    }
                     if (src) {
+                        if (src.startsWith('//')) src = 'https:' + src;
                         const srcLower = src.toLowerCase();
                         const isIgnored = [
                             'logo', 'banner', 'pixel', 'sprite', 'icon', 'button', 'loading', 'placeholder', 
@@ -1603,21 +1620,14 @@ async function scrapeProductPageViaBrowser(url) {
                             'doubleclick', 'facebook-pixel', 'connect.facebook.net', 'tracking', 'advert'
                         ].some(kw => srcLower.includes(kw)) || src.includes('.svg') || src.startsWith('data:image');
 
-                        if (!isIgnored) {
-                            if (src.includes(' ')) {
-                                const parts = src.split(',').map(p => p.trim().split(' ')[0]);
-                                const highRes = parts.filter(p => p.startsWith('http')).pop();
-                                if (highRes) src = highRes;
-                            }
-                            if (src && src.startsWith('http')) {
-                                const width = img.naturalWidth || parseInt(img.getAttribute('width')) || 0;
-                                const height = img.naturalHeight || parseInt(img.getAttribute('height')) || 0;
-                                const className = img.className || '';
-                                const isProductImage = className.includes('product') || className.includes('gallery') || className.includes('main') || className.includes('detail') || className.includes('swiper') || className.includes('slide') || className.includes('carousel') || className.includes('thumb');
-                                
-                                if (isProductImage || (width === 0 || width > 200) && (height === 0 || height > 200)) {
-                                    imageUrls.push(src);
-                                }
+                        if (!isIgnored && src.startsWith('http')) {
+                            const width = img.naturalWidth || parseInt(img.getAttribute('width')) || 0;
+                            const height = img.naturalHeight || parseInt(img.getAttribute('height')) || 0;
+                            const className = img.className || '';
+                            const isProductImage = className.includes('product') || className.includes('gallery') || className.includes('main') || className.includes('detail') || className.includes('swiper') || className.includes('slide') || className.includes('carousel') || className.includes('thumb');
+                            
+                            if (isProductImage || (width === 0 || width > 200) && (height === 0 || height > 200)) {
+                                imageUrls.push(src);
                             }
                         }
                     }
@@ -1666,10 +1676,27 @@ async function scrapeProductPageViaBrowser(url) {
                     await new Promise(r => setTimeout(r, 1200));
                     
                     const variantImages = await siblingPage.evaluate(() => {
+                        const parseSrcset = (srcsetStr) => {
+                            if (!srcsetStr || !srcsetStr.includes(' ')) return srcsetStr;
+                            const parts = srcsetStr.split(',').map(p => p.trim().split(/\s+/));
+                            let best = null, bestW = 0;
+                            parts.forEach(([url, descriptor]) => {
+                                if (!url) return;
+                                const w = descriptor ? parseInt(descriptor) : 0;
+                                if (w > bestW || !best) { best = url; bestW = w; }
+                            });
+                            return best || srcsetStr;
+                        };
                         const urls = [];
                         document.querySelectorAll('.product-image img, .gallery img, .main-image img, #main-image img, img.product-gallery-image, img[class*="product-img"], .thumb-list img, .swiper-slide img, .slick-slide img, .carousel img, .slider img, img[class*="gallery"], img[class*="image"], img[class*="product"], img[class*="thumb"]').forEach(img => {
-                            let src = img.getAttribute('srcset') || img.getAttribute('srcSet') || img.getAttribute('data-src') || img.src;
+                            let src = img.getAttribute('data-src') || img.src;
+                            if ((!src || src.startsWith('data:')) && img.getAttribute('srcset')) {
+                                src = parseSrcset(img.getAttribute('srcset'));
+                            } else if (!src || src.startsWith('data:')) {
+                                src = parseSrcset(img.getAttribute('srcSet'));
+                            }
                             if (src) {
+                                if (src.startsWith('//')) src = 'https:' + src;
                                 const srcLower = src.toLowerCase();
                                 const isIgnored = [
                                     'logo', 'banner', 'pixel', 'sprite', 'icon', 'button', 'loading', 'placeholder', 
@@ -1679,15 +1706,8 @@ async function scrapeProductPageViaBrowser(url) {
                                     'doubleclick', 'facebook-pixel', 'connect.facebook.net', 'tracking', 'advert'
                                 ].some(kw => srcLower.includes(kw)) || src.includes('.svg') || src.startsWith('data:image');
 
-                                if (!isIgnored) {
-                                    if (src.includes(' ')) {
-                                        const parts = src.split(',').map(p => p.trim().split(' ')[0]);
-                                        const highRes = parts.filter(p => p.startsWith('http')).pop();
-                                        if (highRes) src = highRes;
-                                    }
-                                    if (src && src.startsWith('http')) {
-                                        urls.push(src);
-                                    }
+                                if (!isIgnored && src.startsWith('http')) {
+                                    urls.push(src);
                                 }
                             }
                         });
