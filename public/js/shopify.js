@@ -10,6 +10,14 @@
         vtlFrames: [],        // [{index, filename, url, selected}]
         vtlVariantAssignments: {}, // {"filename": "VariantValue"}
 
+        generateCleanHandle: function(title) {
+            if (!title) return '';
+            return title
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, '-')
+                .replace(/^-+|-+$/g, '');
+        },
+
         init: function() {
             this.bindEvents();
             this.initVideoToListing();
@@ -23,6 +31,14 @@
         bindEvents: function() {
             const btnScrape = document.getElementById('btn-shopify-scrape');
             const btnImport = document.getElementById('btn-shopify-import-confirm');
+            const titleInput = document.getElementById('shopify-import-title');
+            const handleInput = document.getElementById('shopify-import-handle');
+
+            if (titleInput && handleInput) {
+                titleInput.addEventListener('input', () => {
+                    handleInput.value = this.generateCleanHandle(titleInput.value);
+                });
+            }
             const videoInput = document.getElementById('shopify-import-video-file');
             const btnEnhance = document.getElementById('btn-shopify-ai-enhance');
             const btnRecreate = document.getElementById('btn-shopify-ai-recreate');
@@ -900,6 +916,10 @@
 
                 // Populate import details preview form
                 document.getElementById('shopify-import-title').value = this.scrapedProduct.title || '';
+                const handleInput = document.getElementById('shopify-import-handle');
+                if (handleInput) {
+                    handleInput.value = this.generateCleanHandle(this.scrapedProduct.title || '');
+                }
                 document.getElementById('shopify-import-sku-prefix').value = '';
                 document.getElementById('shopify-import-price').value = data.product.variants?.[0]?.price || '';
                 document.getElementById('shopify-import-compare-price').value = data.product.variants?.[0]?.compare_at_price || '';
@@ -1233,11 +1253,14 @@
                 });
             }
 
+            const handle = document.getElementById('shopify-import-handle')?.value.trim();
+
             // Copy modifications back to scrapedProduct payload
             const productPayload = {
                 ...this.scrapedProduct,
                 title,
-                description
+                description,
+                handle: handle || undefined
             };
 
             try {
@@ -1982,6 +2005,10 @@
 
             // Populate the shared import form fields (same as scraper format)
             document.getElementById('shopify-import-title').value = title;
+            const handleInput = document.getElementById('shopify-import-handle');
+            if (handleInput) {
+                handleInput.value = this.generateCleanHandle(title);
+            }
             document.getElementById('shopify-import-sku-prefix').value = '';
             document.getElementById('shopify-import-price').value = price || '';
             document.getElementById('shopify-import-compare-price').value = compare;
@@ -2258,6 +2285,10 @@
 
             // Populate the shared import form fields
             document.getElementById('shopify-import-title').value = title;
+            const handleInput = document.getElementById('shopify-import-handle');
+            if (handleInput) {
+                handleInput.value = this.generateCleanHandle(title);
+            }
             document.getElementById('shopify-import-sku-prefix').value = '';
             document.getElementById('shopify-import-price').value = price || '';
             document.getElementById('shopify-import-compare-price').value = compare || '';

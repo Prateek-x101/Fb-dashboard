@@ -595,7 +595,7 @@ router.post('/import', async (req, res) => {
                 variants: variants,
                 options: options,
                 status: "active",
-                handle: generateCleanHandle(product.title),
+                handle: product.handle ? product.handle.trim() : generateCleanHandle(product.title),
                 metafields: metafields.length > 0 ? metafields : undefined
             }
         };
