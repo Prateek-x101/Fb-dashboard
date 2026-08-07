@@ -169,7 +169,7 @@
                             );
                             
                             let secondsElapsed = 0;
-                            const logSteps = [
+                            const fbSteps = [
                                 { time: 0, text: "Connecting to media server... 🌐" },
                                 { time: 1.5, text: "Extracting stream URLs... 🔍" },
                                 { time: 3, text: "Validating video format & response... ⚡" },
@@ -181,6 +181,62 @@
                                 { time: 14, text: "Downloading video raw stream... 📥" },
                                 { time: 16, text: "Cleaning metadata & finalizing files... 💾" }
                             ];
+
+                            const instaSteps = [
+                                { time: 0, text: "Connecting to Instagram servers... 🌐" },
+                                { time: 1.5, text: "Checking post access status... 🔍" },
+                                { time: 3, text: "Bypassing Instagram rate limits... 🛡️" },
+                                { time: 4.5, text: "Executing raw stream fetcher... ⚡" },
+                                { time: 6, text: "Running browser fallback simulation... 🚀" },
+                                { time: 8, text: "Loading public post embed container... 🤖" },
+                                { time: 10, text: "Intercepting media assets & CDN links... 📊" },
+                                { time: 12, text: "Resolving direct video stream... 🎯" },
+                                { time: 14, text: "Downloading video raw stream... 📥" },
+                                { time: 16, text: "Cleaning metadata & finalizing files... 💾" }
+                            ];
+
+                            const pinterestSteps = [
+                                { time: 0, text: "Connecting to Pinterest servers... 🌐" },
+                                { time: 1.5, text: "Following shortlink redirects... 🔍" },
+                                { time: 3, text: "Resolving canonical pin location... 📌" },
+                                { time: 4.5, text: "Scraping media stream formats... ⚡" },
+                                { time: 6, text: "Spinning up page extraction agent... 🚀" },
+                                { time: 8, text: "Inspecting pin DOM structure... 🤖" },
+                                { time: 10, text: "Extracting high-resolution CDN link... 📊" },
+                                { time: 12, text: "Resolving direct video stream... 🎯" },
+                                { time: 14, text: "Downloading video raw stream... 📥" },
+                                { time: 16, text: "Cleaning metadata & finalizing files... 💾" }
+                            ];
+
+                            const youtubeSteps = [
+                                { time: 0, text: "Connecting to YouTube media stream... 🌐" },
+                                { time: 1.5, text: "Querying video format metadata... 🔍" },
+                                { time: 3, text: "Selecting optimal HD stream quality... ⚡" },
+                                { time: 5, text: "Fetching separate video segment source... 📥" },
+                                { time: 7, text: "Fetching separate audio segment source... 🔊" },
+                                { time: 9, text: "Downloading video chunks... 📊" },
+                                { time: 12, text: "Running high-speed multiplexer (FFmpeg)... 🎬" },
+                                { time: 15, text: "Cleaning metadata & finalizing files... 💾" }
+                            ];
+
+                            const genericSteps = [
+                                { time: 0, text: "Connecting to media CDN server... 🌐" },
+                                { time: 1.5, text: "Validating direct file access... 🔍" },
+                                { time: 3, text: "Checking stream stability... ⚡" },
+                                { time: 5, text: "Downloading video raw stream... 📥" },
+                                { time: 8, text: "Cleaning metadata & finalizing files... 💾" }
+                            ];
+
+                            let logSteps = genericSteps;
+                            if (/facebook\.com\/ads\/library/i.test(url)) {
+                                logSteps = fbSteps;
+                            } else if (/instagram\.com/i.test(url)) {
+                                logSteps = instaSteps;
+                            } else if (/pinterest\.(com|co)|pin\.it/i.test(url)) {
+                                logSteps = pinterestSteps;
+                            } else if (/youtube\.com|youtu\.be/i.test(url)) {
+                                logSteps = youtubeSteps;
+                            }
                             
                             let serverRamText = '';
                             const ramCheckInterval = setInterval(async () => {
