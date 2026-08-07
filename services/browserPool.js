@@ -53,12 +53,12 @@ function getOptimalMaxTabs() {
 }
 
 const MAX_TABS = getOptimalMaxTabs();
-console.log(`[BrowserPool] Configured MAX_TABS = ${MAX_TABS}`);
-
-let browser = null;          // shared Puppeteer Browser instance
-let activeTabCount = 0;       // currently open tabs
+console.log(`[BrowserPool] Configured MAX_TABS = ${MAX_TABS}`);let browser = null;          // shared Puppeteer Browser instance
+const pagePool = [];          // Array of { page, inUse: boolean }
 const waitQueue = [];         // resolve callbacks waiting for a free slot
 let launchPromise = null;     // Promise for serialized browser launch
+
+const MIN_SAFE_MEMORY_MB = 80; // We need at least 80MB free memory to open a new tab/page
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -130,7 +130,7 @@ async function ensureBrowser() {
         br.on('disconnected', () => {
             console.log('[BrowserPool] Browser disconnected');
             browser = null;
-            activeTabCount = 0;
+            pagePool.length = 0; // Clear page pool
             launchPromise = null;
         });
 
@@ -153,39 +153,135 @@ async function warmBrowser() {
     }
 }
 
-let idleTimeout = null;       // timeout handle for closing idle browser
+// Calculates dynamic available memory (accounting for Linux cgroups limit - current usage)
+function getAvailableMemoryMB() {
+    try {
+        if (process.platform === 'linux') {
+            let limit = null;
+            let current = null;
 
-// Acquire a tab slot (may block if all 6 are busy)
-function acquireSlot() {
-    if (idleTimeout) {
-        clearTimeout(idleTimeout);
-        idleTimeout = null;
+            // cgroups v2
+            if (fs.existsSync('/sys/fs/cgroup/memory.max') && fs.existsSync('/sys/fs/cgroup/memory.current')) {
+                const limitStr = fs.readFileSync('/sys/fs/cgroup/memory.max', 'utf8').trim();
+                const currentStr = fs.readFileSync('/sys/fs/cgroup/memory.current', 'utf8').trim();
+                if (limitStr !== 'max') {
+                    limit = parseInt(limitStr);
+                    current = parseInt(currentStr);
+                }
+            }
+            // cgroups v1 fallback
+            if (!limit && fs.existsSync('/sys/fs/cgroup/memory/memory.limit_in_bytes') && fs.existsSync('/sys/fs/cgroup/memory/memory.usage_in_bytes')) {
+                limit = parseInt(fs.readFileSync('/sys/fs/cgroup/memory/memory.limit_in_bytes', 'utf8').trim());
+                current = parseInt(fs.readFileSync('/sys/fs/cgroup/memory/memory.usage_in_bytes', 'utf8').trim());
+            }
+
+            if (limit && current) {
+                const availableBytes = limit - current;
+                return Math.max(0, Math.round(availableBytes / (1024 * 1024)));
+            }
+        }
+    } catch (e) {
+        console.warn('[BrowserPool] Failed to read cgroup available memory:', e.message);
     }
 
-    if (activeTabCount < MAX_TABS) {
-        activeTabCount++;
-        return Promise.resolve();
-    }
-    // Queue the caller — they will be resolved when a slot frees up
-    return new Promise(resolve => waitQueue.push(resolve));
+    // Fallback to system free memory
+    return Math.round(os.freemem() / (1024 * 1024));
 }
 
-// Release a tab slot and wake the next queued caller
-function releaseSlot() {
-    activeTabCount = Math.max(0, activeTabCount - 1);
-    if (waitQueue.length > 0) {
-        activeTabCount++;
-        const next = waitQueue.shift();
-        next();
-    } else if (activeTabCount === 0) {
-        // No active tabs. Auto-close browser after 5s idle to release RAM immediately
-        if (idleTimeout) clearTimeout(idleTimeout);
-        idleTimeout = setTimeout(async () => {
-            if (browser && activeTabCount === 0) {
-                console.log('[BrowserPool] 5s idle reached. Closing Chromium to release RAM...');
-                await closeBrowser();
+// Acquire a tab slot, reusing an idle tab or allocating a new one if memory permits
+async function acquirePage(blockImages = true) {
+    const br = await ensureBrowser();
+
+    // 1. Try to find an idle page in the pool
+    const idleEntry = pagePool.find(p => !p.inUse);
+    if (idleEntry) {
+        idleEntry.inUse = true;
+        console.log(`[BrowserPool] Reusing existing idle tab. Active pool size: ${pagePool.length}`);
+        return idleEntry.page;
+    }
+
+    // 2. Check if we can open a new page based on MAX_TABS and Memory Guard
+    const availableMem = getAvailableMemoryMB();
+    console.log(`[BrowserPool] Checking allocation guard. Active tabs: ${pagePool.length}/${MAX_TABS}. Available RAM: ${availableMem}MB.`);
+
+    // Memory Guard: If we already have at least 1 active tab, and available memory is below threshold,
+    // we block opening new tabs and queue instead.
+    const canOpenNewTab = pagePool.length < MAX_TABS && (pagePool.length === 0 || availableMem >= MIN_SAFE_MEMORY_MB);
+
+    if (canOpenNewTab) {
+        const page = await br.newPage();
+        
+        // Configure page interception and user agent ONCE upon creation
+        await page.setRequestInterception(true);
+        page.on('request', req => {
+            const rt = req.resourceType();
+            if (rt === 'image' && blockImages) {
+                req.respond({
+                    status: 200,
+                    contentType: 'image/gif',
+                    body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64')
+                });
+            } else if (['stylesheet', 'font'].includes(rt)) {
+                req.abort();
+            } else {
+                req.continue();
             }
-        }, 5000);
+        });
+
+        await page.setUserAgent(
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+            '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+        );
+
+        page.on('close', () => {
+            const idx = pagePool.findIndex(p => p.page === page);
+            if (idx !== -1) {
+                console.log('[BrowserPool] Tab closed externally. Removing from pool.');
+                pagePool.splice(idx, 1);
+            }
+        });
+
+        pagePool.push({ page, inUse: true });
+        console.log(`[BrowserPool] Created and allocated new tab. Active pool size: ${pagePool.length}`);
+        return page;
+    }
+
+    // 3. Queue the request
+    console.log(`[BrowserPool] Queueing request. Waiting for a tab slot or memory release...`);
+    return new Promise(resolve => {
+        waitQueue.push(resolve);
+    });
+}
+
+// Release a tab slot and wake the next queued caller with the same tab
+async function releasePage(page) {
+    const entry = pagePool.find(p => p.page === page);
+    if (entry) {
+        // Clear page cookies & cache to free up memory on the background page
+        try {
+            const client = await page.target().createCDPSession();
+            await client.send('Network.clearBrowserCookies').catch(() => {});
+            await client.send('Network.clearBrowserCache').catch(() => {});
+        } catch (e) {
+            console.warn('[BrowserPool] Failed to clear page cache:', e.message);
+        }
+
+        entry.inUse = false;
+    }
+
+    // If there is someone waiting in the queue, give them the page immediately
+    if (waitQueue.length > 0) {
+        const nextResolve = waitQueue.shift();
+        if (entry) {
+            entry.inUse = true;
+            console.log(`[BrowserPool] Queue worker picked up reused tab.`);
+            nextResolve(page);
+        } else {
+            // Fallback if the page was somehow lost
+            acquirePage().then(nextResolve);
+        }
+    } else {
+        console.log(`[BrowserPool] Tab released to idle pool. Active pool size: ${pagePool.length}`);
     }
 }
 
@@ -203,8 +299,6 @@ async function withTab(extractFn, opts = {}) {
     const timeout = opts.timeout || 60000;
     const blockImages = opts.blockImages !== false;
 
-    await acquireSlot();
-    
     // Space out navigations to avoid triggering parallel request blocks
     const now = Date.now();
     const diff = now - lastNavTime;
@@ -218,31 +312,7 @@ async function withTab(extractFn, opts = {}) {
 
     let page = null;
     try {
-        const br = await ensureBrowser();
-        page = await br.newPage();
-
-        // Block fonts, stylesheets, and intercept images to return a 1x1 transparent GIF to prevent lazy-load failures
-        await page.setRequestInterception(true);
-        page.on('request', req => {
-            const rt = req.resourceType();
-            if (rt === 'image' && blockImages) {
-                req.respond({
-                    status: 200,
-                    contentType: 'image/gif',
-                    body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64')
-                });
-            } else if (['stylesheet', 'font'].includes(rt)) {
-                req.abort();
-            } else {
-                req.continue();
-            }
-        });
-
-        // Set realistic UA
-        await page.setUserAgent(
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-            '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
-        );
+        page = await acquirePage(blockImages);
 
         // Run the caller's extraction logic with a timeout
         const result = await Promise.race([
@@ -255,17 +325,8 @@ async function withTab(extractFn, opts = {}) {
         return result;
     } finally {
         if (page) {
-            try {
-                // Clear browser cookies and cache to free up memory immediately
-                const client = await page.target().createCDPSession();
-                await client.send('Network.clearBrowserCookies').catch(() => {});
-                await client.send('Network.clearBrowserCache').catch(() => {});
-            } catch (e) {
-                console.warn('[BrowserPool] Failed to clear page cache:', e.message);
-            }
-            try { await page.close(); } catch {}
+            await releasePage(page);
         }
-        releaseSlot();
     }
 }
 
@@ -274,6 +335,13 @@ async function withTab(extractFn, opts = {}) {
  */
 async function closeBrowser() {
     if (browser) {
+        try {
+            // Close all pages in the pool first
+            for (const entry of pagePool) {
+                try { await entry.page.close(); } catch {}
+            }
+        } catch {}
+        pagePool.length = 0;
         try { await browser.close(); } catch {}
         browser = null;
     }
