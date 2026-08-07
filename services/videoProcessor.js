@@ -229,9 +229,39 @@ function resolveActualPath(resolve, reject, tempOutputPath, uploadsDir, outputFi
     resolve(actualPath);
 }
 
+// Resolves Pinterest shortlinks (e.g. pin.it) to canonical pin URLs to bypass invite screens and redirects
+async function resolvePinterestUrl(url) {
+    if (!/pin\.it|pinterest\./i.test(url)) return url;
+    try {
+        let currentUrl = url;
+        // Follow redirects up to 5 times using fetch HEAD requests to get the final landing URL
+        for (let i = 0; i < 5; i++) {
+            const res = await fetch(currentUrl, { method: 'HEAD', redirect: 'manual' });
+            const loc = res.headers.get('location');
+            if (!loc) break;
+            currentUrl = new URL(loc, currentUrl).toString();
+        }
+        
+        // Extract Pinterest Pin ID if present and format a clean canonical Pin URL
+        const pinMatch = currentUrl.match(/pinterest\.(com|co)[^\s]*\/pin\/(\d+)/i);
+        if (pinMatch && pinMatch[2]) {
+            const cleanUrl = `https://www.pinterest.com/pin/${pinMatch[2]}/`;
+            console.log(`[Pinterest] Resolved canonical URL: ${cleanUrl} from: ${url}`);
+            return cleanUrl;
+        }
+        return currentUrl;
+    } catch (e) {
+        console.warn('[Pinterest] Failed to resolve canonical redirect:', e.message);
+        return url;
+    }
+}
+
 // Download video using yt-dlp in HD (Optimized Speed)
 // accessToken is optional; used only for Facebook Ads Library URLs
 async function downloadVideo(url, outputFilename, accessToken) {
+    // Resolve Pinterest shortlinks to canonical URLs first
+    url = await resolvePinterestUrl(url);
+
     // ── Direct CDN / Video URL fallback (Bypass yt-dlp entirely) ───────────
     // If the URL is a direct link to a video file, fetch it directly
     const isDirectCdnUrl = /\.mp4(\?|$)/i.test(url) || 

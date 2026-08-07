@@ -244,6 +244,10 @@ const VIDEO_HOST_HINTS = [
 
 function isLikelyVideoNetworkUrl(url, contentType) {
     const lower = url.toLowerCase();
+    // Exclude API/GraphQL endpoints to prevent false positives
+    if (lower.includes('/graphql') || lower.includes('/api/')) {
+        return false;
+    }
     if (lower.includes(".mp4") || lower.includes(".m3u8") || lower.includes(".mpd")) {
         return true;
     }
@@ -321,6 +325,17 @@ async function performExtraction(targetUrl) {
         
         const networkVideos = new Map();
         const jsonBodyPromises = [];
+        
+        let earlyResolvedUrl = null;
+        let resolveEarly;
+        const earlyPromise = new Promise(r => { resolveEarly = r; });
+
+        const checkAndResolveEarly = (videoUrl) => {
+            if (!earlyResolvedUrl && videoUrl && videoUrl.startsWith('http')) {
+                earlyResolvedUrl = videoUrl;
+                resolveEarly(videoUrl);
+            }
+        };
 
         // LAYER 1 — Network response interception (also captures GraphQL JSON bodies)
         page.on('response', (response) => {
@@ -336,6 +351,10 @@ async function performExtraction(targetUrl) {
                             source: 'network'
                         });
                     }
+                    // For Instagram/Pinterest, a direct video network URL is usually the final mp4 stream!
+                    if (platform === 'instagram' || platform === 'pinterest') {
+                        checkAndResolveEarly(respUrl);
+                    }
                 }
 
                 // Capture JSON/GraphQL response bodies to search for targetId
@@ -344,14 +363,28 @@ async function performExtraction(targetUrl) {
                                       ctLower.includes('x-javascript') ||
                                       ctLower.includes('text/javascript');
                 if (looksLikeJson) {
-                    jsonBodyPromises.push(
-                        response.text()
-                            .then(body => {
-                                if (!body || body.length > 8000000) return null;
-                                return { url: respUrl, body };
-                            })
-                            .catch(() => null)
-                    );
+                    const bodyPromise = response.text()
+                        .then(body => {
+                            if (!body || body.length > 8000000) return null;
+                            
+                            // Real-time scan: does this JSON body contain the target Facebook Ad ID?
+                            if (targetId && body.includes(targetId)) {
+                                const decoded = decodeJsonEncodedUrls(body);
+                                const walked = extractHdSdFromText(decoded);
+                                if (walked.length > 0) {
+                                    // Found the HD/SD stream for our targeted Facebook Ad!
+                                    const bestUrl = walked.find(w => w.isHD)?.url || walked[0].url;
+                                    if (bestUrl) {
+                                        console.log(`[BrowserExtract] Intercepted target ID video URL in real-time JSON!`);
+                                        checkAndResolveEarly(bestUrl);
+                                    }
+                                }
+                            }
+                            return { url: respUrl, body };
+                        })
+                        .catch(() => null);
+                    
+                    jsonBodyPromises.push(bodyPromise);
                 }
             } catch {}
         });
@@ -366,11 +399,22 @@ async function performExtraction(targetUrl) {
             hasTouch: true
         });
 
-        // Navigate page
-        await page.goto(navigationUrl, {
+        // Start page navigation. We race it with the early resolver promise!
+        const navigationPromise = page.goto(navigationUrl, {
             waitUntil: 'networkidle2',
             timeout: 30000
         }).catch(err => console.warn(`[BrowserExtract] Navigation warning: ${err.message}`));
+
+        // Wait for EITHER the early resolver to trigger, OR the navigation to finish + settle
+        const reason = await Promise.race([
+            earlyPromise.then(() => 'early'),
+            navigationPromise.then(() => 'navigation')
+        ]);
+
+        if (reason === 'early' && earlyResolvedUrl) {
+            console.log(`[BrowserExtract] Early extraction success: ${earlyResolvedUrl.slice(0, 80)}...`);
+            return earlyResolvedUrl;
+        }
 
         // Wait specifically for a <video> element
         try {
