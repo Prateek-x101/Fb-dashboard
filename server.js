@@ -145,8 +145,57 @@ app.get('/api/media/debug-ytdlp', async (req, res) => {
 // Diagnostic route to check live RAM status on the server
 app.get('/api/system/ram', (req, res) => {
     try {
-        const { getMemoryStats } = require('./services/browserPool');
-        res.json(getMemoryStats ? getMemoryStats() : { free: 0, total: 0 });
+        const os = require('os');
+        const fs = require('fs');
+
+        let limit = null;
+        let current = null;
+
+        // Try reading Linux cgroups for container memory status
+        if (process.platform === 'linux') {
+            try {
+                // cgroups v2
+                if (fs.existsSync('/sys/fs/cgroup/memory.max') && fs.existsSync('/sys/fs/cgroup/memory.current')) {
+                    const limitStr = fs.readFileSync('/sys/fs/cgroup/memory.max', 'utf8').trim();
+                    const currentStr = fs.readFileSync('/sys/fs/cgroup/memory.current', 'utf8').trim();
+                    if (limitStr !== 'max') {
+                        limit = parseInt(limitStr);
+                        current = parseInt(currentStr);
+                    }
+                }
+                // cgroups v1 fallback
+                if (!limit && fs.existsSync('/sys/fs/cgroup/memory/memory.limit_in_bytes') && fs.existsSync('/sys/fs/cgroup/memory/memory.usage_in_bytes')) {
+                    limit = parseInt(fs.readFileSync('/sys/fs/cgroup/memory/memory.limit_in_bytes', 'utf8').trim());
+                    current = parseInt(fs.readFileSync('/sys/fs/cgroup/memory/memory.usage_in_bytes', 'utf8').trim());
+                }
+            } catch (cgErr) {
+                console.warn('Cgroups read error:', cgErr.message);
+            }
+        }
+
+        let freeMB = 0;
+        let totalMB = 0;
+
+        if (limit && current) {
+            const availableBytes = limit - current;
+            freeMB = Math.max(0, Math.round(availableBytes / (1024 * 1024)));
+            totalMB = Math.round(limit / (1024 * 1024));
+        } else {
+            // Fallback: system memory
+            freeMB = Math.round(os.freemem() / (1024 * 1024));
+            totalMB = Math.round(os.totalmem() / (1024 * 1024));
+        }
+
+        // If cgroup limit was unlimited ("max") or reported as huge values, cap it or fallback to system memory
+        if (totalMB > 1000000 || totalMB === 0) {
+            freeMB = Math.round(os.freemem() / (1024 * 1024));
+            totalMB = Math.round(os.totalmem() / (1024 * 1024));
+        }
+
+        res.json({
+            free: freeMB,
+            total: totalMB
+        });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

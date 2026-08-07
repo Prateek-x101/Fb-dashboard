@@ -197,7 +197,30 @@ async function acquirePage(blockImages = true) {
     if (idleEntry) {
         idleEntry.inUse = true;
         console.log(`[BrowserPool] Reusing existing idle tab. Active pool size: ${pagePool.length}`);
-        return idleEntry.page;
+        
+        const page = idleEntry.page;
+        // Clean any old listeners that might have been attached by previous extraction calls
+        page.removeAllListeners('response');
+        page.removeAllListeners('request');
+        
+        // Re-attach standard request interception for the reused page
+        await page.setRequestInterception(true).catch(() => {});
+        page.on('request', req => {
+            const rt = req.resourceType();
+            if (rt === 'image' && blockImages) {
+                req.respond({
+                    status: 200,
+                    contentType: 'image/gif',
+                    body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64')
+                });
+            } else if (['stylesheet', 'font'].includes(rt)) {
+                req.abort();
+            } else {
+                req.continue();
+            }
+        });
+        
+        return page;
     }
 
     // 2. Check if we can open a new page based on MAX_TABS and Memory Guard
@@ -265,6 +288,9 @@ async function releasePage(page) {
         } catch (e) {
             console.warn('[BrowserPool] Failed to clear page cache:', e.message);
         }
+
+        // Navigate to blank page to wipe previous DOM elements and stop any video player
+        await page.goto('about:blank').catch(() => {});
 
         entry.inUse = false;
     }
@@ -347,4 +373,14 @@ async function closeBrowser() {
     }
 }
 
-module.exports = { withTab, closeBrowser, warmBrowser };
+function getMemoryStats() {
+    const totalMemoryBytes = os.totalmem();
+    const totalMB = Math.round(totalMemoryBytes / (1024 * 1024));
+    const availableMB = getAvailableMemoryMB();
+    return {
+        free: availableMB,
+        total: totalMB
+    };
+}
+
+module.exports = { withTab, closeBrowser, warmBrowser, getAvailableMemoryMB, getMemoryStats };
