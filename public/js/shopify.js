@@ -1175,6 +1175,12 @@
 
             if (!storeSelect || !prefixInput || !titleInput || !btnImport || !this.scrapedProduct) return;
 
+            // Hide previous success links
+            const successContainer = document.getElementById('shopify-import-success-container');
+            if (successContainer) {
+                successContainer.style.display = 'none';
+            }
+
             const storeId = storeSelect.value;
             const skuPrefix = prefixInput.value.trim();
             const title = titleInput.value.trim();
@@ -1264,6 +1270,28 @@
                 });
 
                 window.AppController.showToast(`Successfully imported: "${result.title}" to Shopify! 🎉`, 'success');
+
+                // Show success container with constructed links
+                const successAdminLink = document.getElementById('shopify-import-success-admin-link');
+                const successStorefrontLink = document.getElementById('shopify-import-success-storefront-link');
+                if (successContainer && successAdminLink && successStorefrontLink) {
+                    const selectedStoreOption = storeSelect.options[storeSelect.selectedIndex];
+                    const rawText = selectedStoreOption ? selectedStoreOption.textContent : '';
+                    const match = rawText.match(/\(([^)]+)\)/);
+                    const shopUrl = match ? match[1] : '';
+                    const storeSubdomain = shopUrl.split('.')[0] || 'admin';
+                    
+                    const adminUrl = `https://admin.shopify.com/store/${storeSubdomain}/products/${result.productId}`;
+                    
+                    successAdminLink.href = adminUrl;
+                    successAdminLink.textContent = adminUrl;
+                    
+                    successStorefrontLink.href = result.productUrl;
+                    successStorefrontLink.textContent = result.productUrl;
+                    
+                    successContainer.style.display = 'block';
+                    successContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }
 
                 // Perform Organic Publishing if checked
                 if (organicChecked) {

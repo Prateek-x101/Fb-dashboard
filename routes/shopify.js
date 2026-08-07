@@ -236,8 +236,14 @@ async function uploadFileToShopify(shopUrl, accessToken, localFilePath, filename
     return fileId;
 }
 
+const metafieldTypeCache = new Map();
+
 // Helper: Query definition of custom.floating_videos metafield to detect if it's file_reference or list.file_reference
 async function getFloatingVideoMetafieldType(shopUrl, accessToken) {
+    const cacheKey = `${shopUrl}`;
+    if (metafieldTypeCache.has(cacheKey)) {
+        return metafieldTypeCache.get(cacheKey);
+    }
     try {
         const graphqlUrl = `https://${shopUrl}/admin/api/2024-04/graphql.json`;
         const res = await fetch(graphqlUrl, {
@@ -267,13 +273,15 @@ async function getFloatingVideoMetafieldType(shopUrl, accessToken) {
             const defs = data.data?.metafieldDefinitions?.edges || [];
             const match = defs.find(e => e.node.namespace === 'custom' && e.node.key === 'floating_videos');
             if (match) {
-                return match.node.type.name; // e.g. "file_reference" or "list.file_reference"
+                const typeName = match.node.type.name; // e.g. "file_reference" or "list.file_reference"
+                metafieldTypeCache.set(cacheKey, typeName);
+                return typeName;
             }
         }
     } catch (e) {
         console.error('Failed to query metafield definitions:', e.message);
     }
-    return 'file_reference'; // fallback
+    return 'list.file_reference'; // default fallback supporting multiple videos
 }
 
 // Helper: Fetch collections from User's Shopify Store
@@ -620,6 +628,15 @@ router.post('/import', async (req, res) => {
             const createdVariants = createdProduct.variants || [];
             const variantImageUpdates = [];
 
+            const normalizeVal = (val) => {
+                if (!val) return '';
+                return String(val)
+                    .replace(/[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF]/g, '') // remove emojis
+                    .replace(/[^a-zA-Z0-9]/g, '') // remove non-alphanumeric
+                    .toLowerCase()
+                    .trim();
+            };
+
             for (const createdImg of createdImages) {
                 // Get the original image URL/path using the position (1-indexed)
                 const originalUrl = (product.images || [])[createdImg.position - 1];
@@ -634,11 +651,13 @@ router.post('/import', async (req, res) => {
 
                 if (matchedKey) {
                     const targetValue = imageAssignments[matchedKey];
-                    // Find matching variants that contain this option value
+                    const targetNorm = normalizeVal(targetValue);
+
+                    // Find matching variants that contain this option value (normalised to strip emojis, spacing, case differences)
                     const matchingVariants = createdVariants.filter(v => 
-                        v.option1 === targetValue || 
-                        v.option2 === targetValue || 
-                        v.option3 === targetValue
+                        normalizeVal(v.option1) === targetNorm || 
+                        normalizeVal(v.option2) === targetNorm || 
+                        normalizeVal(v.option3) === targetNorm
                     );
 
                     for (const mv of matchingVariants) {
@@ -651,24 +670,35 @@ router.post('/import', async (req, res) => {
             }
 
             if (variantImageUpdates.length > 0) {
-                console.log(`Linking ${variantImageUpdates.length} variant images in Shopify...`);
-                // Update variant image linking sequentially or in parallel
-                await Promise.allSettled(variantImageUpdates.map(async (update) => {
+                console.log(`Linking ${variantImageUpdates.length} variant images in Shopify sequentially to avoid rate limits...`);
+                // Update variant image linking sequentially with a 250ms delay to prevent 429 rate limits
+                for (const update of variantImageUpdates) {
                     const variantUrl = `https://${store.shopUrl}/admin/api/2024-04/variants/${update.variantId}.json`;
-                    await fetch(variantUrl, {
-                        method: 'PUT',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'X-Shopify-Access-Token': store.accessToken
-                        },
-                        body: JSON.stringify({
-                            variant: {
-                                id: update.variantId,
-                                image_id: update.imageId
-                            }
-                        })
-                    });
-                }));
+                    try {
+                        const vRes = await fetch(variantUrl, {
+                            method: 'PUT',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'X-Shopify-Access-Token': store.accessToken
+                            },
+                            body: JSON.stringify({
+                                variant: {
+                                    id: update.variantId,
+                                    image_id: update.imageId
+                                }
+                            })
+                        });
+                        if (!vRes.ok) {
+                            console.warn(`[ShopifyImport] Failed to link variant ${update.variantId} to image ${update.imageId}: ${vRes.status} ${vRes.statusText}`);
+                        } else {
+                            console.log(`[ShopifyImport] Successfully linked variant ${update.variantId} to image ${update.imageId}`);
+                        }
+                        // 250ms spacing to stay safe under Shopify's 2 req/sec REST bucket leak rate
+                        await new Promise(r => setTimeout(r, 250));
+                    } catch (err) {
+                        console.warn(`[ShopifyImport] Error linking variant ${update.variantId}:`, err.message);
+                    }
+                }
             }
         }
 
