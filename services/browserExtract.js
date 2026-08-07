@@ -308,16 +308,7 @@ function transformExtractionUrl(url) {
 }
 
 async function extractVideoUrl(targetUrl) {
-    const cacheKey = getCacheKey(targetUrl);
-    if (extractionCache.has(cacheKey)) {
-        console.log(`[BrowserExtract] Cache hit for: ${cacheKey}. Reusing extraction.`);
-        return extractionCache.get(cacheKey);
-    }
-    
-    const extractionPromise = performExtraction(targetUrl);
-    extractionCache.set(cacheKey, extractionPromise);
-    extractionPromise.catch(() => extractionCache.delete(cacheKey));
-    return extractionPromise;
+    return performExtraction(targetUrl);
 }
 
 async function performExtraction(targetUrl) {
