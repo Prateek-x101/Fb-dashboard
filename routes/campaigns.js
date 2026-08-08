@@ -262,8 +262,9 @@ router.get('/interests', async (req, res) => {
 });
 
 router.post('/ai-audiences', async (req, res) => {
+    const framesToCleanup = [];
     try {
-        const { websiteUrl, numAudiences, alreadyUsed } = req.body;
+        const { websiteUrl, numAudiences, alreadyUsed, mediaFiles } = req.body;
         const storage = getStorage();
         const settings = storage.settings || {};
 
@@ -274,6 +275,33 @@ router.post('/ai-audiences', async (req, res) => {
             return res.status(400).json({ error: 'Website URL is required' });
         }
         await assertSafeExternalUrl(websiteUrl);
+
+        // Process visual media (scraped product images and video frames)
+        const imagesBase64 = [];
+        if (Array.isArray(mediaFiles) && mediaFiles.length > 0) {
+            const videoProcessor = require('../services/videoProcessor');
+            for (const file of mediaFiles) {
+                try {
+                    if (file && fs.existsSync(file)) {
+                        const ext = path.extname(file).toLowerCase();
+                        if (['.mp4', '.mov', '.avi', '.webm'].includes(ext)) {
+                            // Extract 5 representative frames from video
+                            const frames = await videoProcessor.extractFrames(file, 5);
+                            frames.forEach(f => {
+                                if (f.base64) imagesBase64.push(f.base64);
+                            });
+                            framesToCleanup.push(...frames);
+                        } else if (['.jpg', '.jpeg', '.png', '.webp'].includes(ext)) {
+                            // Convert image to base64
+                            const b64 = fs.readFileSync(file).toString('base64');
+                            imagesBase64.push(b64);
+                        }
+                    }
+                } catch (err) {
+                    console.error(`Failed to process visual media file ${file}:`, err.message);
+                }
+            }
+        }
 
         // Use the same product extractor as ad-copy generation. This gives
         // Gemini structured product data and a long product-page description,
@@ -286,7 +314,8 @@ router.post('/ai-audiences', async (req, res) => {
             settings.geminiModel,
             details.content,
             requestedCount,
-            alreadyUsed || []
+            alreadyUsed || [],
+            imagesBase64
         );
 
         // Validate every Gemini-suggested interest against Facebook's ad interest search API
@@ -321,6 +350,15 @@ router.post('/ai-audiences', async (req, res) => {
         res.json({ audiences });
     } catch (error) {
         res.status(500).json({ error: 'Failed to generate audiences', details: error.message });
+    } finally {
+        if (framesToCleanup.length > 0) {
+            try {
+                const videoProcessor = require('../services/videoProcessor');
+                videoProcessor.cleanupFrames(framesToCleanup);
+            } catch (cleanupErr) {
+                console.error('Failed to cleanup extracted frames:', cleanupErr.message);
+            }
+        }
     }
 });
 

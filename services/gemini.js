@@ -96,7 +96,7 @@ ${baseText}`;
         }
     },
 
-    async generateAudiences(apiKey, model, websiteContent, numAudiences, alreadyUsedKeywords) {
+    async generateAudiences(apiKey, model, websiteContent, numAudiences, alreadyUsedKeywords, mediaFiles = []) {
         const url = `${BASE_URL}/models/${normalizeModel(model)}:generateContent?key=${apiKey}`;
         const audienceCount = Math.max(3, Number.parseInt(numAudiences, 10) || 3);
 
@@ -104,7 +104,7 @@ ${baseText}`;
             ? `\nKeywords already used in other audiences — DO NOT repeat any of these: ${alreadyUsedKeywords.join(', ')}`
             : '';
 
-        const prompt = `You are a Facebook Ads targeting expert. Study the product information below carefully — understand the product category, materials, use cases, price point, and likely buyer — then generate ${audienceCount} DISTINCT audience segments.
+        const prompt = `You are a Facebook Ads targeting expert. Study the product information text AND any attached visual media (listing images or video frames showing the product and ad context) carefully — understand the product category, materials, visual style, use cases, price point, and likely buyer — then generate ${audienceCount} DISTINCT audience segments.
 
 PRODUCT INFORMATION:
 ${websiteContent}
@@ -135,6 +135,13 @@ STRICT RULES:
 7. Return ONLY valid JSON — no markdown, no extra text.
    Format: [{"audienceName":"Short label","targeting":[{"type":"interest|behavior|demographic|life_event|job_title|employer|field_of_study|school","name":"keyword"},...]},...]`;
 
+        const parts = [{ text: prompt }];
+        if (Array.isArray(mediaFiles) && mediaFiles.length > 0) {
+            for (const b64 of mediaFiles) {
+                parts.push({ inlineData: { mimeType: 'image/jpeg', data: b64 } });
+            }
+        }
+
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 25000);
         let response;
@@ -143,7 +150,7 @@ STRICT RULES:
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    contents: [{ parts: [{ text: prompt }] }]
+                    contents: [{ parts }]
                 }),
                 signal: controller.signal
             });

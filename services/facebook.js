@@ -237,6 +237,10 @@ const facebookService = {
                 const type = normalizeTargetingType(item.type);
                 if (!type) return null;
 
+                if (item.id && /^\d+$/.test(String(item.id))) {
+                    return { id: String(item.id), name: item.name || '', type: type };
+                }
+
                 const name = String(item.name || '').trim();
                 if (name) {
                     const normalizedName = normalizeTargetingName(name);

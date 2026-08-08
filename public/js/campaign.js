@@ -1076,11 +1076,17 @@
             const btn = targetCard.querySelector('.btn-ai-audience');
             if (btn) { btn.disabled = true; btn.textContent = '⏳…'; }
 
+            const mediaFiles = [];
+            document.querySelectorAll('.creative-ad-card').forEach(card => {
+                const media = card.getAttribute('data-media');
+                if (media) mediaFiles.push(media);
+            });
+
             try {
                 // The backend always asks Gemini for at least three strategies.
                 // This card-level action uses the first unused strategy while
                 // keeping the same minimum-quality generation rules as AI All.
-                const result = await window.API.aiAudiences({ websiteUrl, numAudiences: 3, alreadyUsed });
+                const result = await window.API.aiAudiences({ websiteUrl, numAudiences: 3, alreadyUsed, mediaFiles });
                 const audiences = result.audiences || [];
                 if (audiences.length > 0) {
                     this._populateAudienceCard(
@@ -1121,11 +1127,17 @@
             const btn = document.getElementById('btn-ai-all-audiences');
             if (btn) { btn.disabled = true; btn.textContent = '⏳ Generating…'; }
 
+            const mediaFiles = [];
+            document.querySelectorAll('.creative-ad-card').forEach(card => {
+                const media = card.getAttribute('data-media');
+                if (media) mediaFiles.push(media);
+            });
+
             try {
                 // Gemini must always produce at least three distinct audience
                 // strategies, even if the user reduced the card count.
                 const requestedCount = Math.max(3, cards.length);
-                const result = await window.API.aiAudiences({ websiteUrl, numAudiences: requestedCount, alreadyUsed: [] });
+                const result = await window.API.aiAudiences({ websiteUrl, numAudiences: requestedCount, alreadyUsed: [], mediaFiles });
                 const audiences = result.audiences || [];
                 cards.forEach((card, idx) => {
                     const cardIdx = parseInt(card.getAttribute('data-index'));
