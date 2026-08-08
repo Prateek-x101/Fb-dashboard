@@ -326,20 +326,30 @@ select.form-control {
 .wizard-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 2rem;
+  align-items: flex-start;
+  margin-bottom: 2.5rem;
   position: relative;
 }
 
 .wizard-header::before {
   content: '';
   position: absolute;
-  top: 50%;
-  left: 0;
-  width: 100%;
+  top: 20px; /* Aligns with the center of the 40px step circles */
+  left: 5%;
+  width: 90%;
   height: 2px;
   background: var(--glass-border);
   z-index: 1;
+}
+
+.step-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  z-index: 2;
+  position: relative;
 }
 
 .step-indicator {
@@ -352,9 +362,16 @@ select.form-control {
   align-items: center;
   justify-content: center;
   font-weight: 600;
-  z-index: 2;
-  position: relative;
+  color: var(--text-secondary);
   transition: var(--transition);
+}
+
+.step-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition: var(--transition);
+  white-space: nowrap;
 }
 
 .step-indicator.active {
@@ -364,10 +381,19 @@ select.form-control {
   box-shadow: 0 0 15px rgba(0, 245, 212, 0.3);
 }
 
+.step-indicator.active + .step-label {
+  color: var(--accent-cyan);
+  font-weight: 600;
+}
+
 .step-indicator.completed {
   border-color: var(--accent-blue);
   background: var(--accent-blue);
   color: white;
+}
+
+.step-indicator.completed + .step-label {
+  color: var(--accent-blue);
 }
 
 .wizard-content {

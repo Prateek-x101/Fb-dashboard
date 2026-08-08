@@ -489,12 +489,13 @@
             if (btnPrev) btnPrev.style.display = this.currentStep > 1 ? 'inline-flex' : 'none';
             if (btnNext) btnNext.style.display = this.currentStep < this.totalSteps ? 'inline-flex' : 'none';
 
-            // Pre-populate default excluded locations on first entry to step 2
-            if (this.currentStep === 2) this.loadDefaultExcludedLocations();
-            if (this.currentStep === 3) {
+            // Creative initialization happens on entering step 2 (Ad Creative)
+            if (this.currentStep === 2) {
                 if (this.campaignData.step3.ads.length === 0) this.addCreativeAd();
                 this.ensureCreativeCopyLoaded();
             }
+            // Pre-populate default excluded locations on first entry to step 3 (Targeting)
+            if (this.currentStep === 3) this.loadDefaultExcludedLocations();
             if (this.currentStep === this.totalSteps) this.renderReviewSummary();
         },
 
@@ -537,6 +538,39 @@
                 return true;
 
             } else if (step === 2) {
+                this.collectCreativeAdsFromDOM();
+                if (this.campaignData.step3.ads.length === 0) {
+                    window.AppController.showToast('Please add at least one media/ad card', 'warning');
+                    return false;
+                }
+                if (!document.getElementById('ad-page')?.value) {
+                    window.AppController.showToast('Please select a Facebook Page', 'warning');
+                    return false;
+                }
+                if (this.campaignData.step3.ads.some(ad => !ad.media)) {
+                    window.AppController.showToast('Please upload media for every ad card', 'warning');
+                    return false;
+                }
+                if (this.campaignData.step3.ads.some(ad => !ad.primaryText.trim())) {
+                    window.AppController.showToast('Please add primary text for every ad', 'warning');
+                    return false;
+                }
+                this.campaignData.step3.headline = document.getElementById('headline')?.value?.trim() || '';
+                this.campaignData.step3.description = document.getElementById('description')?.value?.trim() || '';
+                this.campaignData.step3.cta = document.getElementById('cta-select')?.value || 'SHOP_NOW';
+                this.campaignData.step3.pageId = document.getElementById('ad-page')?.value || '';
+                this.campaignData.step3.instagramId = document.getElementById('ad-instagram')?.value || '';
+
+                // Collect selected enhancements
+                const enhancements = {};
+                document.querySelectorAll('.enhancement-btn.active').forEach(btn => {
+                    const key = btn.getAttribute('data-key');
+                    if (key) enhancements[key] = true;
+                });
+                this.campaignData.step3.enhancements = enhancements;
+                return true;
+
+            } else if (step === 3) {
                 const url = document.getElementById('website-url')?.value?.trim();
                 if (!url) { window.AppController.showToast('Please enter a Website URL', 'warning'); return false; }
 
@@ -618,39 +652,6 @@
                     conversionEvent: document.getElementById('conversion-event')?.value || 'PURCHASE',
                     audiences
                 };
-                return true;
-
-            } else if (step === 3) {
-                this.collectCreativeAdsFromDOM();
-                if (this.campaignData.step3.ads.length === 0) {
-                    window.AppController.showToast('Please add at least one media/ad card', 'warning');
-                    return false;
-                }
-                if (!document.getElementById('ad-page')?.value) {
-                    window.AppController.showToast('Please select a Facebook Page', 'warning');
-                    return false;
-                }
-                if (this.campaignData.step3.ads.some(ad => !ad.media)) {
-                    window.AppController.showToast('Please upload media for every ad card', 'warning');
-                    return false;
-                }
-                if (this.campaignData.step3.ads.some(ad => !ad.primaryText.trim())) {
-                    window.AppController.showToast('Please add primary text for every ad', 'warning');
-                    return false;
-                }
-                this.campaignData.step3.headline = document.getElementById('headline')?.value?.trim() || '';
-                this.campaignData.step3.description = document.getElementById('description')?.value?.trim() || '';
-                this.campaignData.step3.cta = document.getElementById('cta-select')?.value || 'SHOP_NOW';
-                this.campaignData.step3.pageId = document.getElementById('ad-page')?.value || '';
-                this.campaignData.step3.instagramId = document.getElementById('ad-instagram')?.value || '';
-
-                // Collect selected enhancements
-                const enhancements = {};
-                document.querySelectorAll('.enhancement-btn.active').forEach(btn => {
-                    const key = btn.getAttribute('data-key');
-                    if (key) enhancements[key] = true;
-                });
-                this.campaignData.step3.enhancements = enhancements;
                 return true;
             }
             return true;

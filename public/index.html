@@ -95,10 +95,22 @@
             <h2 class="mb-3">Create New Campaign</h2>
             
             <div class="wizard-header">
-                <div class="step-indicator active" id="step-indicator-1" data-step="1">1</div>
-                <div class="step-indicator" id="step-indicator-2" data-step="2">2</div>
-                <div class="step-indicator" id="step-indicator-3" data-step="3">3</div>
-                <div class="step-indicator" id="step-indicator-4" data-step="4">4</div>
+                <div class="step-container">
+                    <div class="step-indicator active" id="step-indicator-1" data-step="1">1</div>
+                    <span class="step-label">Campaign Setup</span>
+                </div>
+                <div class="step-container">
+                    <div class="step-indicator" id="step-indicator-2" data-step="2">2</div>
+                    <span class="step-label">Ad Creative</span>
+                </div>
+                <div class="step-container">
+                    <div class="step-indicator" id="step-indicator-3" data-step="3">3</div>
+                    <span class="step-label">Targeting</span>
+                </div>
+                <div class="step-container">
+                    <div class="step-indicator" id="step-indicator-4" data-step="4">4</div>
+                    <span class="step-label">Review & Publish</span>
+                </div>
             </div>
 
             <!-- Step 1 - Campaign Setup -->
@@ -175,8 +187,129 @@
                     </div>
                 </div>
 
-                <!-- Step 2 - Ad Set Configuration -->
+                <!-- Step 2 - Ad Creative -->
                 <div class="wizard-step" id="step-2">
+                    <div class="glass-card mb-3" style="border-color:rgba(0,245,212,0.25);">
+                        <div class="flex justify-between align-center mb-3">
+                            <div>
+                                <h3>🎨 Global Creative Settings</h3>
+                                <p style="font-size:0.8rem;color:var(--text-secondary);margin-top:0.35rem;">These settings apply to every ad below.</p>
+                            </div>
+                            <button class="btn btn-gemini btn-sm" id="btn-auto-fill-copy">🤖 Auto-fill from Website</button>
+                        </div>
+                        <div class="grid-2">
+                            <div class="form-group">
+                                <label>Facebook Page</label>
+                                <select class="form-control" id="ad-page">
+                                    <option value="">Select Facebook Page</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Instagram Account <span style="color:var(--text-secondary); font-weight:400;">(Optional)</span></label>
+                                <select class="form-control" id="ad-instagram">
+                                    <option value="">No Instagram linked</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="grid-2">
+                            <div class="form-group">
+                                <label>Headline <span style="color:var(--text-secondary);font-weight:400;">(auto-filled from product name)</span></label>
+                                <input type="text" class="form-control" placeholder="Product headline" id="headline">
+                            </div>
+                            <div class="form-group">
+                                <label>Call to Action</label>
+                                <select class="form-control" id="cta-select">
+                                    <option value="SHOP_NOW">Shop Now</option>
+                                    <option value="LEARN_MORE">Learn More</option>
+                                    <option value="SIGN_UP">Sign Up</option>
+                                    <option value="APPLY_NOW">Apply Now</option>
+                                    <option value="CONTACT_US">Contact Us</option>
+                                    <option value="DOWNLOAD">Download</option>
+                                    <option value="GET_OFFER">Get Offer</option>
+                                    <option value="ORDER_NOW">Order Now</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group mb-2" style="display:flex; align-items:center; gap:8px; margin-top:12px; background:rgba(0,245,212,0.06); padding:8px; border-radius:6px; border:1px solid rgba(0,245,212,0.15);">
+                            <input type="checkbox" id="campaign-organic-publish-toggle" style="width:18px; height:18px; cursor:pointer;">
+                            <label for="campaign-organic-publish-toggle" style="margin-bottom:0; cursor:pointer; font-weight:600; color:var(--accent-cyan);">📢 Also publish these videos organically as Page Posts / Instagram Reels</label>
+                        </div>
+                    </div>
+
+                    <!-- Enhancements -->
+                    <div class="glass-card mb-3" style="border-color:rgba(114,9,183,0.28);">
+                        <h3 style="margin-bottom:0.3rem;">⚡ Enhancements</h3>
+                        <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:2px;">Meta AI-powered boosts — toggle on/off. Applied to every ad in this campaign.</p>
+                        <div class="enhancements-grid">
+                            <button type="button" class="enhancement-btn" data-key="advantageAudience" title="Meta expands your audience beyond manual targeting to find more buyers">
+                                <span class="enh-dot"></span>🎯 Advantage+ Audience
+                            </button>
+                            <button type="button" class="enhancement-btn" data-key="multiAdvertiser" title="Show your ad alongside other advertisers for extra reach">
+                                <span class="enh-dot"></span>📢 Multi-Advertiser Ads
+                            </button>
+                            <button type="button" class="enhancement-btn" data-key="autoCreative" title="Meta auto-adjusts brightness, contrast and adds text overlays">
+                                <span class="enh-dot"></span>✨ Auto Creative
+                            </button>
+                            <button type="button" class="enhancement-btn" data-key="autoMusic" title="Auto-add royalty-free background music to video ads" style="display:none">
+                                <span class="enh-dot"></span>🎵 Auto Music
+                            </button>
+                            <button type="button" class="enhancement-btn" data-key="inlineComment" title="Show top comments below the ad to build social proof">
+                                <span class="enh-dot"></span>💬 Inline Comments
+                            </button>
+                            <button type="button" class="enhancement-btn" data-key="textOptimizations" title="Meta rewrites your ad copy for better performance">
+                                <span class="enh-dot"></span>📝 Text Improvements
+                            </button>
+                            <button type="button" class="enhancement-btn" data-key="productTags" title="Auto-tag products from your catalog in the video">
+                                <span class="enh-dot"></span>🏷️ Product Tags
+                            </button>
+                            <button type="button" class="enhancement-btn" data-key="enhanceCta" title="Meta auto-selects the best CTA button for each user">
+                                <span class="enh-dot"></span>🔘 Enhance CTA
+                            </button>
+                        </div>
+                        <p class="enhancements-desc" id="enhancements-desc-hint">Select any enhancements to enable them on all ads.</p>
+                    </div>
+
+                    <div class="glass-card mb-3">
+                        <div class="flex justify-between align-center mb-2">
+                            <div>
+                                <h3>🖼️ Media & Ad Content</h3>
+                                <p style="font-size:0.8rem;color:var(--text-secondary);margin-top:0.35rem;">Upload one or more reels/images. Each media gets its own ad and primary text.</p>
+                            </div>
+                            <button class="btn btn-secondary btn-sm" id="btn-add-creative-ad">➕ Add Ad</button>
+                        </div>
+
+                        <div class="upload-zone" id="media-upload-zone">
+                            <i>📁</i>
+                            <h4>Drag & Drop one or more images/videos here</h4>
+                            <p>or click to browse multiple files</p>
+                        </div>
+                        <input type="file" id="media-file-input" accept="image/*,video/*" multiple style="display:none;">
+                        
+                        <div class="mt-2" style="margin-top:12px;">
+                            <div id="campaign-media-url-list">
+                                <div class="flex gap-2 mb-1 campaign-video-url-row" style="display:flex; gap:8px; margin-bottom:8px; align-items:center;">
+                                    <input type="text" class="form-control campaign-video-url-input" placeholder="Or paste video link (FB Ads Library, YouTube, Insta, Pinterest…)" style="flex:1;">
+                                    <button type="button" class="btn btn-secondary btn-sm btn-remove-campaign-url-row" style="display:none; padding:4px 8px;">🗑️</button>
+                                </div>
+                            </div>
+                            <div class="flex justify-between align-center mt-2" style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
+                                <button type="button" class="btn btn-secondary btn-xs" id="btn-campaign-add-url-row" style="padding: 4px 8px; font-size: 0.75rem;">➕ Add Another Link</button>
+                                <div class="flex gap-2 align-center">
+                                    <select class="form-control" id="campaign-media-url-canvas" style="width:140px; background:var(--bg-card); color:white; border-color:var(--glass-border);">
+                                        <option value="original">Original Aspect</option>
+                                        <option value="9:16">9:16 Vertical</option>
+                                        <option value="1:1">1:1 Square</option>
+                                    </select>
+                                    <button type="button" class="btn btn-primary" id="btn-campaign-media-url-download" style="white-space:nowrap;">📥 Download & Clean All</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="creative-ads-container" class="mt-3"></div>
+                    </div>
+                </div>
+
+                <!-- Step 3 - Ad Set Configuration -->
+                <div class="wizard-step" id="step-3">
                     <div class="flex justify-between align-center mb-3">
                         <h3>🎯 Ad Set Configuration</h3>
                         <div class="flex gap-2 align-center">
@@ -348,127 +481,6 @@
 
                     <div id="audience-container">
                         <!-- Dynamic audience cards rendered by campaign.js -->
-                    </div>
-                </div>
-
-                <!-- Step 3 - Ad Creative -->
-                <div class="wizard-step" id="step-3">
-                    <div class="glass-card mb-3" style="border-color:rgba(0,245,212,0.25);">
-                        <div class="flex justify-between align-center mb-3">
-                            <div>
-                                <h3>🎨 Global Creative Settings</h3>
-                                <p style="font-size:0.8rem;color:var(--text-secondary);margin-top:0.35rem;">These settings apply to every ad below.</p>
-                            </div>
-                            <button class="btn btn-gemini btn-sm" id="btn-auto-fill-copy">🤖 Auto-fill from Website</button>
-                        </div>
-                        <div class="grid-2">
-                            <div class="form-group">
-                                <label>Facebook Page</label>
-                                <select class="form-control" id="ad-page">
-                                    <option value="">Select Facebook Page</option>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label>Instagram Account <span style="color:var(--text-secondary); font-weight:400;">(Optional)</span></label>
-                                <select class="form-control" id="ad-instagram">
-                                    <option value="">No Instagram linked</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div class="grid-2">
-                            <div class="form-group">
-                                <label>Headline <span style="color:var(--text-secondary);font-weight:400;">(auto-filled from product name)</span></label>
-                                <input type="text" class="form-control" placeholder="Product headline" id="headline">
-                            </div>
-                            <div class="form-group">
-                                <label>Call to Action</label>
-                                <select class="form-control" id="cta-select">
-                                    <option value="SHOP_NOW">Shop Now</option>
-                                    <option value="LEARN_MORE">Learn More</option>
-                                    <option value="SIGN_UP">Sign Up</option>
-                                    <option value="APPLY_NOW">Apply Now</option>
-                                    <option value="CONTACT_US">Contact Us</option>
-                                    <option value="DOWNLOAD">Download</option>
-                                    <option value="GET_OFFER">Get Offer</option>
-                                    <option value="ORDER_NOW">Order Now</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div class="form-group mb-2" style="display:flex; align-items:center; gap:8px; margin-top:12px; background:rgba(0,245,212,0.06); padding:8px; border-radius:6px; border:1px solid rgba(0,245,212,0.15);">
-                            <input type="checkbox" id="campaign-organic-publish-toggle" style="width:18px; height:18px; cursor:pointer;">
-                            <label for="campaign-organic-publish-toggle" style="margin-bottom:0; cursor:pointer; font-weight:600; color:var(--accent-cyan);">📢 Also publish these videos organically as Page Posts / Instagram Reels</label>
-                        </div>
-                    </div>
-
-                    <!-- Enhancements -->
-                    <div class="glass-card mb-3" style="border-color:rgba(114,9,183,0.28);">
-                        <h3 style="margin-bottom:0.3rem;">⚡ Enhancements</h3>
-                        <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:2px;">Meta AI-powered boosts — toggle on/off. Applied to every ad in this campaign.</p>
-                        <div class="enhancements-grid">
-                            <button type="button" class="enhancement-btn" data-key="advantageAudience" title="Meta expands your audience beyond manual targeting to find more buyers">
-                                <span class="enh-dot"></span>🎯 Advantage+ Audience
-                            </button>
-                            <button type="button" class="enhancement-btn" data-key="multiAdvertiser" title="Show your ad alongside other advertisers for extra reach">
-                                <span class="enh-dot"></span>📢 Multi-Advertiser Ads
-                            </button>
-                            <button type="button" class="enhancement-btn" data-key="autoCreative" title="Meta auto-adjusts brightness, contrast and adds text overlays">
-                                <span class="enh-dot"></span>✨ Auto Creative
-                            </button>
-                            <button type="button" class="enhancement-btn" data-key="autoMusic" title="Auto-add royalty-free background music to video ads" style="display:none">
-                                <span class="enh-dot"></span>🎵 Auto Music
-                            </button>
-                            <button type="button" class="enhancement-btn" data-key="inlineComment" title="Show top comments below the ad to build social proof">
-                                <span class="enh-dot"></span>💬 Inline Comments
-                            </button>
-                            <button type="button" class="enhancement-btn" data-key="textOptimizations" title="Meta rewrites your ad copy for better performance">
-                                <span class="enh-dot"></span>📝 Text Improvements
-                            </button>
-                            <button type="button" class="enhancement-btn" data-key="productTags" title="Auto-tag products from your catalog in the video">
-                                <span class="enh-dot"></span>🏷️ Product Tags
-                            </button>
-                            <button type="button" class="enhancement-btn" data-key="enhanceCta" title="Meta auto-selects the best CTA button for each user">
-                                <span class="enh-dot"></span>🔘 Enhance CTA
-                            </button>
-                        </div>
-                        <p class="enhancements-desc" id="enhancements-desc-hint">Select any enhancements to enable them on all ads.</p>
-                    </div>
-
-                    <div class="glass-card mb-3">
-                        <div class="flex justify-between align-center mb-2">
-                            <div>
-                                <h3>🖼️ Media & Ad Content</h3>
-                                <p style="font-size:0.8rem;color:var(--text-secondary);margin-top:0.35rem;">Upload one or more reels/images. Each media gets its own ad and primary text.</p>
-                            </div>
-                            <button class="btn btn-secondary btn-sm" id="btn-add-creative-ad">➕ Add Ad</button>
-                        </div>
-
-                        <div class="upload-zone" id="media-upload-zone">
-                            <i>📁</i>
-                            <h4>Drag & Drop one or more images/videos here</h4>
-                            <p>or click to browse multiple files</p>
-                        </div>
-                        <input type="file" id="media-file-input" accept="image/*,video/*" multiple style="display:none;">
-                        
-                        <div class="mt-2" style="margin-top:12px;">
-                            <div id="campaign-media-url-list">
-                                <div class="flex gap-2 mb-1 campaign-video-url-row" style="display:flex; gap:8px; margin-bottom:8px; align-items:center;">
-                                    <input type="text" class="form-control campaign-video-url-input" placeholder="Or paste video link (FB Ads Library, YouTube, Insta, Pinterest…)" style="flex:1;">
-                                    <button type="button" class="btn btn-secondary btn-sm btn-remove-campaign-url-row" style="display:none; padding:4px 8px;">🗑️</button>
-                                </div>
-                            </div>
-                            <div class="flex justify-between align-center mt-2" style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
-                                <button type="button" class="btn btn-secondary btn-xs" id="btn-campaign-add-url-row" style="padding: 4px 8px; font-size: 0.75rem;">➕ Add Another Link</button>
-                                <div class="flex gap-2 align-center">
-                                    <select class="form-control" id="campaign-media-url-canvas" style="width:140px; background:var(--bg-card); color:white; border-color:var(--glass-border);">
-                                        <option value="original">Original Aspect</option>
-                                        <option value="9:16">9:16 Vertical</option>
-                                        <option value="1:1">1:1 Square</option>
-                                    </select>
-                                    <button type="button" class="btn btn-primary" id="btn-campaign-media-url-download" style="white-space:nowrap;">📥 Download & Clean All</button>
-                                </div>
-                            </div>
-                        </div>
-                        <div id="creative-ads-container" class="mt-3"></div>
                     </div>
                 </div>
 
