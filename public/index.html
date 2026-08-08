@@ -189,6 +189,45 @@
 
                 <!-- Step 2 - Ad Creative -->
                 <div class="wizard-step" id="step-2">
+                    <!-- Campaign Settings -->
+                    <div class="glass-card mb-3">
+                        <h4 class="mb-2">🔧 Campaign Settings</h4>
+                        <div class="grid-2">
+                            <div class="form-group">
+                                <label>Pixel</label>
+                                <select class="form-control" id="pixel-select">
+                                    <option value="">Select a pixel...</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Website URL *</label>
+                                <input type="url" class="form-control" placeholder="https://yourstore.com" id="website-url">
+                            </div>
+                        </div>
+                        <div class="grid-2">
+                            <div class="form-group">
+                                <label>Optimization Goal</label>
+                                <select class="form-control" id="optimization-goal">
+                                    <option value="OFFSITE_CONVERSIONS">Conversions</option>
+                                    <option value="LINK_CLICKS">Link Clicks</option>
+                                    <option value="LANDING_PAGE_VIEWS">Landing Page Views</option>
+                                    <option value="IMPRESSIONS">Impressions</option>
+                                    <option value="REACH">Reach</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Conversion Event</label>
+                                <select class="form-control" id="conversion-event">
+                                    <option value="PURCHASE">Purchase</option>
+                                    <option value="ADD_TO_CART">Add to Cart</option>
+                                    <option value="INITIATE_CHECKOUT">Initiate Checkout</option>
+                                    <option value="LEAD">Lead</option>
+                                    <option value="VIEW_CONTENT">View Content</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="glass-card mb-3" style="border-color:rgba(0,245,212,0.25);">
                         <div class="flex justify-between align-center mb-3">
                             <div>
@@ -319,45 +358,6 @@
                             <button class="btn btn-secondary btn-sm" id="btn-save-current-targeting" title="Save current global targeting + interests as a template">💾 Save Audience</button>
                             <button class="btn btn-gemini btn-sm" id="btn-ai-all-audiences">🤖 AI Generate All</button>
                             <button class="btn btn-secondary btn-sm" id="btn-add-adset"><span>➕</span> Add Audience</button>
-                        </div>
-                    </div>
-
-                    <!-- Campaign Settings -->
-                    <div class="glass-card mb-3">
-                        <h4 class="mb-2">🔧 Campaign Settings</h4>
-                        <div class="grid-2">
-                            <div class="form-group">
-                                <label>Pixel</label>
-                                <select class="form-control" id="pixel-select">
-                                    <option value="">Select a pixel...</option>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label>Website URL *</label>
-                                <input type="url" class="form-control" placeholder="https://yourstore.com" id="website-url">
-                            </div>
-                        </div>
-                        <div class="grid-2">
-                            <div class="form-group">
-                                <label>Optimization Goal</label>
-                                <select class="form-control" id="optimization-goal">
-                                    <option value="OFFSITE_CONVERSIONS">Conversions</option>
-                                    <option value="LINK_CLICKS">Link Clicks</option>
-                                    <option value="LANDING_PAGE_VIEWS">Landing Page Views</option>
-                                    <option value="IMPRESSIONS">Impressions</option>
-                                    <option value="REACH">Reach</option>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label>Conversion Event</label>
-                                <select class="form-control" id="conversion-event">
-                                    <option value="PURCHASE">Purchase</option>
-                                    <option value="ADD_TO_CART">Add to Cart</option>
-                                    <option value="INITIATE_CHECKOUT">Initiate Checkout</option>
-                                    <option value="LEAD">Lead</option>
-                                    <option value="VIEW_CONTENT">View Content</option>
-                                </select>
-                            </div>
                         </div>
                     </div>
 

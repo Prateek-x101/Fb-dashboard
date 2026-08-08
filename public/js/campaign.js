@@ -538,6 +538,27 @@
                 return true;
 
             } else if (step === 2) {
+                // Validate Campaign settings first (now in Step 2)
+                const url = document.getElementById('website-url')?.value?.trim();
+                if (!url) { window.AppController.showToast('Please enter a Website URL', 'warning'); return false; }
+
+                const pixel = document.getElementById('pixel-select')?.value;
+                const optGoal = document.getElementById('optimization-goal')?.value || 'OFFSITE_CONVERSIONS';
+                if (optGoal === 'OFFSITE_CONVERSIONS' && !pixel) {
+                    window.AppController.showToast('Please select a Meta Pixel for Conversion tracking', 'warning');
+                    return false;
+                }
+
+                // Gathers website/pixel settings
+                this.campaignData.step2 = {
+                    url,
+                    pixel: pixel || '',
+                    optimizationGoal: optGoal,
+                    conversionEvent: document.getElementById('conversion-event')?.value || 'PURCHASE',
+                    audiences: this.campaignData.step2?.audiences || []
+                };
+
+                // Validate Creative fields
                 this.collectCreativeAdsFromDOM();
                 if (this.campaignData.step3.ads.length === 0) {
                     window.AppController.showToast('Please add at least one media/ad card', 'warning');
@@ -571,16 +592,6 @@
                 return true;
 
             } else if (step === 3) {
-                const url = document.getElementById('website-url')?.value?.trim();
-                if (!url) { window.AppController.showToast('Please enter a Website URL', 'warning'); return false; }
-
-                const pixel = document.getElementById('pixel-select')?.value;
-                const optGoal = document.getElementById('optimization-goal')?.value || 'OFFSITE_CONVERSIONS';
-                if (optGoal === 'OFFSITE_CONVERSIONS' && !pixel) {
-                    window.AppController.showToast('Please select a Meta Pixel for Conversion tracking', 'warning');
-                    return false;
-                }
-
                 // Read Global settings — structured location tags
                 const readLocTags = (selector) => {
                     const items = [];
@@ -645,13 +656,11 @@
                     });
                 });
 
-                this.campaignData.step2 = {
-                    url,
-                    pixel: document.getElementById('pixel-select')?.value || '',
-                    optimizationGoal: document.getElementById('optimization-goal')?.value || 'OFFSITE_CONVERSIONS',
-                    conversionEvent: document.getElementById('conversion-event')?.value || 'PURCHASE',
-                    audiences
-                };
+                // Update audiences list on step2 object
+                if (!this.campaignData.step2) {
+                    this.campaignData.step2 = {};
+                }
+                this.campaignData.step2.audiences = audiences;
                 return true;
             }
             return true;
