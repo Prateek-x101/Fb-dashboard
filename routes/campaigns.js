@@ -709,6 +709,49 @@ router.post('/create', async (req, res) => {
                 }
             }
 
+            const obj = campaign.objective || 'OUTCOME_SALES';
+            let promotedObject = undefined;
+            let destinationType = undefined;
+
+            if (obj === 'OUTCOME_SALES') {
+                destinationType = 'WEBSITE';
+                if (step2.pixel) {
+                    promotedObject = {
+                        pixel_id: step2.pixel,
+                        custom_event_type: step2.conversionEvent || 'PURCHASE'
+                    };
+                }
+            } else if (obj === 'OUTCOME_LEADS') {
+                if (step2.pixel) {
+                    destinationType = 'WEBSITE';
+                    promotedObject = {
+                        pixel_id: step2.pixel,
+                        custom_event_type: step2.conversionEvent || 'LEAD'
+                    };
+                } else {
+                    destinationType = 'ON_AD';
+                    promotedObject = {
+                        page_id: pageId
+                    };
+                }
+            } else if (obj === 'OUTCOME_ENGAGEMENT') {
+                if (step2.pixel) {
+                    destinationType = 'WEBSITE';
+                    promotedObject = {
+                        pixel_id: step2.pixel,
+                        custom_event_type: step2.conversionEvent || 'PURCHASE'
+                    };
+                } else if (step2.optimizationGoal === 'PAGE_LIKES') {
+                    destinationType = 'FACEBOOK_PAGE';
+                    promotedObject = {
+                        page_id: pageId
+                    };
+                }
+            } else if (obj === 'OUTCOME_TRAFFIC' || obj === 'OUTCOME_AWARENESS') {
+                destinationType = 'WEBSITE';
+                // Traffic and Awareness do not support promoted_object for website destinations
+            }
+
             const adsetParams = {
                 campaign_id: campaignId,
                 name: audience.name,
@@ -716,10 +759,8 @@ router.post('/create', async (req, res) => {
                 billing_event: 'IMPRESSIONS',
                 status: 'ACTIVE',
                 targeting,
-                promoted_object: step2.pixel ? {
-                    pixel_id: step2.pixel,
-                    custom_event_type: step2.conversionEvent || 'PURCHASE'
-                } : undefined,
+                ...(promotedObject && { promoted_object: promotedObject }),
+                ...(destinationType && { destination_type: destinationType }),
                 start_time: campaign.scheduleStart ? parseIsoDate(campaign.scheduleStart) : undefined
             };
             if (!isCBO) {
@@ -916,9 +957,13 @@ router.post('/create', async (req, res) => {
             fbtraceId: error.fbtraceId,
             errorData: error.details?.error?.error_data
         } : undefined;
-        const detail = providerDetails?.code
+        let detail = providerDetails?.code
             ? `${error.message} (Facebook code ${providerDetails.code}${providerDetails.errorSubcode ? `/${providerDetails.errorSubcode}` : ''})`
             : error.message;
+
+        if (providerDetails?.errorSubcode === 1815645 || (providerDetails?.code === 100 && error.message.toLowerCase().includes('promotable'))) {
+            detail += "\n\n💡 Troubleshooting Hint: This error means the Facebook Page or Instagram account you selected is not linked/authorized to your Ad Account in Meta Business Manager. To fix this:\n1. Open Meta Business Manager Settings (business.facebook.com).\n2. Go to 'Accounts' > 'Pages' and select your page.\n3. Click 'Connected Assets' and make sure your Ad Account is listed there. If not, click 'Add Assets' and add it.\n4. Go to 'Instagram Accounts' and ensure your Instagram account is linked to both the Page and Ad Account.";
+        }
         const failedRecord = {
             id: `retry-${draftId}`,
             draftId,
