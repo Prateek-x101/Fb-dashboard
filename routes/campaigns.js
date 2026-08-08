@@ -877,7 +877,7 @@ router.post('/create', async (req, res) => {
                 };
                 if (ad.imageHash) creativeParams.object_story_spec.link_data.image_hash = ad.imageHash;
                 if (ad.videoId) {
-                    let thumbnailUrl = null;
+                    let thumbnailUrl = ad.videoThumbnailUrl || null;
                     creativeParams.object_story_spec.video_data = {
                         video_id: ad.videoId,
                         message: textVariation,
@@ -963,6 +963,10 @@ router.post('/create', async (req, res) => {
 
         if (providerDetails?.errorSubcode === 1815645 || (providerDetails?.code === 100 && error.message.toLowerCase().includes('promotable'))) {
             detail += "\n\n💡 Troubleshooting Hint: This error means the Facebook Page or Instagram account you selected is not linked/authorized to your Ad Account in Meta Business Manager. To fix this:\n1. Open Meta Business Manager Settings (business.facebook.com).\n2. Go to 'Accounts' > 'Pages' and select your page.\n3. Click 'Connected Assets' and make sure your Ad Account is listed there. If not, click 'Add Assets' and add it.\n4. Go to 'Instagram Accounts' and ensure your Instagram account is linked to both the Page and Ad Account.";
+        }
+
+        if (providerDetails?.errorSubcode === 1443226) {
+            detail += "\n\n💡 Troubleshooting Hint: This video ad requires a thumbnail. Please upload a custom thumbnail image for this video in step 3 (Ad Creative), or ensure that the video URL has a valid default preview image.";
         }
         const failedRecord = {
             id: `retry-${draftId}`,
