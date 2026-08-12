@@ -369,6 +369,11 @@ router.get('/scrape', async (req, res) => {
         // Get Gemini API Key to suggest collections
         const geminiApiKey = storage.settings?.geminiApiKey;
         const geminiModel = storage.settings?.geminiModel || 'gemini-1.5-flash';
+
+        if (geminiApiKey) {
+            await translateProductToEnglish(product, geminiApiKey, geminiModel);
+        }
+
         let suggestedCollectionIds = [];
 
         if (geminiApiKey && userCollections.length > 0) {
@@ -1299,6 +1304,10 @@ router.post('/universal-import', videoUpload.array('files', 20), async (req, res
                 }
                 const product = await scrapeRes.json();
 
+                if (geminiApiKey) {
+                    await translateProductToEnglish(product, geminiApiKey, geminiModel);
+                }
+
                 // Format options and images
                 const options = (product.options || []).map(opt => ({
                     name: opt.name,
@@ -1849,6 +1858,108 @@ function autoAppendSizeCharts(product, storage) {
             product.description = (product.description || '') + `<br/><hr/><h3 style="color: #e67e23; margin-top: 15px; margin-bottom: 8px;">📐 Beden Tablosu / Size Chart</h3>` + sizeChartHtml;
         }
     }
+}
+
+async function translateProductToEnglish(product, geminiApiKey, geminiModel) {
+    if (!geminiApiKey) return product;
+
+    try {
+        console.log(`[Translate] Starting translation to English for product: ${product.title}`);
+        
+        // Prepare simplified options for translation
+        const simplifiedOptions = (product.options || []).map(opt => ({
+            name: opt.name,
+            values: opt.values
+        }));
+
+        const prompt = `You are a professional e-commerce translator. Translate the following product listing to English.
+
+IMPORTANT RULES:
+1. Translate all human-readable text (Title, Description HTML, Option Names, and Option Values) to English.
+2. In the Description HTML, preserve ALL HTML tags, styles, classes, and image URLs (<img> tags) EXACTLY as they are. ONLY translate the text content inside the HTML. Do not alter, translate, or remove tag names, attributes, or image src URLs.
+3. For Option Names, translate them to standard English equivalents (e.g., "Color" -> "Color", "Talla" -> "Size", "Taille" -> "Size", "Material" -> "Material", "Ancho" -> "Width", "Alto" -> "Height").
+4. Keep the JSON structure exactly as provided. Do not change keys.
+
+Input JSON:
+${JSON.stringify({
+    title: product.title || '',
+    description: product.description || '',
+    options: simplifiedOptions
+}, null, 2)}
+
+Return ONLY valid JSON in this exact shape:
+{
+  "title": "Translated Title",
+  "description": "Translated HTML Description",
+  "options": [
+    { "name": "Translated Option Name", "values": ["Translated Value 1", "Translated Value 2", ...] },
+    ...
+  ]
+}`;
+
+        const suggestion = await geminiService.generateResponseText(geminiApiKey, geminiModel, prompt);
+        const jsonMatch = suggestion.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) throw new Error('No JSON object returned by Gemini');
+        const translated = JSON.parse(jsonMatch[0]);
+
+        if (translated.title) {
+            product.title = translated.title;
+        }
+        if (translated.description) {
+            product.description = translated.description;
+        }
+
+        // Map old option values to new translated values to translate variants
+        const translationMap = {}; // old_value -> new_value
+        if (Array.isArray(translated.options) && Array.isArray(product.options)) {
+            translated.options.forEach((newOpt, optIdx) => {
+                const oldOpt = product.options[optIdx];
+                if (oldOpt) {
+                    // Update option name
+                    oldOpt.name = newOpt.name;
+                    
+                    // Map values
+                    if (Array.isArray(newOpt.values) && Array.isArray(oldOpt.values)) {
+                        oldOpt.values.forEach((oldVal, valIdx) => {
+                            const newVal = newOpt.values[valIdx];
+                            if (newVal) {
+                                translationMap[oldVal] = newVal;
+                            }
+                        });
+                        // Update option values
+                        oldOpt.values = newOpt.values;
+                    }
+                }
+            });
+        }
+
+        // Translate variant option1, option2, option3 and titles
+        if (Array.isArray(product.variants)) {
+            product.variants.forEach(variant => {
+                if (variant.option1 && translationMap[variant.option1]) {
+                    variant.option1 = translationMap[variant.option1];
+                }
+                if (variant.option2 && translationMap[variant.option2]) {
+                    variant.option2 = translationMap[variant.option2];
+                }
+                if (variant.option3 && translationMap[variant.option3]) {
+                    variant.option3 = translationMap[variant.option3];
+                }
+
+                // Re-build variant title from option values
+                const activeOptions = [variant.option1, variant.option2, variant.option3].filter(Boolean);
+                if (activeOptions.length > 0) {
+                    variant.title = activeOptions.join(' / ');
+                }
+            });
+        }
+
+        console.log(`[Translate] Successfully translated product to: ${product.title}`);
+    } catch (err) {
+        console.error('[Translate] Translation failed, returning original product data:', err.message);
+    }
+
+    return product;
 }
 
 module.exports = router;
