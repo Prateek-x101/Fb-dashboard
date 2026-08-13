@@ -1427,6 +1427,7 @@
                 ShopifyImporter.importedProduct = {
                     title: result.title,
                     productUrl: result.productUrl,
+                    videos: this.floatingVideos || [],
                     videoPath: this.floatingVideos[0]?.filePath || null,
                     videoFilename: this.floatingVideos[0]?.filename || null,
                     thumbnail: this.floatingVideos[0]?.thumbnail || null,
@@ -1643,45 +1644,70 @@
             // Close modal
             window.AppController.closeModal('modal-create-ad-options');
 
-            // Select Ad Account in DOM of campaign wizard
-            const DOMAccountSelect = document.getElementById('campaign-account-select');
-            if (DOMAccountSelect) {
-                DOMAccountSelect.value = accountId;
-                DOMAccountSelect.dispatchEvent(new Event('change'));
-            }
-
-            // Delay page and pixel selection slightly to let accounts finish loading
-            setTimeout(() => {
-                const DOMPixelSelect = document.getElementById('pixel-select');
-                if (DOMPixelSelect) DOMPixelSelect.value = pixelId;
-
-                const DOMPageSelect = document.getElementById('ad-page');
-                if (DOMPageSelect) DOMPageSelect.value = pageId;
-
-                const DOMIgSelect = document.getElementById('ad-instagram');
-                if (DOMIgSelect) DOMIgSelect.value = instagramId;
-            }, 800);
-
-            // Pre-populate Campaign Wizard and inject the floating video directly
-            let prefilledMedia = null;
-            if (this.importedProduct.videoPath) {
-                prefilledMedia = {
+            // Pre-populate all floating videos as an array
+            const prefilledMediaList = [];
+            const videos = this.importedProduct.videos || [];
+            if (videos.length > 0) {
+                videos.forEach(v => {
+                    prefilledMediaList.push({
+                        media: v.filePath,
+                        mediaFile: v.filename,
+                        previewUrl: '/uploads/' + v.filename,
+                        thumbnail: v.thumbnail || '',
+                        thumbnailFile: v.thumbnailFile || '',
+                        thumbnailPreviewUrl: v.thumbnail ? '/uploads/' + v.thumbnailFile : ''
+                    });
+                });
+            } else if (this.importedProduct.videoPath) {
+                prefilledMediaList.push({
                     media: this.importedProduct.videoPath,
                     mediaFile: this.importedProduct.videoFilename,
                     previewUrl: '/uploads/' + this.importedProduct.videoFilename,
                     thumbnail: this.importedProduct.thumbnail || '',
                     thumbnailFile: this.importedProduct.thumbnailFile || '',
                     thumbnailPreviewUrl: this.importedProduct.thumbnail ? '/uploads/' + this.importedProduct.thumbnailFile : ''
-                };
+                });
             }
 
-            window.CampaignWizard.startCampaignWizardWithData(campaignName, this.importedProduct.productUrl, this.importedProduct.title, prefilledMedia);
+            // Select Ad Account and await full rendering of pages/pixels
+            const runPrefillAndStart = async () => {
+                try {
+                    const DOMAccountSelect = document.getElementById('campaign-account-select');
+                    if (DOMAccountSelect) {
+                        DOMAccountSelect.value = accountId;
+                    }
 
-            // Navigate to Create Campaign tab
-            const navItem = document.querySelector('.nav-item[data-section="section-campaign"]');
-            if (navItem) navItem.click();
+                    const account = window.APP.accounts.find(item => item.id === accountId);
+                    if (account) {
+                        window.APP.activeAccount = account;
+                        // Directly call and await the CampaignWizard's account change handler!
+                        await window.CampaignWizard.handleAccountChange(account);
+                    }
 
-            window.AppController.showToast('Campaign pre-populated and video attached automatically! 🚀', 'success');
+                    // Pre-fill Pixel, Page and Instagram in Step 2
+                    const DOMPixelSelect = document.getElementById('pixel-select');
+                    if (DOMPixelSelect && pixelId) DOMPixelSelect.value = pixelId;
+
+                    const DOMPageSelect = document.getElementById('ad-page');
+                    if (DOMPageSelect && pageId) DOMPageSelect.value = pageId;
+
+                    const DOMIgSelect = document.getElementById('ad-instagram');
+                    if (DOMIgSelect && instagramId) DOMIgSelect.value = instagramId;
+                } catch (err) {
+                    console.error("Failed to prefill campaign wizard selects:", err);
+                }
+
+                // Start campaign wizard with prefilled data and all media items
+                window.CampaignWizard.startCampaignWizardWithData(campaignName, this.importedProduct.productUrl, this.importedProduct.title, prefilledMediaList);
+
+                // Navigate to Create Campaign tab
+                const navItem = document.querySelector('.nav-item[data-section="section-campaign"]');
+                if (navItem) navItem.click();
+
+                window.AppController.showToast('Campaign pre-populated and video attached automatically! 🚀', 'success');
+            };
+
+            runPrefillAndStart();
         },
 
         extractShortProductName: function(title) {

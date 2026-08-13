@@ -1363,6 +1363,9 @@
                         thumbnailFile: uploaded[0].thumbnailFile || '',
                         thumbnailPreviewUrl: uploaded[0].thumbnailPreviewUrl || ''
                     });
+
+                    // Trigger copy generation for this card
+                    this.generateAdCopyForCard(cardIdx);
                 }
                 if (uploaded[0].thumbnailFile) {
                     this.renderCreativeAds(); // full re-render to show auto thumbnail
@@ -1382,8 +1385,11 @@
                             thumbnailFile: item.thumbnailFile || '',
                             thumbnailPreviewUrl: item.thumbnailPreviewUrl || ''
                         };
+                        this.generateAdCopyForCard(blankIndex);
                     } else {
                         this.addCreativeAd(item, false);
+                        const newIdx = this.campaignData.step3.ads.length - 1;
+                        this.generateAdCopyForCard(newIdx);
                     }
                 });
                 this.renderCreativeAds();
@@ -1427,7 +1433,8 @@
             const controlsBar = card.querySelector('.creative-video-controls');
 
             if (isVideo) {
-                preview.innerHTML = `<video src="${item.previewUrl}" muted playsinline style="position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;display:block;border-radius:0;"></video>`;
+                const posterAttr = item.thumbnailPreviewUrl ? `poster="${item.thumbnailPreviewUrl}"` : '';
+                preview.innerHTML = `<video src="${item.previewUrl}" ${posterAttr} muted playsinline style="position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;display:block;border-radius:0;"></video>`;
                 if (controlsBar) controlsBar.style.display = 'flex';
 
                 const video = preview.querySelector('video');
@@ -1574,6 +1581,8 @@
                             this.campaignData.step3.ads[index].thumbnail = '';
                             this.campaignData.step3.ads[index].thumbnailFile = '';
                             this.campaignData.step3.ads[index].thumbnailPreviewUrl = '';
+                            const videoEl = card.querySelector('.creative-preview-panel video');
+                            if (videoEl) videoEl.removeAttribute('poster');
                             this.renderCreativeAds();
                         });
                     }
@@ -1724,6 +1733,12 @@
                     this.campaignData.step3.ads[index].thumbnailFile      = resp.filename || fname;
                     this.campaignData.step3.ads[index].thumbnailPreviewUrl = URL.createObjectURL(blob);
 
+                    // Update video poster in DOM preview directly without full re-render
+                    const videoEl = card.querySelector('.creative-preview-panel video');
+                    if (videoEl) {
+                        videoEl.setAttribute('poster', this.campaignData.step3.ads[index].thumbnailPreviewUrl);
+                    }
+
                     setStatus('✔ Thumbnail set', false);
                     window.AppController.showToast('Thumbnail set ✔', 'success');
 
@@ -1738,6 +1753,7 @@
                             this.campaignData.step3.ads[index].thumbnail = '';
                             this.campaignData.step3.ads[index].thumbnailFile = '';
                             this.campaignData.step3.ads[index].thumbnailPreviewUrl = '';
+                            if (videoEl) videoEl.removeAttribute('poster');
                             this.renderCreativeAds();
                         });
                         uploadRow.querySelector('div').prepend(btn);
@@ -1816,6 +1832,47 @@
             video.addEventListener('loadeddata', buildStrip, { once: true });
             video.addEventListener('error', () => setStatus('⚠ Could not load video', true), { once: true });
             video.load();
+        },
+
+        generateAdCopyForCard: async function(index) {
+            const ad = this.campaignData.step3.ads[index];
+            if (!ad || !ad.media) return;
+
+            const websiteUrl = document.getElementById('website-url')?.value?.trim();
+            if (!websiteUrl) return;
+
+            // Find the textarea for this card in the DOM
+            const cardEl = document.querySelector(`.creative-ad-card[data-index="${index}"]`);
+            const textarea = cardEl?.querySelector('.creative-primary-text');
+            if (textarea) {
+                textarea.value = '⏳ Generating ad copy matching this video... 🤖';
+            }
+
+            try {
+                // Call API with websiteUrl and the media path on server (videoPath)
+                const result = await window.API.generateAdCopy({ 
+                    websiteUrl, 
+                    videoPath: ad.media 
+                });
+
+                if (result.primaryText) {
+                    ad.primaryText = result.primaryText.trim();
+                    if (textarea) {
+                        textarea.value = ad.primaryText;
+                    }
+                    
+                    // Also set headline and description if they are empty
+                    const headline = document.getElementById('headline');
+                    if (headline && !headline.value.trim() && result.headline) {
+                        headline.value = this.extractHeadlineName(result.headline);
+                    }
+                }
+            } catch (err) {
+                console.error(`Failed to generate copy for card ${index}:`, err.message);
+                if (textarea && textarea.value.startsWith('⏳')) {
+                    textarea.value = '';
+                }
+            }
         },
 
         escapeHtml: function(value) {
@@ -2370,15 +2427,33 @@
                 cboRadio.checked = true;
             }
 
-            // If a pre-filled video/image is passed, populate it immediately in step 3
-            if (prefilledMedia && prefilledMedia.media) {
-                // Clear any empty template ads
+            // If prefilledMedia is an array, add each element as an ad card
+            if (Array.isArray(prefilledMedia) && prefilledMedia.length > 0) {
+                this.campaignData.step3.ads = [];
+                prefilledMedia.forEach((mediaObj, idx) => {
+                    this.addCreativeAd({
+                        media: mediaObj.media,
+                        mediaFile: mediaObj.mediaFile,
+                        previewUrl: mediaObj.previewUrl,
+                        thumbnail: mediaObj.thumbnail || '',
+                        thumbnailFile: mediaObj.thumbnailFile || '',
+                        thumbnailPreviewUrl: mediaObj.thumbnailPreviewUrl || ''
+                    }, false);
+                    this.generateAdCopyForCard(idx);
+                });
+                this.renderCreativeAds();
+            } else if (prefilledMedia && prefilledMedia.media) {
+                // Single object fallback
                 this.campaignData.step3.ads = [];
                 this.addCreativeAd({
                     media: prefilledMedia.media,
                     mediaFile: prefilledMedia.mediaFile,
-                    previewUrl: prefilledMedia.previewUrl
+                    previewUrl: prefilledMedia.previewUrl,
+                    thumbnail: prefilledMedia.thumbnail || '',
+                    thumbnailFile: prefilledMedia.thumbnailFile || '',
+                    thumbnailPreviewUrl: prefilledMedia.thumbnailPreviewUrl || ''
                 }, true);
+                this.generateAdCopyForCard(0);
             }
             
             this.updateStepUI();

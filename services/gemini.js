@@ -10,10 +10,9 @@ function normalizeModel(model) {
 }
 
 const geminiService = {
-    async generateAdCopy(apiKey, model, websiteUrl, websiteContent, productName) {
+    async generateAdCopy(apiKey, model, websiteUrl, websiteContent, productName, mediaFiles = []) {
         const url = `${BASE_URL}/models/${normalizeModel(model)}:generateContent?key=${apiKey}`;
-        const prompt = `You are an expert Facebook ad copywriter.
-Create one Facebook ad copy for this product.
+        const prompt = `You are an expert Facebook ad copywriter. Study the product information text AND any attached visual media (listing images or video frames showing the product and ad context) carefully — understand the product category, visual style, use cases, and likely buyer — then generate one Facebook ad copy for this product matching the style and context of the media.
 
 Product name: ${productName || 'the product'}
 Website URL: ${websiteUrl}
@@ -24,18 +23,26 @@ Return ONLY valid JSON in this exact shape:
 {"headline":"Product name or a short product-focused headline","primaryText":"...","description":"Short supporting description"}
 
 Primary text rules:
-- Start with a strong benefit-led hook mentioning the product.
-- Use this structure: an opening sentence, a short benefit paragraph, exactly 4 lines beginning with ✔️, a use-cases sentence, a short punchy closing line, and a final CTA sentence.
-- Keep the tone premium, clear.
-- Use a few relevant emojis, but do not overdo them.
+- Start with a strong, scroll-stopping hook mentioning the product.
+- Write a short benefit section. You do NOT have to use checkmarks (✔️) or green ticks every time; keep the formatting natural, engaging, and readable.
+- Use emojis naturally to make it visually appealing, but do not overdo it.
 - Put the exact website URL as the final line by itself.
-- Do not use markdown headings, bullets other than the four ✔️ lines, or placeholder text.
-- Do not invent product claims that are not supported by the website information.`;
+- Keep the tone premium and clear.
+- Do not invent product claims that are not supported by the website information or visual media.`;
+
+        const parts = [{ text: prompt }];
+        if (Array.isArray(mediaFiles) && mediaFiles.length > 0) {
+            for (const b64 of mediaFiles) {
+                parts.push({ inlineData: { mimeType: 'image/jpeg', data: b64 } });
+            }
+        }
 
         const response = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+            body: JSON.stringify({
+                contents: [{ parts }]
+            })
         });
         const data = await response.json();
         if (!response.ok) {

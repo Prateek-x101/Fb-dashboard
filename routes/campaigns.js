@@ -363,8 +363,9 @@ router.post('/ai-audiences', async (req, res) => {
 });
 
 router.post('/generate-ad-copy', async (req, res) => {
+    const framesToCleanup = [];
     try {
-        const { websiteUrl } = req.body;
+        const { websiteUrl, videoPath } = req.body;
         const storage = getStorage();
         const settings = storage.settings || {};
 
@@ -375,18 +376,53 @@ router.post('/generate-ad-copy', async (req, res) => {
             return res.status(400).json({ error: 'Website URL is required' });
         }
 
+        const imagesBase64 = [];
+        if (videoPath) {
+            try {
+                const fs = require('fs');
+                const path = require('path');
+                // Resolve relative path if uploads/ is passed
+                let resolvedPath = videoPath;
+                if (!path.isAbsolute(videoPath)) {
+                    resolvedPath = path.join(__dirname, '..', videoPath);
+                }
+
+                if (fs.existsSync(resolvedPath)) {
+                    const videoProcessor = require('../services/videoProcessor');
+                    // Extract 5 frames
+                    const frames = await videoProcessor.extractFrames(resolvedPath, 5);
+                    frames.forEach(f => {
+                        if (f.base64) imagesBase64.push(f.base64);
+                    });
+                    framesToCleanup.push(...frames);
+                }
+            } catch (err) {
+                console.error(`[AdCopy] Failed to process videoPath ${videoPath}:`, err.message);
+            }
+        }
+
         const details = await fetchWebsiteDetails(websiteUrl);
         const copy = await geminiService.generateAdCopy(
             settings.geminiApiKey,
             settings.geminiModel,
             websiteUrl,
             details.content,
-            details.productName
+            details.productName,
+            imagesBase64
         );
 
         res.json({ ...copy, productName: details.productName });
     } catch (error) {
         res.status(500).json({ error: 'Failed to generate ad copy', details: error.message });
+    } finally {
+        if (framesToCleanup.length > 0) {
+            try {
+                const videoProcessor = require('../services/videoProcessor');
+                videoProcessor.cleanupFrames(framesToCleanup);
+            } catch (cleanupErr) {
+                console.error('Failed to cleanup extracted frames:', cleanupErr.message);
+            }
+        }
     }
 });
 
