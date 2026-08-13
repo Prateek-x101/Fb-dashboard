@@ -1363,14 +1363,16 @@
                         thumbnailFile: uploaded[0].thumbnailFile || '',
                         thumbnailPreviewUrl: uploaded[0].thumbnailPreviewUrl || ''
                     });
-
-                    // Trigger copy generation for this card
-                    this.generateAdCopyForCard(cardIdx);
                 }
                 if (uploaded[0].thumbnailFile) {
                     this.renderCreativeAds(); // full re-render to show auto thumbnail
                 } else {
                     this.renumberCreativeAds();
+                }
+
+                // Trigger copy generation for this card after rendering/updating!
+                if (!isNaN(cardIdx)) {
+                    this.generateAdCopyForCard(cardIdx);
                 }
             } else {
                 const blankIndex = this.campaignData.step3.ads.findIndex(ad => !ad.media && !ad.mediaFile);
@@ -1385,14 +1387,21 @@
                             thumbnailFile: item.thumbnailFile || '',
                             thumbnailPreviewUrl: item.thumbnailPreviewUrl || ''
                         };
-                        this.generateAdCopyForCard(blankIndex);
                     } else {
                         this.addCreativeAd(item, false);
-                        const newIdx = this.campaignData.step3.ads.length - 1;
-                        this.generateAdCopyForCard(newIdx);
                     }
                 });
                 this.renderCreativeAds();
+
+                // Trigger copy generation for newly added ads after rendering!
+                uploaded.forEach((item, index) => {
+                    if (index === 0 && blankIndex !== -1) {
+                        this.generateAdCopyForCard(blankIndex);
+                    } else {
+                        const newIdx = this.campaignData.step3.ads.length - uploaded.length + index;
+                        this.generateAdCopyForCard(newIdx);
+                    }
+                });
             }
 
             window.AppController.showToast(`${uploaded.length} media file${uploaded.length === 1 ? '' : 's'} added ✅`, 'success');
@@ -1673,7 +1682,13 @@
 
                 // Position selector on frame 0 (or restore saved position)
                 placeSelector(0);
-                setStatus('Drag the frame-box left/right to pick thumbnail', false);
+
+                // If no thumbnail is currently set, automatically save frame 0 as default
+                if (!ad.thumbnailFile && !ad.thumbnailPreviewUrl) {
+                    saveFrame(0);
+                } else {
+                    setStatus('✔ Thumbnail set', false);
+                }
             };
 
             // ── Selector positioning ───────────────────────────────────────
@@ -1841,11 +1856,11 @@
             const websiteUrl = document.getElementById('website-url')?.value?.trim();
             if (!websiteUrl) return;
 
-            // Find the textarea for this card in the DOM
-            const cardEl = document.querySelector(`.creative-ad-card[data-index="${index}"]`);
-            const textarea = cardEl?.querySelector('.creative-primary-text');
-            if (textarea) {
-                textarea.value = '⏳ Generating ad copy matching this video... 🤖';
+            // Dynamically query textarea to ensure it is captured in the correct render cycle
+            const getTextArea = () => document.querySelector(`.creative-ad-card[data-index="${index}"] .creative-primary-text`);
+            const initialTextarea = getTextArea();
+            if (initialTextarea) {
+                initialTextarea.value = '⏳ Generating ad copy matching this video... 🤖';
             }
 
             try {
@@ -1857,8 +1872,9 @@
 
                 if (result.primaryText) {
                     ad.primaryText = result.primaryText.trim();
-                    if (textarea) {
-                        textarea.value = ad.primaryText;
+                    const currentTextarea = getTextArea();
+                    if (currentTextarea) {
+                        currentTextarea.value = ad.primaryText;
                     }
                     
                     // Also set headline and description if they are empty
@@ -1869,8 +1885,9 @@
                 }
             } catch (err) {
                 console.error(`Failed to generate copy for card ${index}:`, err.message);
-                if (textarea && textarea.value.startsWith('⏳')) {
-                    textarea.value = '';
+                const currentTextarea = getTextArea();
+                if (currentTextarea && currentTextarea.value.startsWith('⏳')) {
+                    currentTextarea.value = '';
                 }
             }
         },
@@ -2439,9 +2456,13 @@
                         thumbnailFile: mediaObj.thumbnailFile || '',
                         thumbnailPreviewUrl: mediaObj.thumbnailPreviewUrl || ''
                     }, false);
-                    this.generateAdCopyForCard(idx);
                 });
                 this.renderCreativeAds();
+
+                // Trigger copy generation AFTER rendering!
+                prefilledMedia.forEach((_, idx) => {
+                    this.generateAdCopyForCard(idx);
+                });
             } else if (prefilledMedia && prefilledMedia.media) {
                 // Single object fallback
                 this.campaignData.step3.ads = [];
@@ -2453,6 +2474,8 @@
                     thumbnailFile: prefilledMedia.thumbnailFile || '',
                     thumbnailPreviewUrl: prefilledMedia.thumbnailPreviewUrl || ''
                 }, true);
+                
+                // Trigger copy generation AFTER rendering!
                 this.generateAdCopyForCard(0);
             }
             
