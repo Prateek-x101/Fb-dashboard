@@ -783,9 +783,9 @@
             const budgetInput = document.getElementById('budget-amount');
             if (budgetInput) {
                 if (symbol === '$') {
-                    budgetInput.value = '4';
+                    budgetInput.value = '50';
                 } else if (symbol === '₹') {
-                    budgetInput.value = '400';
+                    budgetInput.value = '500';
                 }
             }
 

@@ -1671,6 +1671,10 @@
 
             // Select Ad Account and await full rendering of pages/pixels
             const runPrefillAndStart = async () => {
+                // 1. Start campaign wizard first (which resets inputs and initializes draft state)
+                window.CampaignWizard.startCampaignWizardWithData(campaignName, this.importedProduct.productUrl, this.importedProduct.title, prefilledMediaList);
+
+                // 2. Select Ad Account and trigger details fetching
                 try {
                     const DOMAccountSelect = document.getElementById('campaign-account-select');
                     if (DOMAccountSelect) {
@@ -1684,7 +1688,7 @@
                         await window.CampaignWizard.handleAccountChange(account);
                     }
 
-                    // Pre-fill Pixel, Page and Instagram in Step 2
+                    // 3. Pre-fill Pixel, Page and Instagram now that the dropdown options are loaded!
                     const DOMPixelSelect = document.getElementById('pixel-select');
                     if (DOMPixelSelect && pixelId) DOMPixelSelect.value = pixelId;
 
@@ -1696,9 +1700,6 @@
                 } catch (err) {
                     console.error("Failed to prefill campaign wizard selects:", err);
                 }
-
-                // Start campaign wizard with prefilled data and all media items
-                window.CampaignWizard.startCampaignWizardWithData(campaignName, this.importedProduct.productUrl, this.importedProduct.title, prefilledMediaList);
 
                 // Navigate to Create Campaign tab
                 const navItem = document.querySelector('.nav-item[data-section="section-campaign"]');
