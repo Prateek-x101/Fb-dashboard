@@ -783,9 +783,9 @@
             const budgetInput = document.getElementById('budget-amount');
             if (budgetInput) {
                 if (symbol === '$') {
-                    budgetInput.value = '50';
+                    budgetInput.value = '4';
                 } else if (symbol === '₹') {
-                    budgetInput.value = '500';
+                    budgetInput.value = '400';
                 }
             }
 
@@ -2386,7 +2386,7 @@
             const budgetInput = document.getElementById('budget-amount');
             if (budgetInput) {
                 const symbol = this.getCurrencySymbol(window.APP?.activeAccount);
-                budgetInput.value = symbol === '$' ? '50' : '500';
+                budgetInput.value = symbol === '$' ? '4' : '400';
             }
 
             // Clear scheduling
@@ -2434,14 +2434,19 @@
                 }
             }
 
-            // Set CBO/ABO settings based on campaignName suffix
-            const isABO = campaignName.endsWith('ABO');
+            // Set CBO/ABO settings based on campaignName contents
+            const val = campaignName.toUpperCase();
+            const hasABO = val.includes('ABO');
+            const hasCBO = val.includes('CBO');
             const aboRadio = document.getElementById('budget-type-abo');
             const cboRadio = document.getElementById('budget-type-cbo');
-            if (isABO && aboRadio) {
+            
+            if (hasABO && aboRadio) {
                 aboRadio.checked = true;
-            } else if (cboRadio) {
+                aboRadio.dispatchEvent(new Event('change', { bubbles: true }));
+            } else if (hasCBO && cboRadio) {
                 cboRadio.checked = true;
+                cboRadio.dispatchEvent(new Event('change', { bubbles: true }));
             }
 
             // If prefilledMedia is an array, add each element as an ad card
