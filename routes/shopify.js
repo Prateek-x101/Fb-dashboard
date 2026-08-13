@@ -462,9 +462,13 @@ router.post('/import', async (req, res) => {
 
         // Formulate variants and generate SKUs
         const variants = (product.variants || []).map(v => {
-            const opt1 = v.option1 ? v.option1.replace(/[^a-zA-Z0-9]/g, '').trim() : '';
-            const opt2 = v.option2 ? '-' + v.option2.replace(/[^a-zA-Z0-9]/g, '').trim() : '';
-            const opt3 = v.option3 ? '-' + v.option3.replace(/[^a-zA-Z0-9]/g, '').trim() : '';
+            const cleanOpt1 = cleanOptionForSku(v.option1);
+            const cleanOpt2 = cleanOptionForSku(v.option2);
+            const cleanOpt3 = cleanOptionForSku(v.option3);
+
+            const opt1 = cleanOpt1;
+            const opt2 = cleanOpt2 ? '-' + cleanOpt2 : '';
+            const opt3 = cleanOpt3 ? '-' + cleanOpt3 : '';
             const generatedSku = `${skuPrefix}-${opt1}${opt2}${opt3}`.replace(/-+/g, '-').replace(/-$/, '');
 
             // Use the variant's custom price if it's passed as a string/number from frontend, 
@@ -1960,6 +1964,22 @@ Return ONLY valid JSON in this exact shape:
     }
 
     return product;
+}
+
+function cleanOptionForSku(value) {
+    if (!value) return '';
+    const str = String(value).trim();
+    
+    // Check if it matches a size pattern with suffix (e.g. SUK24, S/uk/24, XXL/UK26)
+    // Matches common size codes (XS, S, M, L, XL, XXL, XXXL, 2XL, 3XL, 4XL) at the start,
+    // optionally followed by non-letters (like / or -), or words like 'uk', 'us', 'eu', or digits.
+    const sizeMatch = str.match(/^(XS|S|M|L|XL|XXL|XXXL|[234]XL)(?:[^a-zA-Z]|uk|us|eu|\d|$)/i);
+    if (sizeMatch) {
+        return sizeMatch[1].toUpperCase();
+    }
+    
+    // Otherwise, clean default: remove special characters, trim
+    return str.replace(/[^a-zA-Z0-9]/g, '').trim();
 }
 
 module.exports = router;
