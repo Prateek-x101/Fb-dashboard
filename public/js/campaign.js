@@ -445,6 +445,13 @@
 
             const btnAutoFill = document.getElementById('btn-auto-fill-copy');
             if (btnAutoFill) btnAutoFill.addEventListener('click', () => this.autoFillCreativeCopy());
+
+            const websiteUrlInput = document.getElementById('website-url');
+            if (websiteUrlInput) {
+                websiteUrlInput.addEventListener('change', () => this.ensureCreativeCopyLoaded());
+                websiteUrlInput.addEventListener('blur', () => this.ensureCreativeCopyLoaded());
+            }
+
             const btnAddAd = document.getElementById('btn-add-creative-ad');
             if (btnAddAd) btnAddAd.addEventListener('click', () => this.addCreativeAd());
 
@@ -2428,10 +2435,12 @@
 
             // Pre-fill clean headline if productTitle is provided
             if (productTitle) {
+                const cleanHeadline = this.extractHeadlineName(productTitle);
                 const headlineInput = document.getElementById('headline');
                 if (headlineInput) {
-                    headlineInput.value = this.extractHeadlineName(productTitle);
+                    headlineInput.value = cleanHeadline;
                 }
+                this.campaignData.step3.headline = cleanHeadline;
             }
 
             // Set CBO/ABO settings based on campaignName contents
