@@ -514,7 +514,20 @@
                 const account = document.getElementById('campaign-account-select')?.value;
 
                 if (!name) { window.AppController.showToast('Campaign name is required', 'warning'); return false; }
-                if (!budgetAmount || budgetAmount <= 0) { window.AppController.showToast('Please enter a valid budget amount', 'warning'); return false; }
+                if (!budgetAmount || parseFloat(budgetAmount) <= 0) {
+                    window.AppController.showToast('Please enter a valid budget amount', 'warning');
+                    return false;
+                }
+
+                const selectedAcc = window.APP.accounts.find(item => item.id === account);
+                const symbol = selectedAcc ? window.CampaignWizard.getCurrencySymbol(selectedAcc) : '₹';
+                const minBudget = symbol === '$' ? 5 : 400;
+
+                if (parseFloat(budgetAmount) < minBudget) {
+                    window.AppController.showToast(`Meta requires a minimum budget of ${symbol}${minBudget} per day.`, 'warning');
+                    return false;
+                }
+
                 if (!start) { window.AppController.showToast('Please set a start date', 'warning'); return false; }
                 if (!account) { window.AppController.showToast('Please select an ad account', 'warning'); return false; }
 
@@ -790,7 +803,7 @@
             const budgetInput = document.getElementById('budget-amount');
             if (budgetInput) {
                 if (symbol === '$') {
-                    budgetInput.value = '4';
+                    budgetInput.value = '5';
                 } else if (symbol === '₹') {
                     budgetInput.value = '400';
                 }
@@ -2393,7 +2406,7 @@
             const budgetInput = document.getElementById('budget-amount');
             if (budgetInput) {
                 const symbol = this.getCurrencySymbol(window.APP?.activeAccount);
-                budgetInput.value = symbol === '$' ? '4' : '400';
+                budgetInput.value = symbol === '$' ? '5' : '400';
             }
 
             // Clear scheduling
