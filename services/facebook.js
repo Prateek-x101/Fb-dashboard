@@ -23,17 +23,35 @@ function normalizeTargetingType(value) {
 
 function targetingSearchUrl(name, type, token, accountId = null) {
     const q = encodeURIComponent(name);
-    const cleanAccountId = accountId ? String(accountId).replace('act_', '') : null;
-    const prefix = cleanAccountId ? `${BASE_URL}/act_${cleanAccountId}/targetingsearch` : `${BASE_URL}/search`;
+    
+    if (accountId) {
+        const cleanAccountId = String(accountId).replace('act_', '');
+        const limitTypeMap = {
+            interest:       'interests',
+            behavior:       'behaviors',
+            life_event:     'life_events',
+            job_title:      'work_positions',
+            employer:       'work_employers',
+            field_of_study: 'education_majors',
+            school:         'education_schools'
+        };
+        const limitType = limitTypeMap[type];
+        if (limitType) {
+            return `${BASE_URL}/act_${cleanAccountId}/targetingsearch?q=${q}&limit_type=${limitType}&access_token=${token}`;
+        } else {
+            return `${BASE_URL}/act_${cleanAccountId}/targetingsearch?q=${q}&access_token=${token}`;
+        }
+    }
 
-    if (type === 'behavior')       return `${prefix}?type=adTargetingCategory&class=behaviors&q=${q}&access_token=${token}`;
-    if (type === 'demographic')    return `${prefix}?type=adTargetingCategory&class=demographics&q=${q}&access_token=${token}`;
-    if (type === 'life_event')     return `${prefix}?type=adTargetingCategory&class=life_events&q=${q}&access_token=${token}`;
-    if (type === 'job_title')      return `${prefix}?type=adworkposition&q=${q}&access_token=${token}`;
-    if (type === 'employer')       return `${prefix}?type=adworkemployer&q=${q}&access_token=${token}`;
-    if (type === 'field_of_study') return `${prefix}?type=adeducationmajor&q=${q}&access_token=${token}`;
-    if (type === 'school')         return `${prefix}?type=adeducationschool&q=${q}&access_token=${token}`;
-    return `${prefix}?type=adinterest&q=${q}&access_token=${token}`;
+    // Global search fallback (no accountId)
+    if (type === 'behavior')       return `${BASE_URL}/search?type=adTargetingCategory&class=behaviors&q=${q}&access_token=${token}`;
+    if (type === 'demographic')    return `${BASE_URL}/search?type=adTargetingCategory&class=demographics&q=${q}&access_token=${token}`;
+    if (type === 'life_event')     return `${BASE_URL}/search?type=adTargetingCategory&class=life_events&q=${q}&access_token=${token}`;
+    if (type === 'job_title')      return `${BASE_URL}/search?type=adworkposition&q=${q}&access_token=${token}`;
+    if (type === 'employer')       return `${BASE_URL}/search?type=adworkemployer&q=${q}&access_token=${token}`;
+    if (type === 'field_of_study') return `${BASE_URL}/search?type=adeducationmajor&q=${q}&access_token=${token}`;
+    if (type === 'school')         return `${BASE_URL}/search?type=adeducationschool&q=${q}&access_token=${token}`;
+    return `${BASE_URL}/search?type=adinterest&q=${q}&access_token=${token}`;
 }
 
 async function handleResponse(response) {
