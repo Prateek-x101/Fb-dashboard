@@ -4,6 +4,23 @@ const fs = require('fs');
 
 const BASE_URL = 'https://graph.facebook.com/v25.0';
 
+async function fetchWithRetry(url, options = {}, retries = 2, delay = 500) {
+    for (let i = 0; i <= retries; i++) {
+        try {
+            const res = await fetch(url, options);
+            if (res.status === 429) {
+                console.warn(`[FacebookService] Rate limited (429) on ${url}. Retrying in ${delay * 2 * (i + 1)}ms...`);
+                await new Promise(r => setTimeout(r, delay * 2 * (i + 1)));
+                continue;
+            }
+            return res;
+        } catch (err) {
+            if (i === retries) throw err;
+            await new Promise(r => setTimeout(r, delay * (i + 1)));
+        }
+    }
+}
+
 const TARGETING_TYPES = new Set(['interest', 'behavior', 'demographic', 'life_event', 'job_title', 'employer', 'field_of_study', 'school']);
 
 function normalizeTargetingName(value) {
@@ -261,7 +278,7 @@ const facebookService = {
         ];
         const settled = await Promise.allSettled(
             searches.map(s =>
-                fetch(s.url)
+                fetchWithRetry(s.url)
                     .then(r => r.json())
                     .then(data => (data.data || []).map(item => {
                         const rawType = item.type || s.type;
@@ -334,17 +351,33 @@ const facebookService = {
                         return null;
                     }
 
-                    // Fetch + score one search query, return best match or null
                     async function searchAndMatch(searchName, searchType) {
                         try {
                             // Try account-specific targetingsearch first if accountId is provided
                             if (accountId) {
                                 try {
                                     const url = targetingSearchUrl(searchName, searchType, token, accountId);
-                                    const d = await fetch(url, { timeout: 5000 }).then(r => r.json());
+                                    const d = await fetchWithRetry(url, { timeout: 5000 }).then(r => r.json());
                                     if (d && !d.error) {
-                                        const match = bestFromPool(Array.isArray(d.data) ? d.data : []);
+                                        let match = bestFromPool(Array.isArray(d.data) ? d.data : []);
                                         if (match) return match;
+
+                                        // Case retries on account level
+                                        const titleCase = searchName.replace(/\b\w/g, c => c.toUpperCase());
+                                        if (titleCase !== searchName) {
+                                            const urlTC = targetingSearchUrl(titleCase, searchType, token, accountId);
+                                            const dTC = await fetchWithRetry(urlTC, { timeout: 5000 }).then(r => r.json());
+                                            match = bestFromPool(Array.isArray(dTC.data) ? dTC.data : []);
+                                            if (match) return match;
+                                        }
+
+                                        const capitalized = searchName.charAt(0).toUpperCase() + searchName.slice(1);
+                                        if (capitalized !== searchName && capitalized !== titleCase) {
+                                            const urlCap = targetingSearchUrl(capitalized, searchType, token, accountId);
+                                            const dCap = await fetchWithRetry(urlCap, { timeout: 5000 }).then(r => r.json());
+                                            match = bestFromPool(Array.isArray(dCap.data) ? dCap.data : []);
+                                            if (match) return match;
+                                        }
                                     }
                                 } catch (err) {
                                     console.warn(`targetingsearch failed for ${searchName}, falling back to global search:`, err.message);
@@ -353,15 +386,15 @@ const facebookService = {
 
                             // Fallback to global search
                             const url = targetingSearchUrl(searchName, searchType, token, null);
-                            const d = await fetch(url, { timeout: 5000 }).then(r => r.json());
+                            const d = await fetchWithRetry(url, { timeout: 5000 }).then(r => r.json());
                             let match = bestFromPool(Array.isArray(d.data) ? d.data : []);
                             if (match) return match;
 
-                            // Casing fallbacks
+                            // Casing fallbacks on global level
                             const titleCase = searchName.replace(/\b\w/g, c => c.toUpperCase());
                             if (titleCase !== searchName) {
                                 const urlTC = targetingSearchUrl(titleCase, searchType, token, null);
-                                const dTC = await fetch(urlTC, { timeout: 5000 }).then(r => r.json());
+                                const dTC = await fetchWithRetry(urlTC, { timeout: 5000 }).then(r => r.json());
                                 match = bestFromPool(Array.isArray(dTC.data) ? dTC.data : []);
                                 if (match) return match;
                             }
@@ -369,7 +402,7 @@ const facebookService = {
                             const capitalized = searchName.charAt(0).toUpperCase() + searchName.slice(1);
                             if (capitalized !== searchName && capitalized !== titleCase) {
                                 const urlCap = targetingSearchUrl(capitalized, searchType, token, null);
-                                const dCap = await fetch(urlCap, { timeout: 5000 }).then(r => r.json());
+                                const dCap = await fetchWithRetry(urlCap, { timeout: 5000 }).then(r => r.json());
                                 match = bestFromPool(Array.isArray(dCap.data) ? dCap.data : []);
                                 if (match) return match;
                             }
@@ -412,7 +445,7 @@ const facebookService = {
                     if (!match) {
                         try {
                             const url = targetingSearchUrl(name, type, token, accountId);
-                            const d = await fetch(url).then(r => r.json());
+                            const d = await fetchWithRetry(url, { timeout: 5000 }).then(r => r.json());
                             const primary = Array.isArray(d.data) ? d.data : [];
                             if (primary.length > 0) {
                                 const firstCn = normalizeTargetingName(primary[0].name);
