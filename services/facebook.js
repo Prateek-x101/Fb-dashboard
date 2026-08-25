@@ -252,6 +252,43 @@ const facebookService = {
         return { id: video_id };
     },
 
+    async waitForVideoReady(videoId, token, maxWaitMs = 120000, pollIntervalMs = 3000) {
+        const startTime = Date.now();
+        console.log(`[FacebookService] Waiting for video ${videoId} to be ready on Meta's servers...`);
+
+        while (Date.now() - startTime < maxWaitMs) {
+            try {
+                const url = `${BASE_URL}/${videoId}?fields=status&access_token=${token}`;
+                const res = await fetchWithRetry(url, { timeout: 5000 });
+                const data = await res.json();
+                
+                if (res.status >= 400 || data.error) {
+                    throw new Error(data.error ? data.error.message : 'Failed to query video status');
+                }
+
+                const videoStatus = data.status?.video_status;
+                console.log(`[FacebookService] Video ${videoId} status: ${videoStatus}`);
+
+                if (videoStatus === 'ready') {
+                    return true;
+                }
+                
+                if (videoStatus === 'error') {
+                    throw new Error('Meta failed to process this video.');
+                }
+            } catch (err) {
+                if (err.message.includes('process this video')) {
+                    throw err;
+                }
+                console.warn(`[FacebookService] Warning during video status polling: ${err.message}`);
+            }
+
+            await new Promise(r => setTimeout(r, pollIntervalMs));
+        }
+
+        throw new Error('Timeout: Video took too long to process on Meta\'s servers.');
+    },
+
     async getPixels(accountId, token) {
         const url = `${BASE_URL}/act_${accountId}/adspixels?fields=id,name&access_token=${token}`;
         const response = await fetch(url, { method: 'GET' });

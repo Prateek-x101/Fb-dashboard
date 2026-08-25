@@ -611,6 +611,10 @@ router.post('/create', async (req, res) => {
                 const videoRes = await facebookService.uploadVideo(accountId, token, ad.media);
                 videoId = videoRes.id || null;
                 if (!videoId) throw new Error(`Facebook did not return a video ID for ${ad.name}.`);
+                
+                // Wait for the video to be processed by Meta
+                await facebookService.waitForVideoReady(videoId, token);
+                
                 videoThumbnailUrl = '';
                 
                 // If a thumbnail file is provided, upload it to Meta
