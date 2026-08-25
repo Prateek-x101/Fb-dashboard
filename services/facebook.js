@@ -373,7 +373,7 @@ const facebookService = {
                     }
 
                     if (match?.id) {
-                        return { id: String(match.id), name: match.name, type: matchedType };
+                        return { id: String(match.id), name: match.name, type: match.type || matchedType };
                     }
                     return null;
                 }

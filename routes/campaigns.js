@@ -765,7 +765,7 @@ router.post('/create', async (req, res) => {
                     const typeToField = {
                         interest:       'interests',
                         behavior:       'behaviors',
-                        demographic:    'demographics',
+                        demographic:    'interests',
                         life_event:     'life_events',
                         job_title:      'work_positions',
                         employer:       'work_employers',
@@ -774,7 +774,13 @@ router.post('/create', async (req, res) => {
                     };
                     const flexSpec = {};
                     resolvedTargeting.forEach(item => {
-                        const field = typeToField[item.type] || 'interests';
+                        let field = item.type;
+                        if (typeToField[field]) {
+                            field = typeToField[field];
+                        }
+                        if (field === 'demographics') {
+                            field = 'interests';
+                        }
                         if (!flexSpec[field]) flexSpec[field] = [];
                         flexSpec[field].push({ id: item.id });
                     });
