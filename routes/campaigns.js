@@ -622,69 +622,73 @@ router.post('/create', async (req, res) => {
         };
         const pageId = selectedPageId;
 
-        // Cache for resolved location names → keys (avoids re-resolving same locations for each audience)
-        const locationCache = new Map();
+        // 1. Collect all unique locations to resolve upfront in a single batch
+        const allLocationNames = new Set();
+        (step2.audiences || []).forEach(audience => {
+            (audience.locationsInclude || []).forEach(l => { if (l.name && !l.key) allLocationNames.add(l.name); });
+            (audience.locationsExclude || []).forEach(l => { if (l.name && !l.key) allLocationNames.add(l.name); });
+        });
 
-        for (let audienceIndex = 0; audienceIndex < (step2.audiences || []).length; audienceIndex++) {
-            const audience = step2.audiences[audienceIndex];
+        const locationCache = new Map();
+        if (allLocationNames.size > 0) {
+            try {
+                const resolved = await facebookService.resolveLocationNames(Array.from(allLocationNames), token);
+                resolved.forEach(r => {
+                    locationCache.set(r.name, { key: r.key, type: r.type, name: r.name });
+                });
+            } catch (err) {
+                console.error('Failed to resolve locations upfront:', err.message);
+            }
+        }
+
+        // Helper to validate and get custom audiences owned by this account (cached/fetched once)
+        let accountAudienceIdsCached = null;
+        const getAccountAudienceIds = async () => {
+            if (accountAudienceIdsCached) return accountAudienceIdsCached;
+            const audienceIds = new Set();
+            let url = `https://graph.facebook.com/v25.0/act_${accountId}/customaudiences?fields=id&limit=500&access_token=${token}`;
+            try {
+                while (url) {
+                    const res = await fetch(url);
+                    if (!res.ok) break;
+                    const data = await res.json();
+                    (data.data || []).forEach(a => audienceIds.add(a.id));
+                    url = data.paging?.next || null;
+                }
+            } catch (e) {
+                console.warn('Failed to fetch account custom audiences:', e.message);
+            }
+            accountAudienceIdsCached = audienceIds;
+            return audienceIds;
+        };
+
+        // 2. Create all Ad Sets in parallel
+        const adsetPromises = (step2.audiences || []).map(async (audience, audienceIndex) => {
             const existingAdset = checkpoint.adsets.find(item => item.audienceIndex === audienceIndex);
             let adsetId = existingAdset?.id;
 
-            // Resolve missing keys in locationsInclude
-            const includeToResolve = [];
-            let resolvedInclude = [];
+            if (adsetId) {
+                return { audienceIndex, adsetId };
+            }
 
+            // Map resolved locations
+            const resolvedInclude = [];
             (audience.locationsInclude || []).forEach(l => {
-                // A name is authoritative when present. Re-resolve it for the
-                // selected account instead of trusting a stale saved key.
                 if (!l.name && l.key) {
                     resolvedInclude.push({ key: l.key, type: l.type || 'country', name: l.name });
                 } else if (locationCache.has(l.name)) {
                     resolvedInclude.push(locationCache.get(l.name));
-                } else {
-                    includeToResolve.push(l.name);
                 }
             });
 
-            if (includeToResolve.length > 0) {
-                try {
-                    const resolved = await facebookService.resolveLocationNames(includeToResolve, token);
-                    resolved.forEach(r => {
-                        const item = { key: r.key, type: r.type, name: r.name };
-                        resolvedInclude.push(item);
-                        locationCache.set(r.name, item);
-                    });
-                } catch (resolveErr) {
-                    console.error('Failed to resolve include location names:', resolveErr.message);
-                }
-            }
-
-            // Resolve missing keys in locationsExclude
-            const excludeToResolve = [];
-            let resolvedExclude = [];
-
+            const resolvedExclude = [];
             (audience.locationsExclude || []).forEach(l => {
                 if (!l.name && l.key) {
                     resolvedExclude.push({ key: l.key, type: l.type || 'country', name: l.name });
                 } else if (locationCache.has(l.name)) {
                     resolvedExclude.push(locationCache.get(l.name));
-                } else {
-                    excludeToResolve.push(l.name);
                 }
             });
-
-            if (excludeToResolve.length > 0) {
-                try {
-                    const resolved = await facebookService.resolveLocationNames(excludeToResolve, token);
-                    resolved.forEach(r => {
-                        const item = { key: r.key, type: r.type, name: r.name };
-                        resolvedExclude.push(item);
-                        locationCache.set(r.name, item);
-                    });
-                } catch (resolveErr) {
-                    console.error('Failed to resolve exclude location names:', resolveErr.message);
-                }
-            }
 
             const geoLocations = buildGeoLocations(resolvedInclude);
             const excludedGeo = buildGeoLocations(resolvedExclude);
@@ -703,7 +707,8 @@ router.post('/create', async (req, res) => {
             }
             if (genders.length) targeting.genders = genders;
             if (Object.keys(excludedGeo).length > 0) targeting.excluded_geo_locations = excludedGeo;
-            // Support new `targeting` array (mixed types) and legacy `interests` array
+
+            // Resolve detailed targeting keywords
             const rawTargeting = Array.isArray(audience.targeting) && audience.targeting.length > 0
                 ? audience.targeting
                 : (audience.interests || []).map(i => ({ ...i, type: 'interest' }));
@@ -711,8 +716,6 @@ router.post('/create', async (req, res) => {
             if (rawTargeting.length > 0) {
                 try {
                     const resolvedTargeting = await facebookService.resolveAllTargeting(rawTargeting, token, accountId);
-
-                    // Map each item to the correct Facebook flexible_spec field name
                     const typeToField = {
                         interest:       'interests',
                         behavior:       'behaviors',
@@ -734,51 +737,15 @@ router.post('/create', async (req, res) => {
                     console.error('Failed to resolve targeting items:', resolveErr.message);
                 }
             }
-            if (audience.customAudiencesInclude?.length) targeting.custom_audiences = audience.customAudiencesInclude.map(id => ({ id }));
-            if (audience.customAudiencesExclude?.length) targeting.excluded_custom_audiences = audience.customAudiencesExclude.map(id => ({ id }));
-            if (audience.lookalikeInclude?.length) {
-                targeting.custom_audiences = [...(targeting.custom_audiences || []), ...audience.lookalikeInclude.map(id => ({ id }))];
-            }
-            if (audience.lookalikeExclude?.length) {
-                targeting.excluded_custom_audiences = [...(targeting.excluded_custom_audiences || []), ...audience.lookalikeExclude.map(id => ({ id }))];
-            }
-
-            // Validate custom audiences - remove any that don't belong to this ad account
-            const getAccountAudienceIds = async () => {
-                const audienceIds = new Set();
-                let url = `https://graph.facebook.com/v25.0/act_${accountId}/customaudiences?fields=id&limit=500&access_token=${token}`;
-                try {
-                    while (url) {
-                        const res = await fetch(url);
-                        if (!res.ok) break;
-                        const data = await res.json();
-                        (data.data || []).forEach(a => audienceIds.add(a.id));
-                        url = data.paging?.next || null;
-                    }
-                } catch (e) {
-                    console.warn('Failed to fetch account custom audiences:', e.message);
-                }
-                return audienceIds;
-            };
 
             if (targeting.custom_audiences?.length || targeting.excluded_custom_audiences?.length) {
                 const validIds = await getAccountAudienceIds();
-                console.log(`Account ${accountId} has ${validIds.size} custom audiences`);
-
                 if (targeting.custom_audiences?.length) {
-                    const before = targeting.custom_audiences.length;
                     targeting.custom_audiences = targeting.custom_audiences.filter(a => validIds.has(a.id));
-                    if (targeting.custom_audiences.length < before) {
-                        console.warn(`Removed ${before - targeting.custom_audiences.length} invalid include audiences`);
-                    }
                     if (targeting.custom_audiences.length === 0) delete targeting.custom_audiences;
                 }
                 if (targeting.excluded_custom_audiences?.length) {
-                    const before = targeting.excluded_custom_audiences.length;
                     targeting.excluded_custom_audiences = targeting.excluded_custom_audiences.filter(a => validIds.has(a.id));
-                    if (targeting.excluded_custom_audiences.length < before) {
-                        console.warn(`Removed ${before - targeting.excluded_custom_audiences.length} invalid exclude audiences`);
-                    }
                     if (targeting.excluded_custom_audiences.length === 0) delete targeting.excluded_custom_audiences;
                 }
             }
@@ -804,9 +771,7 @@ router.post('/create', async (req, res) => {
                     };
                 } else {
                     destinationType = 'ON_AD';
-                    promotedObject = {
-                        page_id: pageId
-                    };
+                    promotedObject = { page_id: pageId };
                 }
             } else if (obj === 'OUTCOME_ENGAGEMENT') {
                 if (step2.pixel) {
@@ -817,13 +782,10 @@ router.post('/create', async (req, res) => {
                     };
                 } else if (step2.optimizationGoal === 'PAGE_LIKES') {
                     destinationType = 'FACEBOOK_PAGE';
-                    promotedObject = {
-                        page_id: pageId
-                    };
+                    promotedObject = { page_id: pageId };
                 }
             } else if (obj === 'OUTCOME_TRAFFIC' || obj === 'OUTCOME_AWARENESS') {
                 destinationType = 'WEBSITE';
-                // Traffic and Awareness do not support promoted_object for website destinations
             }
 
             const adsetParams = {
@@ -843,58 +805,32 @@ router.post('/create', async (req, res) => {
             }
             if (campaign.scheduleEnd) adsetParams.end_time = parseIsoDate(campaign.scheduleEnd);
 
-            if (!adsetId) {
-                progress.failedStep = 'ad set';
-                progress.failedIndex = audienceIndex;
-                progress.requestParams = adsetParams;
-                try {
-                    const adsetResponse = await facebookService.createAdSet(accountId, token, adsetParams);
-                    adsetId = adsetResponse.id;
-                } catch (adsetErr) {
-                    // Handle error 1870247 — can be custom audiences OR deprecated interests
-                    if (adsetErr.errorSubcode === 1870247) {
-                        const errorMsg = adsetErr.details?.error?.error_user_msg || '';
-                        
-                        // Check if it's about deprecated interests
-                        const altMatch = errorMsg.match(/Relevant alternative options:\s*(\[.*\])/);
-                        if (altMatch) {
-                            try {
-                                const alternatives = JSON.parse(altMatch[1]);
-                                console.warn(`Ad set "${audience.name}": Replacing ${alternatives.length} deprecated interest(s):`);
-                                
-                                for (const alt of alternatives) {
-                                    console.warn(`  "${alt.deprecated_interest_name}" (${alt.deprecated_interest_id}) → "${alt.alternative_interest_name}" (${alt.alternative_interest_id})`);
-                                }
-                                
-                                // Replace deprecated interests with alternatives in flexible_spec
-                                if (adsetParams.targeting.flexible_spec) {
-                                    for (const spec of adsetParams.targeting.flexible_spec) {
-                                        if (spec.interests) {
-                                            for (const alt of alternatives) {
-                                                const idx = spec.interests.findIndex(i => i.id === alt.deprecated_interest_id);
-                                                if (idx !== -1) {
-                                                    spec.interests[idx] = { id: alt.alternative_interest_id, name: alt.alternative_interest_name };
-                                                }
+            try {
+                const adsetResponse = await facebookService.createAdSet(accountId, token, adsetParams);
+                adsetId = adsetResponse.id;
+            } catch (adsetErr) {
+                if (adsetErr.errorSubcode === 1870247) {
+                    const errorMsg = adsetErr.details?.error?.error_user_msg || '';
+                    const altMatch = errorMsg.match(/Relevant alternative options:\s*(\[.*\])/);
+                    if (altMatch) {
+                        try {
+                            const alternatives = JSON.parse(altMatch[1]);
+                            if (adsetParams.targeting.flexible_spec) {
+                                for (const spec of adsetParams.targeting.flexible_spec) {
+                                    if (spec.interests) {
+                                        for (const alt of alternatives) {
+                                            const idx = spec.interests.findIndex(i => i.id === alt.deprecated_interest_id);
+                                            if (idx !== -1) {
+                                                spec.interests[idx] = { id: alt.alternative_interest_id, name: alt.alternative_interest_name };
                                             }
                                         }
                                     }
                                 }
-                                
-                                progress.requestParams = adsetParams;
-                                const retryResponse = await facebookService.createAdSet(accountId, token, adsetParams);
-                                adsetId = retryResponse.id;
-                            } catch (parseErr) {
-                                // If parsing fails, try stripping custom audiences as fallback
-                                console.warn(`Ad set "${audience.name}": Could not parse alternatives, removing custom audiences`);
-                                delete adsetParams.targeting.excluded_custom_audiences;
-                                delete adsetParams.targeting.custom_audiences;
-                                progress.requestParams = adsetParams;
-                                const retryResponse = await facebookService.createAdSet(accountId, token, adsetParams);
-                                adsetId = retryResponse.id;
                             }
-                        } else {
-                            // Not about interests — try removing custom audiences
-                            console.warn(`Ad set "${audience.name}": Custom audience error 1870247 — removing custom audiences and retrying`);
+                            progress.requestParams = adsetParams;
+                            const retryResponse = await facebookService.createAdSet(accountId, token, adsetParams);
+                            adsetId = retryResponse.id;
+                        } catch (parseErr) {
                             delete adsetParams.targeting.excluded_custom_audiences;
                             delete adsetParams.targeting.custom_audiences;
                             progress.requestParams = adsetParams;
@@ -902,108 +838,137 @@ router.post('/create', async (req, res) => {
                             adsetId = retryResponse.id;
                         }
                     } else {
-                        throw adsetErr;
+                        delete adsetParams.targeting.excluded_custom_audiences;
+                        delete adsetParams.targeting.custom_audiences;
+                        progress.requestParams = adsetParams;
+                        const retryResponse = await facebookService.createAdSet(accountId, token, adsetParams);
+                        adsetId = retryResponse.id;
                     }
+                } else {
+                    progress.failedStep = 'ad set';
+                    progress.failedIndex = audienceIndex;
+                    progress.requestParams = adsetParams;
+                    throw adsetErr;
                 }
-                if (!adsetId) throw new Error(`Facebook did not return an ad set ID for ${audience.name}.`);
-                checkpoint.adsets.push({ audienceIndex, id: adsetId });
-                saveRetryCheckpoint(draftId, campaign, checkpoint, progress);
             }
-            if (!results.adsets.includes(adsetId)) results.adsets.push(adsetId);
+
+            if (!adsetId) throw new Error(`Facebook did not return an ad set ID for ${audience.name}.`);
+            
+            // Push to checkpoint and save status
+            checkpoint.adsets.push({ audienceIndex, id: adsetId });
+            saveRetryCheckpoint(draftId, campaign, checkpoint, progress);
+
+            return { audienceIndex, adsetId };
+        });
+
+        // Resolve all adsets concurrently
+        const adsetResults = await Promise.all(adsetPromises);
+        const adsetMap = new Map();
+        adsetResults.forEach(r => {
+            adsetMap.set(r.audienceIndex, r.adsetId);
+            if (!results.adsets.includes(r.adsetId)) results.adsets.push(r.adsetId);
+        });
+
+        // 3. Create all Ad Creatives and Ads in parallel
+        const adPromises = [];
+        const enhancements = step3.enhancements || {};
+
+        for (let audienceIndex = 0; audienceIndex < (step2.audiences || []).length; audienceIndex++) {
+            const audience = step2.audiences[audienceIndex];
+            const adsetId = adsetMap.get(audienceIndex);
 
             for (let adIndex = 0; adIndex < uploadedMedia.length; adIndex++) {
                 const ad = uploadedMedia[adIndex];
                 const creativeKey = `${audienceIndex}:${adIndex}`;
-                let creativeId = checkpoint.creatives.find(item => item.key === creativeKey)?.id;
-                let adId = checkpoint.ads.find(item => item.key === creativeKey)?.id;
-                const textVariation = ad.primaryText || '';
-                const destinationUrl = appendUtmParams(step2.url);
-                // Build degrees_of_freedom_spec from selected enhancements
-                const dofFeatures = {};
-                // Only use keys from Meta's current creative_features_spec
-                // enum. Older keys such as cta_optimization, inline_comment,
-                // standard_enhancements and text_optimizations cause code 100.
-                if (enhancements.autoCreative) {
-                    dofFeatures.standard_enhancements_catalog = { enroll_status: 'OPT_IN' };
-                }
-                if (enhancements.textOptimizations) {
-                    dofFeatures.text_overlay_translation = { enroll_status: 'OPT_IN' };
-                }
 
-                const creativeParams = {
-                    name: `${campaign.name} — ${audience.name} — ${ad.name}`,
-                    url_tags: 'utm_medium={{ad.name}}&utm_campaign={{campaign.name}}&utm_content={{adset.name}}',
-                    contextual_multi_ads: { enroll_status: enhancements.multiAdvertiser ? 'OPT_IN' : 'OPT_OUT' },
-                    ...(Object.keys(dofFeatures).length > 0 && {
-                        degrees_of_freedom_spec: { creative_features_spec: dofFeatures }
-                    }),
-                    object_story_spec: {
-                        page_id: pageId,
-                        link_data: {
-                            message: textVariation,
-                            link: destinationUrl,
-                            // Omit optional string fields when blank — Meta rejects empty strings
-                            ...(step3.headline  && { name: step3.headline }),
-                            ...(step3.description && { description: step3.description }),
-                            call_to_action: { type: step3.cta || 'SHOP_NOW', value: { link: destinationUrl } }
+                adPromises.push((async () => {
+                    let creativeId = checkpoint.creatives.find(item => item.key === creativeKey)?.id;
+                    let adId = checkpoint.ads.find(item => item.key === creativeKey)?.id;
+                    
+                    const textVariation = ad.primaryText || '';
+                    const destinationUrl = appendUtmParams(step2.url);
+                    const dofFeatures = {};
+                    
+                    if (enhancements.autoCreative) {
+                        dofFeatures.standard_enhancements_catalog = { enroll_status: 'OPT_IN' };
+                    }
+                    if (enhancements.textOptimizations) {
+                        dofFeatures.text_overlay_translation = { enroll_status: 'OPT_IN' };
+                    }
+
+                    const creativeParams = {
+                        name: `${campaign.name} — ${audience.name} — ${ad.name}`,
+                        url_tags: 'utm_medium={{ad.name}}&utm_campaign={{campaign.name}}&utm_content={{adset.name}}',
+                        contextual_multi_ads: { enroll_status: enhancements.multiAdvertiser ? 'OPT_IN' : 'OPT_OUT' },
+                        ...(Object.keys(dofFeatures).length > 0 && {
+                            degrees_of_freedom_spec: { creative_features_spec: dofFeatures }
+                        }),
+                        object_story_spec: {
+                            page_id: pageId,
+                            link_data: {
+                                message: textVariation,
+                                link: destinationUrl,
+                                ...(step3.headline  && { name: step3.headline }),
+                                ...(step3.description && { description: step3.description }),
+                                call_to_action: { type: step3.cta || 'SHOP_NOW', value: { link: destinationUrl } }
+                            }
                         }
-                    }
-                };
-                if (ad.imageHash) creativeParams.object_story_spec.link_data.image_hash = ad.imageHash;
-                if (ad.videoId) {
-                    let thumbnailUrl = ad.videoThumbnailUrl || null;
-                    creativeParams.object_story_spec.video_data = {
-                        video_id: ad.videoId,
-                        message: textVariation,
-                        // Omit optional string fields when blank — Meta rejects empty strings
-                        ...(step3.headline    && { title: step3.headline }),
-                        ...(step3.description && { link_description: step3.description }),
-                        call_to_action: { type: step3.cta || 'SHOP_NOW', value: { link: destinationUrl } }
                     };
-                    if (ad.thumbnailHash) {
-                        creativeParams.object_story_spec.video_data.image_hash = ad.thumbnailHash;
-                    } else if (thumbnailUrl) {
-                        creativeParams.object_story_spec.video_data.image_url = thumbnailUrl;
+                    if (ad.imageHash) creativeParams.object_story_spec.link_data.image_hash = ad.imageHash;
+                    if (ad.videoId) {
+                        let thumbnailUrl = ad.videoThumbnailUrl || null;
+                        creativeParams.object_story_spec.video_data = {
+                            video_id: ad.videoId,
+                            message: textVariation,
+                            ...(step3.headline    && { title: step3.headline }),
+                            ...(step3.description && { link_description: step3.description }),
+                            call_to_action: { type: step3.cta || 'SHOP_NOW', value: { link: destinationUrl } }
+                        };
+                        if (ad.thumbnailHash) {
+                            creativeParams.object_story_spec.video_data.image_hash = ad.thumbnailHash;
+                        } else if (thumbnailUrl) {
+                            creativeParams.object_story_spec.video_data.image_url = thumbnailUrl;
+                        }
+                        delete creativeParams.object_story_spec.link_data;
                     }
-                    delete creativeParams.object_story_spec.link_data;
-                }
-                if (requestedInstagramId) creativeParams.object_story_spec.instagram_user_id = requestedInstagramId;
+                    if (requestedInstagramId) creativeParams.object_story_spec.instagram_user_id = requestedInstagramId;
 
-                if (!creativeId) {
-                    progress.failedStep = 'creative';
-                    progress.failedIndex = { audienceIndex, adIndex };
-                    progress.requestParams = creativeParams;
-                    const creativeResponse = await facebookService.createAdCreative(accountId, token, creativeParams);
-                    creativeId = creativeResponse.id;
-                    if (!creativeId) throw new Error(`Facebook did not return a creative ID for ${ad.name}.`);
-                    checkpoint.creatives.push({ key: creativeKey, id: creativeId });
-                    saveRetryCheckpoint(draftId, campaign, checkpoint, progress);
-                }
+                    if (!creativeId) {
+                        progress.failedStep = 'creative';
+                        progress.failedIndex = { audienceIndex, adIndex };
+                        progress.requestParams = creativeParams;
+                        const creativeResponse = await facebookService.createAdCreative(accountId, token, creativeParams);
+                        creativeId = creativeResponse.id;
+                        if (!creativeId) throw new Error(`Facebook did not return a creative ID for ${ad.name}.`);
+                        checkpoint.creatives.push({ key: creativeKey, id: creativeId });
+                        saveRetryCheckpoint(draftId, campaign, checkpoint, progress);
+                    }
 
-                if (!adId) {
-                    // tracking_specs are intentionally omitted at the ad level.
-                    // Per Meta API docs, pixel tracking is handled via promoted_object
-                    // on the adset. Adding tracking_specs here causes error 1815645
-                    // (OAuthException / invalid parameter) when the pixel is not
-                    // explicitly shared with the ad account token.
-                    const adParams = {
-                        name: ad.name,
-                        adset_id: adsetId,
-                        creative: { creative_id: creativeId },
-                        status: 'ACTIVE'
-                    };
-                    progress.failedStep = 'ad';
-                    progress.failedIndex = { audienceIndex, adIndex };
-                    progress.requestParams = adParams;
-                    const adResponse = await facebookService.createAd(accountId, token, adParams);
-                    adId = adResponse.id;
-                    if (!adId) throw new Error(`Facebook did not return an ad ID for ${ad.name}.`);
-                    checkpoint.ads.push({ key: creativeKey, id: adId });
-                    saveRetryCheckpoint(draftId, campaign, checkpoint, progress);
-                }
-                if (!results.ads.includes(adId)) results.ads.push(adId);
+                    if (!adId) {
+                        const adParams = {
+                            name: ad.name,
+                            adset_id: adsetId,
+                            creative: { creative_id: creativeId },
+                            status: 'ACTIVE'
+                        };
+                        progress.failedStep = 'ad';
+                        progress.failedIndex = { audienceIndex, adIndex };
+                        progress.requestParams = adParams;
+                        const adResponse = await facebookService.createAd(accountId, token, adParams);
+                        adId = adResponse.id;
+                        if (!adId) throw new Error(`Facebook did not return an ad ID for ${ad.name}.`);
+                        checkpoint.ads.push({ key: creativeKey, id: adId });
+                        saveRetryCheckpoint(draftId, campaign, checkpoint, progress);
+                    }
+
+                    if (!results.ads.includes(adId)) results.ads.push(adId);
+                    return adId;
+                })());
             }
         }
+
+        // Await all creative and ad creations concurrently
+        await Promise.all(adPromises);
 
         if (!storage.recentCampaigns) storage.recentCampaigns = [];
         storage.recentCampaigns = storage.recentCampaigns.filter(item => item.draftId !== draftId);
