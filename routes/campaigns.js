@@ -476,6 +476,52 @@ router.post('/create', async (req, res) => {
         if (!selectedPageId) {
             return res.status(400).json({ error: 'Facebook Page is required.' });
         }
+
+        // Cache incoming settings on the checkpoint for comparison/saving
+        checkpoint._incomingPixel = step2.pixel || '';
+        checkpoint._incomingUrl = step2.url || '';
+        checkpoint._incomingHeadline = step3.headline || '';
+        checkpoint._incomingDescription = step3.description || '';
+        checkpoint._incomingCta = step3.cta || 'SHOP_NOW';
+        checkpoint._incomingPageId = selectedPageId || '';
+        checkpoint._incomingAudiencesHash = JSON.stringify(step2.audiences || []);
+
+        // Compare and invalidate cached resources if parameters changed on retry
+        if (checkpoint.campaignId) {
+            if (checkpoint.accountId && checkpoint.accountId !== campaign.accountId) {
+                console.log(`[Retry] Ad account changed from ${checkpoint.accountId} to ${campaign.accountId}. Recreating campaign.`);
+                checkpoint.campaignId = null;
+                checkpoint.adsets = [];
+                checkpoint.creatives = [];
+                checkpoint.ads = [];
+            }
+            
+            const incomingObjective = campaign.objective || 'OUTCOME_SALES';
+            if ((checkpoint.pixel && checkpoint.pixel !== checkpoint._incomingPixel) || 
+                (checkpoint.objective && checkpoint.objective !== incomingObjective)) {
+                console.log(`[Retry] Pixel or Objective changed. Recreating adsets.`);
+                checkpoint.adsets = [];
+                checkpoint.creatives = [];
+                checkpoint.ads = [];
+            }
+
+            if (checkpoint.audiencesHash && checkpoint.audiencesHash !== checkpoint._incomingAudiencesHash) {
+                console.log(`[Retry] Audiences targeting changed. Recreating adsets.`);
+                checkpoint.adsets = [];
+                checkpoint.creatives = [];
+                checkpoint.ads = [];
+            }
+
+            if ((checkpoint.pageId && checkpoint.pageId !== checkpoint._incomingPageId) ||
+                (checkpoint.url && checkpoint.url !== checkpoint._incomingUrl) ||
+                (checkpoint.headline !== undefined && checkpoint.headline !== checkpoint._incomingHeadline) ||
+                (checkpoint.description !== undefined && checkpoint.description !== checkpoint._incomingDescription) ||
+                (checkpoint.cta && checkpoint.cta !== checkpoint._incomingCta)) {
+                console.log(`[Retry] Creative parameters changed. Recreating creatives.`);
+                checkpoint.creatives = [];
+                checkpoint.ads = [];
+            }
+        }
         const connectedPages = await facebookService.getConnectedInstagram(token);
         const selectedPage = (connectedPages.data || []).find(page => String(page.id) === String(selectedPageId));
         if (!selectedPage) {
@@ -1079,13 +1125,36 @@ function normalizeRetryState(state, draftId) {
         uploadedMedia: list(source.uploadedMedia),
         adsets: list(source.adsets),
         creatives: list(source.creatives),
-        ads: list(source.ads)
+        ads: list(source.ads),
+        
+        // Preserve settings variables in checkpoint
+        accountId: source.accountId || null,
+        objective: source.objective || null,
+        pixel: source.pixel || null,
+        url: source.url || null,
+        headline: source.headline || null,
+        description: source.description || null,
+        cta: source.cta || null,
+        pageId: source.pageId || null,
+        audiencesHash: source.audiencesHash || null
     };
 }
 
 function saveRetryCheckpoint(draftId, campaign, checkpoint, progress) {
     if (!campaign) return;
     const storage = getStorage();
+    
+    // Save current parameters in the checkpoint so we can compare them on retry
+    checkpoint.accountId = campaign.accountId;
+    checkpoint.objective = campaign.objective || 'OUTCOME_SALES';
+    checkpoint.pixel = checkpoint._incomingPixel || '';
+    checkpoint.url = checkpoint._incomingUrl || '';
+    checkpoint.headline = checkpoint._incomingHeadline || '';
+    checkpoint.description = checkpoint._incomingDescription || '';
+    checkpoint.cta = checkpoint._incomingCta || 'SHOP_NOW';
+    checkpoint.pageId = checkpoint._incomingPageId || '';
+    checkpoint.audiencesHash = checkpoint._incomingAudiencesHash || '';
+
     storage.recentCampaigns = (storage.recentCampaigns || []).filter(item => item.draftId !== draftId);
     storage.recentCampaigns.unshift({
         id: `retry-${draftId}`,
