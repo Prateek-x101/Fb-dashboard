@@ -334,7 +334,7 @@ router.post('/ai-audiences', async (req, res) => {
 
                 if (!rawItems.length) continue;
 
-                const validatedItems = await facebookService.resolveAllTargeting(rawItems, token);
+                const validatedItems = await facebookService.resolveAllTargeting(rawItems, token, activeAccount.accountId);
                 aud.targeting = validatedItems;
                 aud.unresolvedTargeting = rawItems
                     .filter(item => !validatedItems.some(valid =>
@@ -710,7 +710,7 @@ router.post('/create', async (req, res) => {
 
             if (rawTargeting.length > 0) {
                 try {
-                    const resolvedTargeting = await facebookService.resolveAllTargeting(rawTargeting, token);
+                    const resolvedTargeting = await facebookService.resolveAllTargeting(rawTargeting, token, accountId);
 
                     // Map each item to the correct Facebook flexible_spec field name
                     const typeToField = {

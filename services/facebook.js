@@ -21,16 +21,19 @@ function normalizeTargetingType(value) {
     return TARGETING_TYPES.has(type) ? type : null;
 }
 
-function targetingSearchUrl(name, type, token) {
+function targetingSearchUrl(name, type, token, accountId = null) {
     const q = encodeURIComponent(name);
-    if (type === 'behavior')       return `${BASE_URL}/search?type=adTargetingCategory&class=behaviors&q=${q}&access_token=${token}`;
-    if (type === 'demographic')    return `${BASE_URL}/search?type=adTargetingCategory&class=demographics&q=${q}&access_token=${token}`;
-    if (type === 'life_event')     return `${BASE_URL}/search?type=adTargetingCategory&class=life_events&q=${q}&access_token=${token}`;
-    if (type === 'job_title')      return `${BASE_URL}/search?type=adworkposition&q=${q}&access_token=${token}`;
-    if (type === 'employer')       return `${BASE_URL}/search?type=adworkemployer&q=${q}&access_token=${token}`;
-    if (type === 'field_of_study') return `${BASE_URL}/search?type=adeducationmajor&q=${q}&access_token=${token}`;
-    if (type === 'school')         return `${BASE_URL}/search?type=adeducationschool&q=${q}&access_token=${token}`;
-    return `${BASE_URL}/search?type=adinterest&q=${q}&access_token=${token}`;
+    const cleanAccountId = accountId ? String(accountId).replace('act_', '') : null;
+    const prefix = cleanAccountId ? `${BASE_URL}/act_${cleanAccountId}/targetingsearch` : `${BASE_URL}/search`;
+
+    if (type === 'behavior')       return `${prefix}?type=adTargetingCategory&class=behaviors&q=${q}&access_token=${token}`;
+    if (type === 'demographic')    return `${prefix}?type=adTargetingCategory&class=demographics&q=${q}&access_token=${token}`;
+    if (type === 'life_event')     return `${prefix}?type=adTargetingCategory&class=life_events&q=${q}&access_token=${token}`;
+    if (type === 'job_title')      return `${prefix}?type=adworkposition&q=${q}&access_token=${token}`;
+    if (type === 'employer')       return `${prefix}?type=adworkemployer&q=${q}&access_token=${token}`;
+    if (type === 'field_of_study') return `${prefix}?type=adeducationmajor&q=${q}&access_token=${token}`;
+    if (type === 'school')         return `${prefix}?type=adeducationschool&q=${q}&access_token=${token}`;
+    return `${prefix}?type=adinterest&q=${q}&access_token=${token}`;
 }
 
 async function handleResponse(response) {
@@ -225,7 +228,7 @@ const facebookService = {
     },
 
     // Resolve a mixed array of {id?, name, type} items to full {id, name, type} using the right FB endpoint per type
-    async resolveAllTargeting(items, token) {
+    async resolveAllTargeting(items, token, accountId = null) {
         if (!Array.isArray(items) || !token) return [];
 
         // Do not trust IDs from saved audiences or old Gemini responses.
@@ -282,8 +285,44 @@ const facebookService = {
                     // Fetch + score one search query, return best match or null
                     async function searchAndMatch(searchName, searchType) {
                         try {
-                            const d = await fetch(targetingSearchUrl(searchName, searchType, token), { timeout: 5000 }).then(r => r.json());
-                            return bestFromPool(Array.isArray(d.data) ? d.data : []);
+                            // Try account-specific targetingsearch first if accountId is provided
+                            if (accountId) {
+                                try {
+                                    const url = targetingSearchUrl(searchName, searchType, token, accountId);
+                                    const d = await fetch(url, { timeout: 5000 }).then(r => r.json());
+                                    if (d && !d.error) {
+                                        const match = bestFromPool(Array.isArray(d.data) ? d.data : []);
+                                        if (match) return match;
+                                    }
+                                } catch (err) {
+                                    console.warn(`targetingsearch failed for ${searchName}, falling back to global search:`, err.message);
+                                }
+                            }
+
+                            // Fallback to global search
+                            const url = targetingSearchUrl(searchName, searchType, token, null);
+                            const d = await fetch(url, { timeout: 5000 }).then(r => r.json());
+                            let match = bestFromPool(Array.isArray(d.data) ? d.data : []);
+                            if (match) return match;
+
+                            // Casing fallbacks
+                            const titleCase = searchName.replace(/\b\w/g, c => c.toUpperCase());
+                            if (titleCase !== searchName) {
+                                const urlTC = targetingSearchUrl(titleCase, searchType, token, null);
+                                const dTC = await fetch(urlTC, { timeout: 5000 }).then(r => r.json());
+                                match = bestFromPool(Array.isArray(dTC.data) ? dTC.data : []);
+                                if (match) return match;
+                            }
+
+                            const capitalized = searchName.charAt(0).toUpperCase() + searchName.slice(1);
+                            if (capitalized !== searchName && capitalized !== titleCase) {
+                                const urlCap = targetingSearchUrl(capitalized, searchType, token, null);
+                                const dCap = await fetch(urlCap, { timeout: 5000 }).then(r => r.json());
+                                match = bestFromPool(Array.isArray(dCap.data) ? dCap.data : []);
+                                if (match) return match;
+                            }
+
+                            return null;
                         } catch { return null; }
                     }
 
@@ -320,7 +359,8 @@ const facebookService = {
                     // Last resort — first result from full-keyword primary search only if ≥1 word matches
                     if (!match) {
                         try {
-                            const d = await fetch(targetingSearchUrl(name, type, token)).then(r => r.json());
+                            const url = targetingSearchUrl(name, type, token, accountId);
+                            const d = await fetch(url).then(r => r.json());
                             const primary = Array.isArray(d.data) ? d.data : [];
                             if (primary.length > 0) {
                                 const firstCn = normalizeTargetingName(primary[0].name);
