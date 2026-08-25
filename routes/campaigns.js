@@ -774,11 +774,11 @@ router.post('/create', async (req, res) => {
                     };
                     const flexSpec = {};
                     resolvedTargeting.forEach(item => {
-                        let field = item.type;
+                        let field = item.rawType || item.type;
                         if (typeToField[field]) {
                             field = typeToField[field];
                         }
-                        if (field === 'demographics') {
+                        if (field === 'demographics' || field === 'demographic') {
                             field = 'interests';
                         }
                         if (!flexSpec[field]) flexSpec[field] = [];

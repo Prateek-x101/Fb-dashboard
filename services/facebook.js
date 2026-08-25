@@ -21,6 +21,32 @@ function normalizeTargetingType(value) {
     return TARGETING_TYPES.has(type) ? type : null;
 }
 
+function fbTypeToSimplified(fbType) {
+    const type = String(fbType || 'interest').trim().toLowerCase();
+    const mapping = {
+        interests:             'interest',
+        behaviors:             'behavior',
+        life_events:           'life_event',
+        work_positions:        'job_title',
+        work_employers:        'employer',
+        education_majors:      'field_of_study',
+        education_schools:     'school',
+        
+        family_statuses:       'demographic',
+        generation:            'demographic',
+        education_statuses:    'demographic',
+        relationship_statuses: 'demographic',
+        income:                'demographic',
+        net_worth:             'demographic',
+        home_ownership:        'demographic',
+        home_type:             'demographic',
+        home_value:            'demographic',
+        peers:                 'demographic',
+        funding_types:         'demographic'
+    };
+    return mapping[type] || (TARGETING_TYPES.has(type) ? type : 'interest');
+}
+
 function targetingSearchUrl(name, type, token, accountId = null) {
     const q = encodeURIComponent(name);
     
@@ -237,7 +263,15 @@ const facebookService = {
             searches.map(s =>
                 fetch(s.url)
                     .then(r => r.json())
-                    .then(data => (data.data || []).map(item => ({ id: item.id, name: item.name, type: s.type })))
+                    .then(data => (data.data || []).map(item => {
+                        const rawType = item.type || s.type;
+                        return {
+                            id: item.id,
+                            name: item.name,
+                            type: fbTypeToSimplified(rawType),
+                            rawType: rawType
+                        };
+                    }))
             )
         );
         const results = [];
@@ -259,7 +293,7 @@ const facebookService = {
                 if (!type) return null;
 
                 if (item.id && /^\d+$/.test(String(item.id))) {
-                    return { id: String(item.id), name: item.name || '', type: type };
+                    return { id: String(item.id), name: item.name || '', type: type, rawType: item.rawType || null };
                 }
 
                 const name = String(item.name || '').trim();
@@ -391,7 +425,13 @@ const facebookService = {
                     }
 
                     if (match?.id) {
-                        return { id: String(match.id), name: match.name, type: match.type || matchedType };
+                        const rawType = match.type || matchedType;
+                        return { 
+                            id: String(match.id), 
+                            name: match.name, 
+                            type: fbTypeToSimplified(rawType), 
+                            rawType: rawType 
+                        };
                     }
                     return null;
                 }

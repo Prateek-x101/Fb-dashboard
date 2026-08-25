@@ -656,7 +656,8 @@
                         targeting.push({
                             id:   tag.getAttribute('data-id') || '',
                             name: tag.getAttribute('data-value') || tag.textContent.replace('✖','').trim(),
-                            type: tag.getAttribute('data-type') || 'interest'
+                            type: tag.getAttribute('data-type') || 'interest',
+                            rawType: tag.getAttribute('data-raw-type') || ''
                         });
                     });
                     const adsetName = targeting.slice(0, 3).map(i => i.name).join(', ') || `Audience ${idx + 1}`;
@@ -992,10 +993,10 @@
                                     item.innerHTML = `<span style="font-size:0.6rem;padding:2px 7px;border-radius:4px;background:${meta.color}30;color:${meta.color};white-space:nowrap;flex-shrink:0;font-weight:700;">${meta.label}</span><span style="font-size:0.85rem;">${r.name || r}</span>`;
                                     item.addEventListener('mouseenter', () => item.style.background = 'rgba(67,97,238,0.18)');
                                     item.addEventListener('mouseleave', () => item.style.background = 'transparent');
-                                    item._result = { id: r.id || '', name: r.name || r, type };
+                                    item._result = { id: r.id || '', name: r.name || r, type, rawType: r.rawType || '' };
                                     item.addEventListener('mousedown', (ev) => {
                                         ev.preventDefault();
-                                        this._addInterestTag(card, i, r.id || '', r.name || r, type);
+                                        this._addInterestTag(card, i, r.id || '', r.name || r, type, r.rawType || '');
                                         closeDropdown();
                                         searchInput.value = '';
                                     });
@@ -1017,8 +1018,8 @@
                     const firstItem = dropdown.style.display !== 'none'
                         ? dropdown.querySelector('div') : null;
                     if (firstItem && firstItem._result) {
-                        const { id, name, type } = firstItem._result;
-                        this._addInterestTag(card, i, id, name, type);
+                        const { id, name, type, rawType } = firstItem._result;
+                        this._addInterestTag(card, i, id, name, type, rawType);
                         closeDropdown();
                         searchInput.value = '';
                     } else {
@@ -1048,7 +1049,7 @@
             });
         },
 
-        _addInterestTag: function(card, idx, id, name, type = 'interest') {
+        _addInterestTag: function(card, idx, id, name, type = 'interest', rawType = '') {
             const tc = card.querySelector(`.interests-tags-${idx}`);
             const input = tc?.querySelector('.interest-search');
             if (!tc || !input) return;
@@ -1058,6 +1059,7 @@
             tag.setAttribute('data-id', id);
             tag.setAttribute('data-value', name);
             tag.setAttribute('data-type', type);
+            if (rawType) tag.setAttribute('data-raw-type', rawType);
             tag.style.cssText = `border-left:3px solid ${meta.color};background:${meta.color}18;border-radius:6px;padding:3px 8px 3px 6px;color:#fff;display:inline-flex;align-items:center;gap:4px;`;
             tag.innerHTML = `<span style="font-size:0.58rem;font-weight:700;color:${meta.color};text-transform:uppercase;letter-spacing:0.04em;white-space:nowrap;">${meta.label}</span><span>${name}</span><span class="tag-remove" onclick="this.parentElement.remove()" style="color:rgba(255,255,255,0.35);font-size:0.7rem;cursor:pointer;margin-left:2px;">✖</span>`;
             tc.insertBefore(tag, input);
@@ -1072,7 +1074,8 @@
                 const name = typeof item === 'string' ? item : (item.name || item);
                 const id   = typeof item === 'object' ? (item.id   || '') : '';
                 const type = typeof item === 'object' ? (item.type || 'interest') : 'interest';
-                this._addInterestTag({ querySelector: sel => tc.closest('.audience-card')?.querySelector(sel) ?? tc.parentElement?.querySelector(sel) }, idx, id, name, type);
+                const rawType = typeof item === 'object' ? (item.rawType || '') : '';
+                this._addInterestTag({ querySelector: sel => tc.closest('.audience-card')?.querySelector(sel) ?? tc.parentElement?.querySelector(sel) }, idx, id, name, type, rawType);
             });
         },
 
@@ -2267,7 +2270,8 @@
                     interests.push({
                         id: tag.getAttribute('data-id') || '',
                         name: tag.getAttribute('data-value') || tag.textContent.replace('✖','').trim(),
-                        type: tag.getAttribute('data-type') || 'interest'
+                        type: tag.getAttribute('data-type') || 'interest',
+                        rawType: tag.getAttribute('data-raw-type') || ''
                     });
                 });
                 interestsSets.push(interests);
