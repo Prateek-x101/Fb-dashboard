@@ -745,18 +745,33 @@ router.post('/create', async (req, res) => {
             const genders = audience.gender === 'male' ? [1] : audience.gender === 'female' ? [2] : [];
             const enhancements = step3.enhancements || {};
             const isAdvantageAudience = !!enhancements.advantageAudience;
+            const campaignObj = campaign.objective || 'OUTCOME_SALES';
 
             const targeting = {
-                age_min: isAdvantageAudience ? Math.min(audience.ageMin || 18, 25) : (audience.ageMin || 18),
                 geo_locations: Object.keys(geoLocations).length > 0 ? geoLocations : { countries: ['IN'] },
                 targeting_automation: {
                     advantage_audience: isAdvantageAudience ? 1 : 0
                 }
             };
 
-            if (!isAdvantageAudience) {
+            if (isAdvantageAudience) {
+                // If it is OUTCOME_SALES (standard sales campaign), we can pass age as suggestion using individual_setting
+                if (campaignObj === 'OUTCOME_SALES') {
+                    targeting.age_min = 18; // base minimum constraint (required by Meta)
+                    targeting.age_range = [audience.ageMin || 18, audience.ageMax || 65];
+                    targeting.targeting_automation.individual_setting = {
+                        age: 1
+                    };
+                } else {
+                    // For other objectives, fall back to safe constraint capping (max age_min = 25)
+                    targeting.age_min = Math.min(audience.ageMin || 18, 25);
+                }
+            } else {
+                // Traditional manual targeting uses standard constraints
+                targeting.age_min = audience.ageMin || 18;
                 targeting.age_max = audience.ageMax || 65;
             }
+
             if (Array.isArray(audience.languages) && audience.languages.length > 0) {
                 targeting.locales = audience.languages.map(l => parseInt(l.key)).filter(Boolean);
             }
