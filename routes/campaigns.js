@@ -744,14 +744,19 @@ router.post('/create', async (req, res) => {
             const excludedGeo = buildGeoLocations(resolvedExclude);
             const genders = audience.gender === 'male' ? [1] : audience.gender === 'female' ? [2] : [];
             const enhancements = step3.enhancements || {};
+            const isAdvantageAudience = !!enhancements.advantageAudience;
+
             const targeting = {
-                age_min: audience.ageMin || 18,
-                age_max: audience.ageMax || 65,
+                age_min: isAdvantageAudience ? Math.min(audience.ageMin || 18, 25) : (audience.ageMin || 18),
                 geo_locations: Object.keys(geoLocations).length > 0 ? geoLocations : { countries: ['IN'] },
                 targeting_automation: {
-                    advantage_audience: enhancements.advantageAudience ? 1 : 0
+                    advantage_audience: isAdvantageAudience ? 1 : 0
                 }
             };
+
+            if (!isAdvantageAudience) {
+                targeting.age_max = audience.ageMax || 65;
+            }
             if (Array.isArray(audience.languages) && audience.languages.length > 0) {
                 targeting.locales = audience.languages.map(l => parseInt(l.key)).filter(Boolean);
             }
