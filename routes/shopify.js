@@ -2027,22 +2027,28 @@ Return ONLY valid JSON in this exact shape:
             });
         }
 
-        // Auto-translate product images automatically on import
+        // Auto-translate product images automatically on import with smart concurrency
         if (autoTranslateImages !== false && Array.isArray(product.images) && product.images.length > 0) {
             console.log(`[Translate] Auto-translating text inside ${product.images.length} product images...`);
-            for (let i = 0; i < product.images.length; i++) {
-                const oldImg = product.images[i];
-                try {
-                    const imgRes = await imageTranslator.translateImage(oldImg, geminiApiKey, geminiModel);
-                    if (imgRes.translated && imgRes.translatedUrl) {
-                        product.images[i] = imgRes.translatedUrl;
-                        if (product.description && typeof product.description === 'string') {
-                            product.description = product.description.split(oldImg).join(imgRes.translatedUrl);
+            
+            // Process images concurrently in chunks of 3
+            const chunkSize = 3;
+            for (let i = 0; i < product.images.length; i += chunkSize) {
+                const chunk = product.images.slice(i, i + chunkSize);
+                await Promise.all(chunk.map(async (oldImg, chunkIdx) => {
+                    const actualIdx = i + chunkIdx;
+                    try {
+                        const imgRes = await imageTranslator.translateImage(oldImg, geminiApiKey, geminiModel);
+                        if (imgRes.translated && imgRes.translatedUrl) {
+                            product.images[actualIdx] = imgRes.translatedUrl;
+                            if (product.description && typeof product.description === 'string') {
+                                product.description = product.description.split(oldImg).join(imgRes.translatedUrl);
+                            }
                         }
+                    } catch (imgErr) {
+                        console.warn(`[Translate] Image translation skipped for index ${actualIdx}:`, imgErr.message);
                     }
-                } catch (imgErr) {
-                    console.warn(`[Translate] Image translation skipped for index ${i}:`, imgErr.message);
-                }
+                }));
             }
         }
 
@@ -2050,10 +2056,17 @@ Return ONLY valid JSON in this exact shape:
         if (autoTranslateImages !== false && product.description && typeof product.description === 'string') {
             const imgMatches = product.description.match(/<img[^>]+src=["']([^"']+)["']/gi);
             if (imgMatches) {
+                const extraImgSrcs = [];
                 for (const match of imgMatches) {
                     const srcMatch = match.match(/src=["']([^"']+)["']/i);
                     const imgSrc = srcMatch ? srcMatch[1] : null;
-                    if (imgSrc && !product.images.includes(imgSrc) && !imgSrc.includes('/uploads/translated-')) {
+                    if (imgSrc && !product.images.includes(imgSrc) && !imgSrc.includes('/uploads/translated-') && !extraImgSrcs.includes(imgSrc)) {
+                        extraImgSrcs.push(imgSrc);
+                    }
+                }
+
+                if (extraImgSrcs.length > 0) {
+                    await Promise.all(extraImgSrcs.map(async (imgSrc) => {
                         try {
                             const imgRes = await imageTranslator.translateImage(imgSrc, geminiApiKey, geminiModel);
                             if (imgRes.translated && imgRes.translatedUrl) {
@@ -2062,7 +2075,7 @@ Return ONLY valid JSON in this exact shape:
                         } catch (e) {
                             console.warn(`[Translate] Description inline image translation skipped:`, e.message);
                         }
-                    }
+                    }));
                 }
             }
         }
