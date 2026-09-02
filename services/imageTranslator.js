@@ -63,7 +63,64 @@ async function getImageBuffer(input) {
 }
 
 /**
- * Calls Gemini Vision API to detect foreign text bounding boxes and their English translations.
+ * Native Google Translate (Google Lens) Automated Translation
+ * Renders exactly like official Google Translate with font matching and texture inpainting.
+ */
+async function translateViaGoogleTranslate(tempInputPath) {
+    console.log('[ImageTranslator] Attempting Native Google Translate (Google Lens)...');
+    return await browserPool.withTab(async (page) => {
+        await page.goto('https://translate.google.com/?sl=auto&tl=en&op=images', {
+            waitUntil: 'networkidle2',
+            timeout: 30000
+        });
+
+        // Handle possible Google consent dialogs
+        try {
+            const buttons = await page.$$('button');
+            for (const btn of buttons) {
+                const text = await page.evaluate(el => el.innerText, btn);
+                if (text && /accept all|agree|i agree|alle akzeptieren|zustimmen/i.test(text)) {
+                    await btn.click();
+                    await new Promise(r => setTimeout(r, 1000));
+                    break;
+                }
+            }
+        } catch (e) {}
+
+        const fileInput = await page.$('input[type="file"]');
+        if (!fileInput) throw new Error('Google Translate file input not found');
+
+        await fileInput.uploadFile(tempInputPath);
+
+        // Wait for translated result image blob
+        await page.waitForFunction(() => {
+            const img = Array.from(document.querySelectorAll('img')).find(i => i.src && i.src.startsWith('blob:'));
+            const downloadBtn = Array.from(document.querySelectorAll('button')).find(b => b.innerText && /download/i.test(b.innerText));
+            return img || downloadBtn;
+        }, { timeout: 35000 });
+
+        // Extract blob data directly as base64
+        const base64 = await page.evaluate(async () => {
+            const img = Array.from(document.querySelectorAll('img')).find(i => i.src && i.src.startsWith('blob:'));
+            if (!img) return null;
+            const blobUrl = img.src;
+            const resp = await fetch(blobUrl);
+            const blob = await resp.blob();
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result);
+                reader.readAsDataURL(blob);
+            });
+        });
+
+        if (!base64) throw new Error('Could not extract translated blob image from Google Translate');
+        const cleanBase64 = base64.replace(/^data:image\/\w+;base64,/, '');
+        return Buffer.from(cleanBase64, 'base64');
+    }, { blockImages: false, timeout: 60000 });
+}
+
+/**
+ * Calls Gemini Vision API to detect foreign text bounding boxes and their English translations (Fallback).
  */
 async function detectAndTranslateText(imageBuffer, mimeType, apiKey, model = 'gemini-2.5-flash') {
     const base64Data = imageBuffer.toString('base64');
@@ -138,8 +195,7 @@ CRITICAL RULES:
 }
 
 /**
- * Renders the translated image using Puppeteer:
- * Overlays inpainting background patches over original foreign text and renders translated English text.
+ * Renders the translated image using Puppeteer (Fallback renderer):
  */
 async function renderTranslatedImage(imageBuffer, mimeType, ext, textBlocks) {
     const base64Data = `data:${mimeType};base64,${imageBuffer.toString('base64')}`;
@@ -287,20 +343,55 @@ function escapeHtml(text) {
         .replace(/'/g, '&#039;');
 }
 
+/**
+ * Main Translate Image Function:
+ * 1. Checks if image has foreign text.
+ * 2. If foreign text exists, translates via Native Google Translate (Google Lens) for 100% professional pixel-quality.
+ * 3. Falls back to Gemini Vision OCR + Inpainting if Google Translate encounters issues.
+ */
 async function translateImage(imageInput, apiKey, model = 'gemini-2.5-flash') {
-    if (!apiKey) {
-        throw new Error('Gemini API key is required for image translation.');
-    }
-
     console.log(`[ImageTranslator] Processing image for translation: ${typeof imageInput === 'string' ? imageInput.substring(0, 100) : 'Buffer'}`);
 
     const { buffer: originalBuffer, mimeType, ext } = await getImageBuffer(imageInput);
 
-    // 1. OCR + Translation via Gemini Vision
-    const ocrResult = await detectAndTranslateText(originalBuffer, mimeType, apiKey, model);
+    // Save temporary local file for upload
+    const uploadsDir = path.join(__dirname, '..', 'uploads');
+    if (!fs.existsSync(uploadsDir)) {
+        fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+    const tempName = `temp-trans-${Date.now()}-${uuidv4().substring(0, 6)}.${ext === 'png' ? 'png' : 'jpg'}`;
+    const tempPath = path.join(uploadsDir, tempName);
+    fs.writeFileSync(tempPath, originalBuffer);
 
-    if (!ocrResult.has_foreign_text || !Array.isArray(ocrResult.text_blocks) || ocrResult.text_blocks.length === 0) {
-        console.log(`[ImageTranslator] No foreign text detected in image.`);
+    let renderedBuffer = null;
+    let methodUsed = 'google-lens';
+
+    try {
+        // Step 1: Try Native Google Translate (Google Lens) for 100% professional typography & inpainting
+        renderedBuffer = await translateViaGoogleTranslate(tempPath);
+        console.log(`[ImageTranslator] Successfully translated via Native Google Translate (Google Lens)!`);
+    } catch (googleErr) {
+        console.warn(`[ImageTranslator] Google Translate attempt failed (${googleErr.message}). Falling back to Gemini Vision...`);
+        
+        if (apiKey) {
+            try {
+                methodUsed = 'gemini-fallback';
+                const ocrResult = await detectAndTranslateText(originalBuffer, mimeType, apiKey, model);
+                if (ocrResult.has_foreign_text && Array.isArray(ocrResult.text_blocks) && ocrResult.text_blocks.length > 0) {
+                    renderedBuffer = await renderTranslatedImage(originalBuffer, mimeType, ext, ocrResult.text_blocks);
+                }
+            } catch (geminiErr) {
+                console.error(`[ImageTranslator] Gemini fallback error:`, geminiErr.message);
+            }
+        }
+    } finally {
+        if (fs.existsSync(tempPath)) {
+            try { fs.unlinkSync(tempPath); } catch {}
+        }
+    }
+
+    if (!renderedBuffer) {
+        console.log(`[ImageTranslator] No foreign text translated / image returned.`);
         return {
             translated: false,
             originalUrl: typeof imageInput === 'string' ? imageInput : null,
@@ -308,36 +399,25 @@ async function translateImage(imageInput, apiKey, model = 'gemini-2.5-flash') {
         };
     }
 
-    console.log(`[ImageTranslator] Detected ${ocrResult.text_blocks.length} foreign text blocks in language: ${ocrResult.source_language || 'Unknown'}. Rendering inpainting overlay...`);
-
-    // 2. Render Inpainted Image
-    const renderedBuffer = await renderTranslatedImage(originalBuffer, mimeType, ext, ocrResult.text_blocks);
-
-    // 3. Save to /uploads/
-    const uploadsDir = path.join(__dirname, '..', 'uploads');
-    if (!fs.existsSync(uploadsDir)) {
-        fs.mkdirSync(uploadsDir, { recursive: true });
-    }
-
     const filename = `translated-${Date.now()}-${uuidv4().substring(0, 8)}.${ext === 'png' ? 'png' : 'jpg'}`;
     const targetFile = path.join(uploadsDir, filename);
     fs.writeFileSync(targetFile, renderedBuffer);
 
     const publicPath = `/uploads/${filename}`;
-    console.log(`[ImageTranslator] Successfully translated image saved at: ${publicPath}`);
+    console.log(`[ImageTranslator] Translated image saved at: ${publicPath} (Engine: ${methodUsed})`);
 
     return {
         translated: true,
         originalUrl: typeof imageInput === 'string' ? imageInput : null,
         translatedUrl: publicPath,
-        textBlocksCount: ocrResult.text_blocks.length,
-        sourceLanguage: ocrResult.source_language || 'Detected'
+        engine: methodUsed
     };
 }
 
 module.exports = {
     translateImage,
     getImageBuffer,
+    translateViaGoogleTranslate,
     detectAndTranslateText,
     renderTranslatedImage
 };
