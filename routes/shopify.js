@@ -7,6 +7,7 @@ const multer = require('multer');
 const geminiService = require('../services/gemini');
 const fetch = require('node-fetch');
 const { getStorage, saveStorage } = require('../services/storage');
+const imageTranslator = require('../services/imageTranslator');
 
 // Multer for video uploads in this route
 const videoUpload = multer({
@@ -339,17 +340,17 @@ router.get('/collections', async (req, res) => {
 // 4. Scrape Product Details and fetch suggested collections
 router.get('/scrape', async (req, res) => {
     try {
-        const { url, storeId } = req.query;
+        const { url, storeId, autoTranslateImages } = req.query;
         if (!url || !storeId) {
-            return res.status(400).json({ error: 'Product URL and Store Selection are required.' });
+            return res.status(400).json({ error: 'Product URL and storeId are required.' });
         }
 
-        // Parse target URL and append .js
-        const parsedUrl = new URL(url);
-        parsedUrl.search = '';
-        const jsUrl = parsedUrl.origin + parsedUrl.pathname + '.js';
+        // Convert Product URL to .js JSON URL
+        let jsUrl = url.split('?')[0].replace(/\/$/, '');
+        if (!jsUrl.endsWith('.js')) {
+            jsUrl = `${jsUrl}.js`;
+        }
 
-        console.log(`Scraping Shopify product metadata from: ${jsUrl}`);
         const scrapeRes = await fetch(jsUrl);
         if (!scrapeRes.ok) {
             throw new Error(`Failed to scrape target product page. Shopify returned status ${scrapeRes.status}`);
@@ -360,7 +361,7 @@ router.get('/scrape', async (req, res) => {
         const storage = getStorage();
         const store = (storage.shopifyStores || []).find(s => s.id === storeId);
         if (!store) {
-            return res.status(400).json({ error: 'Selected shopify store config not found.' });
+            return res.status(400).json({ error: 'Selected store not found.' });
         }
 
         // Fetch user store's collections
@@ -371,7 +372,7 @@ router.get('/scrape', async (req, res) => {
         const geminiModel = storage.settings?.geminiModel || 'gemini-1.5-flash';
 
         if (geminiApiKey) {
-            await translateProductToEnglish(product, geminiApiKey, geminiModel);
+            await translateProductToEnglish(product, geminiApiKey, geminiModel, autoTranslateImages === 'true' || autoTranslateImages === true);
         }
 
         let suggestedCollectionIds = [];
@@ -1309,7 +1310,7 @@ router.post('/universal-import', videoUpload.array('files', 20), async (req, res
                 const product = await scrapeRes.json();
 
                 if (geminiApiKey) {
-                    await translateProductToEnglish(product, geminiApiKey, geminiModel);
+                    await translateProductToEnglish(product, geminiApiKey, geminiModel, req.body.autoTranslateImages === 'true' || req.body.autoTranslateImages === true);
                 }
 
                 // Format options and images
@@ -1752,6 +1753,74 @@ router.post('/upload-scraped-images', videoUpload.array('files', 10), (req, res)
     }
 });
 
+// Endpoint to translate text inside a single image to English
+router.post('/translate-image', async (req, res) => {
+    try {
+        const { imageUrl } = req.body;
+        if (!imageUrl) {
+            return res.status(400).json({ error: 'imageUrl is required' });
+        }
+
+        const storage = getStorage();
+        const geminiApiKey = storage.settings?.geminiApiKey;
+        const geminiModel = storage.settings?.geminiModel || 'gemini-2.5-flash';
+
+        if (!geminiApiKey) {
+            return res.status(400).json({ error: 'Gemini API key is not configured in Settings.' });
+        }
+
+        const result = await imageTranslator.translateImage(imageUrl, geminiApiKey, geminiModel);
+        res.json({ success: true, ...result });
+    } catch (error) {
+        console.error('[TranslateImage] Error:', error.message);
+        res.status(500).json({ error: 'Failed to translate image', details: error.message });
+    }
+});
+
+// Endpoint to batch-translate multiple images
+router.post('/translate-all-images', async (req, res) => {
+    try {
+        const { images } = req.body;
+        if (!Array.isArray(images) || images.length === 0) {
+            return res.status(400).json({ error: 'images array is required' });
+        }
+
+        const storage = getStorage();
+        const geminiApiKey = storage.settings?.geminiApiKey;
+        const geminiModel = storage.settings?.geminiModel || 'gemini-2.5-flash';
+
+        if (!geminiApiKey) {
+            return res.status(400).json({ error: 'Gemini API key is not configured in Settings.' });
+        }
+
+        const results = [];
+        for (const imgUrl of images) {
+            try {
+                const resItem = await imageTranslator.translateImage(imgUrl, geminiApiKey, geminiModel);
+                results.push({
+                    originalUrl: imgUrl,
+                    translatedUrl: resItem.translatedUrl || imgUrl,
+                    translated: resItem.translated,
+                    textBlocksCount: resItem.textBlocksCount || 0
+                });
+            } catch (err) {
+                console.error(`[TranslateAllImages] Failed for ${imgUrl}:`, err.message);
+                results.push({
+                    originalUrl: imgUrl,
+                    translatedUrl: imgUrl,
+                    translated: false,
+                    error: err.message
+                });
+            }
+        }
+
+        res.json({ success: true, results });
+    } catch (error) {
+        console.error('[TranslateAllImages] Error:', error.message);
+        res.status(500).json({ error: 'Failed to batch translate images', details: error.message });
+    }
+});
+
 // 8. Assign extracted images to variant values using Gemini Vision
 router.post('/assign-variant-images', async (req, res) => {
     try {
@@ -1864,7 +1933,7 @@ function autoAppendSizeCharts(product, storage) {
     }
 }
 
-async function translateProductToEnglish(product, geminiApiKey, geminiModel) {
+async function translateProductToEnglish(product, geminiApiKey, geminiModel, autoTranslateImages = true) {
     if (!geminiApiKey) return product;
 
     try {
@@ -1956,6 +2025,46 @@ Return ONLY valid JSON in this exact shape:
                     variant.title = activeOptions.join(' / ');
                 }
             });
+        }
+
+        // Auto-translate product images automatically on import
+        if (autoTranslateImages !== false && Array.isArray(product.images) && product.images.length > 0) {
+            console.log(`[Translate] Auto-translating text inside ${product.images.length} product images...`);
+            for (let i = 0; i < product.images.length; i++) {
+                const oldImg = product.images[i];
+                try {
+                    const imgRes = await imageTranslator.translateImage(oldImg, geminiApiKey, geminiModel);
+                    if (imgRes.translated && imgRes.translatedUrl) {
+                        product.images[i] = imgRes.translatedUrl;
+                        if (product.description && typeof product.description === 'string') {
+                            product.description = product.description.split(oldImg).join(imgRes.translatedUrl);
+                        }
+                    }
+                } catch (imgErr) {
+                    console.warn(`[Translate] Image translation skipped for index ${i}:`, imgErr.message);
+                }
+            }
+        }
+
+        // Also check if description HTML has any additional non-gallery images (like embedded size charts)
+        if (autoTranslateImages !== false && product.description && typeof product.description === 'string') {
+            const imgMatches = product.description.match(/<img[^>]+src=["']([^"']+)["']/gi);
+            if (imgMatches) {
+                for (const match of imgMatches) {
+                    const srcMatch = match.match(/src=["']([^"']+)["']/i);
+                    const imgSrc = srcMatch ? srcMatch[1] : null;
+                    if (imgSrc && !product.images.includes(imgSrc) && !imgSrc.includes('/uploads/translated-')) {
+                        try {
+                            const imgRes = await imageTranslator.translateImage(imgSrc, geminiApiKey, geminiModel);
+                            if (imgRes.translated && imgRes.translatedUrl) {
+                                product.description = product.description.split(imgSrc).join(imgRes.translatedUrl);
+                            }
+                        } catch (e) {
+                            console.warn(`[Translate] Description inline image translation skipped:`, e.message);
+                        }
+                    }
+                }
+            }
         }
 
         console.log(`[Translate] Successfully translated product to: ${product.title}`);
