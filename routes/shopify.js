@@ -372,7 +372,7 @@ router.get('/scrape', async (req, res) => {
         const geminiModel = storage.settings?.geminiModel || 'gemini-1.5-flash';
 
         if (geminiApiKey) {
-            await translateProductToEnglish(product, geminiApiKey, geminiModel, autoTranslateImages === 'true' || autoTranslateImages === true);
+            await translateProductToEnglish(product, geminiApiKey, geminiModel, true);
         }
 
         let suggestedCollectionIds = [];
@@ -1310,7 +1310,7 @@ router.post('/universal-import', videoUpload.array('files', 20), async (req, res
                 const product = await scrapeRes.json();
 
                 if (geminiApiKey) {
-                    await translateProductToEnglish(product, geminiApiKey, geminiModel, req.body.autoTranslateImages === 'true' || req.body.autoTranslateImages === true);
+                    await translateProductToEnglish(product, geminiApiKey, geminiModel, true);
                 }
 
                 // Format options and images
