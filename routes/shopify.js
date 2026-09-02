@@ -1936,10 +1936,10 @@ function autoAppendSizeCharts(product, storage) {
 async function translateProductToEnglish(product, geminiApiKey, geminiModel, autoTranslateImages = true) {
     if (!geminiApiKey) return product;
 
+    // 1. Text Translation (Title, Description, Options, Variants)
     try {
         console.log(`[Translate] Starting translation to English for product: ${product.title}`);
         
-        // Prepare simplified options for translation
         const simplifiedOptions = (product.options || []).map(opt => ({
             name: opt.name,
             values: opt.values
@@ -1965,124 +1965,102 @@ Return ONLY valid JSON in this exact shape:
   "title": "Translated Title",
   "description": "Translated HTML Description",
   "options": [
-    { "name": "Translated Option Name", "values": ["Translated Value 1", "Translated Value 2", ...] },
-    ...
+    { "name": "Translated Option Name", "values": ["Translated Value 1", "Translated Value 2", ...] }
   ]
 }`;
 
         const suggestion = await geminiService.generateResponseText(geminiApiKey, geminiModel, prompt);
-        const jsonMatch = suggestion.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) throw new Error('No JSON object returned by Gemini');
-        const translated = JSON.parse(jsonMatch[0]);
+        const jsonMatch = suggestion ? suggestion.match(/\{[\s\S]*\}/) : null;
+        if (jsonMatch) {
+            const translated = JSON.parse(jsonMatch[0]);
 
-        if (translated.title) {
-            product.title = translated.title;
-        }
-        if (translated.description) {
-            product.description = translated.description;
-        }
+            if (translated.title) {
+                product.title = translated.title;
+            }
+            if (translated.description) {
+                product.description = translated.description;
+            }
 
-        // Map old option values to new translated values to translate variants
-        const translationMap = {}; // old_value -> new_value
-        if (Array.isArray(translated.options) && Array.isArray(product.options)) {
-            translated.options.forEach((newOpt, optIdx) => {
-                const oldOpt = product.options[optIdx];
-                if (oldOpt) {
-                    // Update option name
-                    oldOpt.name = newOpt.name;
-                    
-                    // Map values
-                    if (Array.isArray(newOpt.values) && Array.isArray(oldOpt.values)) {
-                        oldOpt.values.forEach((oldVal, valIdx) => {
-                            const newVal = newOpt.values[valIdx];
-                            if (newVal) {
-                                translationMap[oldVal] = newVal;
-                            }
-                        });
-                        // Update option values
-                        oldOpt.values = newOpt.values;
+            const translationMap = {};
+            if (Array.isArray(translated.options) && Array.isArray(product.options)) {
+                translated.options.forEach((newOpt, optIdx) => {
+                    const oldOpt = product.options[optIdx];
+                    if (oldOpt) {
+                        oldOpt.name = newOpt.name;
+                        if (Array.isArray(newOpt.values) && Array.isArray(oldOpt.values)) {
+                            oldOpt.values.forEach((oldVal, valIdx) => {
+                                const newVal = newOpt.values[valIdx];
+                                if (newVal) translationMap[oldVal] = newVal;
+                            });
+                            oldOpt.values = newOpt.values;
+                        }
                     }
-                }
-            });
+                });
+            }
+
+            if (Array.isArray(product.variants)) {
+                product.variants.forEach(variant => {
+                    if (variant.option1 && translationMap[variant.option1]) variant.option1 = translationMap[variant.option1];
+                    if (variant.option2 && translationMap[variant.option2]) variant.option2 = translationMap[variant.option2];
+                    if (variant.option3 && translationMap[variant.option3]) variant.option3 = translationMap[variant.option3];
+
+                    const activeOptions = [variant.option1, variant.option2, variant.option3].filter(Boolean);
+                    if (activeOptions.length > 0) {
+                        variant.title = activeOptions.join(' / ');
+                    }
+                });
+            }
+            console.log(`[Translate] Successfully translated text to: ${product.title}`);
         }
+    } catch (textErr) {
+        console.error('[Translate] Text translation error:', textErr.message);
+    }
 
-        // Translate variant option1, option2, option3 and titles
-        if (Array.isArray(product.variants)) {
-            product.variants.forEach(variant => {
-                if (variant.option1 && translationMap[variant.option1]) {
-                    variant.option1 = translationMap[variant.option1];
-                }
-                if (variant.option2 && translationMap[variant.option2]) {
-                    variant.option2 = translationMap[variant.option2];
-                }
-                if (variant.option3 && translationMap[variant.option3]) {
-                    variant.option3 = translationMap[variant.option3];
-                }
-
-                // Re-build variant title from option values
-                const activeOptions = [variant.option1, variant.option2, variant.option3].filter(Boolean);
-                if (activeOptions.length > 0) {
-                    variant.title = activeOptions.join(' / ');
-                }
-            });
-        }
-
-        // Auto-translate product images automatically on import with smart concurrency
-        if (autoTranslateImages !== false && Array.isArray(product.images) && product.images.length > 0) {
-            console.log(`[Translate] Auto-translating text inside ${product.images.length} product images...`);
-            
-            // Process images concurrently in chunks of 3
-            const chunkSize = 3;
-            for (let i = 0; i < product.images.length; i += chunkSize) {
-                const chunk = product.images.slice(i, i + chunkSize);
-                await Promise.all(chunk.map(async (oldImg, chunkIdx) => {
-                    const actualIdx = i + chunkIdx;
+    // 2. Direct Image Translation via Google Translate (One by One)
+    if (autoTranslateImages !== false) {
+        try {
+            // A. Gallery Images (One by One)
+            if (Array.isArray(product.images) && product.images.length > 0) {
+                console.log(`[Translate] Translating ${product.images.length} gallery images one by one via Google Translate...`);
+                for (let i = 0; i < product.images.length; i++) {
+                    const oldImg = product.images[i];
                     try {
                         const imgRes = await imageTranslator.translateImage(oldImg, geminiApiKey, geminiModel);
                         if (imgRes.translated && imgRes.translatedUrl) {
-                            product.images[actualIdx] = imgRes.translatedUrl;
+                            product.images[i] = imgRes.translatedUrl;
                             if (product.description && typeof product.description === 'string') {
                                 product.description = product.description.split(oldImg).join(imgRes.translatedUrl);
                             }
                         }
                     } catch (imgErr) {
-                        console.warn(`[Translate] Image translation skipped for index ${actualIdx}:`, imgErr.message);
-                    }
-                }));
-            }
-        }
-
-        // Also check if description HTML has any additional non-gallery images (like embedded size charts)
-        if (autoTranslateImages !== false && product.description && typeof product.description === 'string') {
-            const imgMatches = product.description.match(/<img[^>]+src=["']([^"']+)["']/gi);
-            if (imgMatches) {
-                const extraImgSrcs = [];
-                for (const match of imgMatches) {
-                    const srcMatch = match.match(/src=["']([^"']+)["']/i);
-                    const imgSrc = srcMatch ? srcMatch[1] : null;
-                    if (imgSrc && !product.images.includes(imgSrc) && !imgSrc.includes('/uploads/translated-') && !extraImgSrcs.includes(imgSrc)) {
-                        extraImgSrcs.push(imgSrc);
+                        console.warn(`[Translate] Gallery image ${i} skipped:`, imgErr.message);
                     }
                 }
+            }
 
-                if (extraImgSrcs.length > 0) {
-                    await Promise.all(extraImgSrcs.map(async (imgSrc) => {
-                        try {
-                            const imgRes = await imageTranslator.translateImage(imgSrc, geminiApiKey, geminiModel);
-                            if (imgRes.translated && imgRes.translatedUrl) {
-                                product.description = product.description.split(imgSrc).join(imgRes.translatedUrl);
+            // B. Embedded Description Images (e.g. Size Charts in Description HTML) (One by One)
+            if (product.description && typeof product.description === 'string') {
+                const imgMatches = product.description.match(/<img[^>]+src=["']([^"']+)["']/gi);
+                if (imgMatches) {
+                    for (const match of imgMatches) {
+                        const srcMatch = match.match(/src=["']([^"']+)["']/i);
+                        const imgSrc = srcMatch ? srcMatch[1] : null;
+                        if (imgSrc && !product.images.includes(imgSrc) && !imgSrc.includes('/uploads/translated-')) {
+                            try {
+                                const imgRes = await imageTranslator.translateImage(imgSrc, geminiApiKey, geminiModel);
+                                if (imgRes.translated && imgRes.translatedUrl) {
+                                    product.description = product.description.split(imgSrc).join(imgRes.translatedUrl);
+                                }
+                            } catch (e) {
+                                console.warn(`[Translate] Inline description image skipped:`, e.message);
                             }
-                        } catch (e) {
-                            console.warn(`[Translate] Description inline image translation skipped:`, e.message);
                         }
-                    }));
+                    }
                 }
             }
+        } catch (imgLoopErr) {
+            console.error('[Translate] Image translation loop error:', imgLoopErr.message);
         }
-
-        console.log(`[Translate] Successfully translated product to: ${product.title}`);
-    } catch (err) {
-        console.error('[Translate] Translation failed, returning original product data:', err.message);
     }
 
     return product;
