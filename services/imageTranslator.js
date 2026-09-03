@@ -164,6 +164,9 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                         continue;
                     }
 
+                    // Warm-up delay: Give Google Lens WebAssembly/WebGL OCR models 2.5s to initialize!
+                    await new Promise(r => setTimeout(r, 2500));
+
                     // Record existing files in Downloads folder
                     const downloadsDir = path.join(process.env.USERPROFILE || 'C:\\Users\\HP-PC', 'Downloads');
                     let beforeDownloads = [];
@@ -187,8 +190,6 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                         // If Google Lens finished translating on server:
                         if (rpcDone) {
                             hasTranslation = true;
-                            // Wait 1.2s for Google Translate DOM to render before clicking download
-                            await new Promise(r => setTimeout(r, 1200));
                             break;
                         }
 
@@ -205,6 +206,9 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                     }
 
                     if (hasTranslation) {
+                        // Canvas Settle Delay: Give Google Translate 2.5s to bake the in-painted canvas into downloadable memory!
+                        await new Promise(r => setTimeout(r, 2500));
+
                         // Click Download translation button to get true in-painted image
                         await page.evaluate(() => {
                             const dlBtn = Array.from(document.querySelectorAll('button, a')).find(b => {
