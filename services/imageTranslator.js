@@ -146,40 +146,40 @@ async function translateMultipleImages(imageList) {
                         continue;
                     }
 
-                    // Ensure Images tab is active
+                    const fileExt = cleanExt === 'png' ? 'png' : cleanExt === 'webp' ? 'webp' : 'jpg';
+                    const tempName = `temp-w${workerId}-${Date.now()}-${uuidv4().substring(0, 6)}.${fileExt}`;
+                    tempPath = path.join(uploadsDir, tempName);
+                    fs.writeFileSync(tempPath, originalBuffer);
+
+                    // Ensure Images tab is active and clear any old state
                     await page.evaluate(() => {
                         const imgTab = Array.from(document.querySelectorAll('button, a')).find(el => (el.innerText || '').trim() === 'Images');
                         if (imgTab) imgTab.click();
                         const gotItBtn = Array.from(document.querySelectorAll('button')).find(b => (b.innerText || '').toLowerCase().includes('got it'));
                         if (gotItBtn) gotItBtn.click();
-                        const clearBtn = document.querySelector('button[aria-label="Clear image"]');
-                        if (clearBtn) clearBtn.click();
                     });
-                    await new Promise(r => setTimeout(r, 300));
 
-                    // Inject image via native in-memory DataTransfer + Paste event (100% format compatible, 0 disk errors!)
-                    const mimeType = cleanExt === 'png' ? 'image/png' : cleanExt === 'webp' ? 'image/webp' : 'image/jpeg';
-                    const filename = `image.${cleanExt === 'png' ? 'png' : cleanExt === 'webp' ? 'webp' : 'jpg'}`;
+                    // If a previous image was translated, click (X) Clear image first
+                    const clearBtn = await page.$('button[aria-label="Clear image"]');
+                    if (clearBtn) {
+                        await clearBtn.click();
+                        await new Promise(r => setTimeout(r, 400));
+                    }
 
-                    await page.evaluate((base64Data, mime, fname) => {
-                        const byteCharacters = atob(base64Data);
-                        const byteNumbers = new Array(byteCharacters.length);
-                        for (let j = 0; j < byteCharacters.length; j++) {
-                            byteNumbers[j] = byteCharacters.charCodeAt(j);
-                        }
-                        const byteArray = new Uint8Array(byteNumbers);
-                        const blob = new Blob([byteArray], { type: mime });
-                        const file = new File([blob], fname, { type: mime });
-
-                        const dt = new DataTransfer();
-                        dt.items.add(file);
-
-                        // Drop file directly into the Google Translate dropzone
-                        const dropzone = document.querySelector('[role="region"]') || document.body;
-                        dropzone.dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: dt }));
-                        dropzone.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
-                        dropzone.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
-                    }, originalBuffer.toString('base64'), mimeType, filename);
+                    // Native Human-like File Upload
+                    let fileInput = await page.$('input[type="file"]');
+                    if (fileInput) {
+                        await fileInput.uploadFile(tempPath);
+                    } else {
+                        const [fileChooser] = await Promise.all([
+                            page.waitForFileChooser(),
+                            page.evaluate(() => {
+                                const b = Array.from(document.querySelectorAll('button')).find(el => (el.innerText || '').includes('Browse your files'));
+                                if (b) b.click();
+                            })
+                        ]);
+                        await fileChooser.accept([tempPath]);
+                    }
 
                     // Smart Polling: Wait up to 6s max
                     // If download button appears -> Translated text ready!
@@ -255,9 +255,9 @@ async function translateMultipleImages(imageList) {
                     }
 
                     // Click (X) Clear image button to instantly reset dropzone for the next image!
-                    const clearBtn = await page.$('button[aria-label="Clear image"]');
-                    if (clearBtn) {
-                        await clearBtn.click();
+                    const resetBtn = await page.$('button[aria-label="Clear image"]');
+                    if (resetBtn) {
+                        await resetBtn.click();
                         await new Promise(r => setTimeout(r, 400));
                     }
                 } catch (err) {
@@ -265,8 +265,8 @@ async function translateMultipleImages(imageList) {
                     allResults[originalIdx] = { original: imgInput, translated: false };
 
                     try {
-                        const clearBtn = await page.$('button[aria-label="Clear image"]');
-                        if (clearBtn) await clearBtn.click();
+                        const errClearBtn = await page.$('button[aria-label="Clear image"]');
+                        if (errClearBtn) await errClearBtn.click();
                     } catch {}
                 } finally {
                     if (tempPath && fs.existsSync(tempPath)) {

@@ -89,6 +89,7 @@ async function ensureBrowser() {
 
         let launchOpts = {
             headless: isLinux ? 'new' : false, // Visible real Chrome on Windows
+            ignoreDefaultArgs: ['--enable-automation'], // REMOVES "Chrome is being controlled by automated test software" BANNER!
             args: launchArgs,
             defaultViewport: null,
             timeout: 30000,
