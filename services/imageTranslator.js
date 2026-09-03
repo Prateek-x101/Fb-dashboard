@@ -1,61 +1,52 @@
+const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
 const fetch = require('node-fetch');
 const { v4: uuidv4 } = require('uuid');
-const browserPool = require('./browserPool');
 
 /**
- * Fetch an image from a URL or local file and return { buffer, mimeType, ext }
+ * Cleanly download or resolve an image to a local file on disk
  */
-async function getImageBuffer(input) {
-    if (Buffer.isBuffer(input)) {
-        return { buffer: input, mimeType: 'image/jpeg', ext: 'jpg' };
-    }
-
+async function getLocalImageFile(input, uploadsDir) {
     if (typeof input === 'string') {
         let cleanInput = input.trim();
-        if (cleanInput.startsWith('//')) {
-            cleanInput = 'https:' + cleanInput;
-        }
+        if (cleanInput.startsWith('//')) cleanInput = 'https:' + cleanInput;
 
-        // Local upload path (e.g. /uploads/123.jpg or full path)
+        // Local upload path (e.g. /uploads/123.jpg or uploads/123.jpg)
         if (cleanInput.startsWith('/uploads/') || cleanInput.startsWith('uploads/')) {
             const relPath = cleanInput.replace(/^\/?uploads\//, '');
-            const localFile = path.join(__dirname, '..', 'uploads', relPath);
+            const localFile = path.join(uploadsDir, relPath);
             if (fs.existsSync(localFile)) {
-                const buffer = fs.readFileSync(localFile);
-                const ext = path.extname(localFile).replace('.', '').toLowerCase() || 'jpg';
-                const mimeType = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
-                return { buffer, mimeType, ext };
+                return { localPath: localFile, isTemp: false };
             }
         }
 
         if (fs.existsSync(cleanInput) && !cleanInput.startsWith('http')) {
-            const buffer = fs.readFileSync(cleanInput);
-            const ext = path.extname(cleanInput).replace('.', '').toLowerCase() || 'jpg';
-            const mimeType = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
-            return { buffer, mimeType, ext };
+            return { localPath: cleanInput, isTemp: false };
         }
 
-        // Remote URL
+        // Remote URL (Shopify CDN, etc.)
         if (cleanInput.startsWith('http://') || cleanInput.startsWith('https://')) {
-            const response = await fetch(cleanInput, {
+            const resp = await fetch(cleanInput, {
                 headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
                 },
-                timeout: 20000
+                timeout: 25000
             });
-            if (!response.ok) {
-                throw new Error(`Failed to fetch image: HTTP ${response.status}`);
-            }
-            const arrayBuffer = await response.arrayBuffer();
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+            const arrayBuffer = await resp.arrayBuffer();
             const buffer = Buffer.from(arrayBuffer);
-            const contentType = response.headers.get('content-type') || '';
+            const contentType = resp.headers.get('content-type') || '';
             let ext = 'jpg';
-            if (contentType.includes('png')) ext = 'png';
-            else if (contentType.includes('webp')) ext = 'webp';
-            else if (contentType.includes('gif')) ext = 'gif';
-            return { buffer, mimeType: contentType || 'image/jpeg', ext };
+            if (contentType.includes('png') || cleanInput.includes('.png')) ext = 'png';
+            else if (contentType.includes('webp') || cleanInput.includes('.webp')) ext = 'webp';
+            else if (contentType.includes('gif') || cleanInput.includes('.gif')) ext = 'gif';
+
+            const tempName = `temp-${Date.now()}-${uuidv4().substring(0, 8)}.${ext}`;
+            const tempFile = path.join(uploadsDir, tempName);
+            fs.writeFileSync(tempFile, buffer);
+            return { localPath: tempFile, isTemp: true, ext };
         }
     }
 
@@ -63,10 +54,11 @@ async function getImageBuffer(input) {
 }
 
 /**
- * Super-Fast Dual-Worker Pipeline with (X) Clear Button:
- * - Accurately detects images WITH foreign text (translates & in-paints).
- * - Accurately detects images WITHOUT foreign text (cleanly skips in 3.5s without timeout errors).
- * - 0 timeouts, 0 rate limits, 0 abuse errors.
+ * Translate multiple images using the proven Human-Like Google Translate & Google Lens Engine:
+ * - Fresh session per image (Bypasses Google Clear-button download bug)
+ * - 3s Warm-up delay for WebAssembly & OCR models to initialize
+ * - 3s Canvas Settle delay to bake the in-painted canvas into downloadable memory
+ * - Universal sl=auto & tl=en (translates German, French, Spanish, tables, charts, numbers flawlessly)
  */
 async function translateMultipleImages(imageList, sourceLang = 'auto') {
     if (!Array.isArray(imageList) || imageList.length === 0) {
@@ -74,233 +66,189 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
     }
 
     const uploadsDir = path.join(__dirname, '..', 'uploads');
-    if (!fs.existsSync(uploadsDir)) {
-        fs.mkdirSync(uploadsDir, { recursive: true });
+    if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+
+    const downloadsDir = path.join(process.env.USERPROFILE || 'C:\\Users\\HP-PC', 'Downloads');
+    const isLinux = process.platform === 'linux';
+
+    console.log(`[GoogleTranslate] Starting translation session for ${imageList.length} images...`);
+
+    const chromePath = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+    let browser = null;
+
+    try {
+        if (isLinux) {
+            const chromium = require('@sparticuz/chromium');
+            browser = await puppeteer.launch({
+                args: chromium.args,
+                defaultViewport: chromium.defaultViewport,
+                executablePath: await chromium.executablePath(),
+                headless: chromium.headless,
+                ignoreHTTPSErrors: true
+            });
+        } else {
+            browser = await puppeteer.launch({
+                executablePath: fs.existsSync(chromePath) ? chromePath : undefined,
+                headless: false, // Visible real Chrome
+                defaultViewport: null,
+                ignoreDefaultArgs: ['--enable-automation'],
+                args: [
+                    '--start-maximized',
+                    '--no-sandbox',
+                    '--disable-blink-features=AutomationControlled',
+                    '--enable-gpu',
+                    '--enable-webgl',
+                    '--no-first-run',
+                    '--no-default-browser-check'
+                ]
+            });
+        }
+    } catch (launchErr) {
+        console.error('[GoogleTranslate] Failed to launch Chrome:', launchErr.message);
+        return imageList.map(img => ({ original: img, translated: false }));
     }
 
-    const NUM_WORKERS = 1; // 1 single tab is 100x more stable and translates each image in 1.5s!
-    const workerQueues = [imageList.map((img, idx) => ({ img, index: idx }))];
+    const page = await browser.newPage();
+    const allResults = [];
 
-    console.log(`[GoogleTranslate] Starting single dedicated tab for ${imageList.length} images (source language: ${sourceLang})...`);
+    for (let i = 0; i < imageList.length; i++) {
+        const imgInput = imageList[i];
+        console.log(`\n[GoogleTranslate] Processing image [${i + 1}/${imageList.length}]: ${imgInput}`);
 
-    const allResults = new Array(imageList.length);
+        let localInfo = null;
+        try {
+            localInfo = await getLocalImageFile(imgInput, uploadsDir);
+            const ext = (path.extname(localInfo.localPath) || '').toLowerCase();
 
-    async function runWorker(workerId, queue) {
-        if (queue.length === 0) return;
+            // Skip animated gifs or video formats
+            if (ext === '.gif' || ext === '.svg' || ext === '.mp4') {
+                console.log(`[GoogleTranslate] Image [${i + 1}] is ${ext} - preserving original.`);
+                allResults.push({ original: imgInput, translated: false });
+                continue;
+            }
 
-        return await browserPool.withTab(async (page) => {
-            await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36');
-            await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9,hi;q=0.8' });
-
-            const targetUrl = `https://translate.google.co.in/?sl=${sourceLang || 'auto'}&tl=en&op=images`;
-            console.log(`[GoogleTranslate] Loading Google Translate images page (${targetUrl})...`);
-            await page.goto(targetUrl, {
+            // Step 1: Fresh Google Translate session for this image
+            console.log(`[GoogleTranslate] Loading fresh Google Translate session...`);
+            await page.goto('https://translate.google.co.in/?sl=auto&tl=en&op=images', {
                 waitUntil: 'networkidle2',
                 timeout: 35000
             });
+            await page.waitForSelector('input[accept*="image"]', { timeout: 15000 });
 
-            // Ensure the "Images" tab is actively selected
-            await page.evaluate(() => {
-                const imgTab = Array.from(document.querySelectorAll('button, a')).find(el => (el.innerText || '').trim() === 'Images');
-                if (imgTab) imgTab.click();
-            });
-            await new Promise(r => setTimeout(r, 600));
+            // Step 2: 3s WARM-UP DELAY for Google Lens WebAssembly & OCR models
+            console.log(`[GoogleTranslate] [3s Warm-Up Delay] Initializing OCR models...`);
+            await new Promise(r => setTimeout(r, 3000));
 
-            // Wait for image file input to confirm page is ready
-            try {
-                await page.waitForSelector('input[accept*="image"]', { timeout: 10000 });
-            } catch (e) {
-                await page.evaluate(() => {
-                    const imgTab = Array.from(document.querySelectorAll('button, a')).find(el => (el.innerText || '').trim() === 'Images');
-                    if (imgTab) imgTab.click();
+            const beforeDownloads = fs.existsSync(downloadsDir) ? fs.readdirSync(downloadsDir) : [];
+            const imageInput = await page.$('input[accept*="image"]');
+
+            console.log(`[GoogleTranslate] Uploading image [${i + 1}] into Google Translate...`);
+            await imageInput.uploadFile(localInfo.localPath);
+
+            // Step 3: Wait for translation
+            let hasTranslation = false;
+            for (let poll = 0; poll < 35; poll++) {
+                await new Promise(r => setTimeout(r, 500));
+
+                const status = await page.evaluate(() => {
+                    const bodyText = document.body.innerText || '';
+                    const isTranslating = bodyText.includes('Translating');
+                    const dlBtn = Array.from(document.querySelectorAll('button, a')).find(b => {
+                        const a = (b.getAttribute('aria-label') || '').toLowerCase();
+                        const t = (b.innerText || '').toLowerCase();
+                        return a.includes('download') || t.includes('download');
+                    });
+                    return { isTranslating, hasDl: !!dlBtn };
                 });
-                await new Promise(r => setTimeout(r, 800));
-            }
 
-            // Dismiss cookie/consent dialogs if any
-            try {
-                const buttons = await page.$$('button');
-                for (const btn of buttons) {
-                    const text = await page.evaluate(el => el.innerText, btn);
-                    if (text && /accept all|agree|i agree|alle akzeptieren|zustimmen/i.test(text)) {
-                        await btn.click();
-                        await new Promise(r => setTimeout(r, 600));
+                if (!status.isTranslating && status.hasDl && poll >= 3) {
+                    console.log(`[GoogleTranslate] Translation complete in ${((poll + 1) * 0.5).toFixed(1)}s!`);
+                    hasTranslation = true;
+                    break;
+                }
+
+                // Check for "Can't detect text" toast after 5s of processing
+                if (poll >= 10) {
+                    const noText = await page.evaluate(() => {
+                        const bodyText = document.body.innerText || '';
+                        return bodyText.includes("Can't detect text") || bodyText.includes("could not detect text");
+                    });
+                    if (noText) {
+                        console.log(`[GoogleTranslate] Image [${i + 1}] has no foreign text - preserving original.`);
                         break;
                     }
                 }
-            } catch (e) {}
-
-            for (let i = 0; i < queue.length; i++) {
-                const { img: imgInput, index: originalIdx } = queue[i];
-                const imgStart = Date.now();
-                console.log(`[GoogleTranslate] Processing image [${i + 1}/${queue.length}]...`);
-
-                let tempPath = null;
-                try {
-                    const { buffer: originalBuffer, ext } = await getImageBuffer(imgInput);
-                    const cleanExt = (ext || '').toLowerCase();
-
-                    // Google Translate only supports static images (.jpg, .jpeg, .png, .webp)
-                    if (cleanExt === 'gif' || cleanExt === 'svg' || cleanExt === 'mp4' || cleanExt === 'mov') {
-                        console.log(`[GoogleTranslate] Skipping unsupported format (.${cleanExt}) for image [${i + 1}]`);
-                        allResults[originalIdx] = { original: imgInput, translated: false };
-                        continue;
-                    }
-
-                    const fileExt = cleanExt === 'png' ? 'png' : cleanExt === 'webp' ? 'webp' : 'jpg';
-                    const tempName = `temp-${Date.now()}-${uuidv4().substring(0, 6)}.${fileExt}`;
-                    tempPath = path.join(uploadsDir, tempName);
-                    fs.writeFileSync(tempPath, originalBuffer);
-
-                    // Load a fresh Google Translate session for each image (sl=auto guarantees all text/tables/numbers are recognized!)
-                    const targetUrl = `https://translate.google.co.in/?sl=auto&tl=en&op=images`;
-                    await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 35000 });
-                    await page.waitForSelector('input[accept*="image"]', { timeout: 15000 });
-
-                    const imageInput = await page.$('input[accept*="image"]');
-                    if (!imageInput) {
-                        console.error(`[GoogleTranslate] Could not find image input for image [${i + 1}]`);
-                        allResults[originalIdx] = { original: imgInput, translated: false };
-                        continue;
-                    }
-
-                    // Warm-up delay: Give Google Lens WebAssembly/WebGL OCR models 3s to initialize!
-                    await new Promise(r => setTimeout(r, 3000));
-
-                    // Record existing files in Downloads folder
-                    const downloadsDir = path.join(process.env.USERPROFILE || 'C:\\Users\\HP-PC', 'Downloads');
-                    let beforeDownloads = [];
-                    try { beforeDownloads = fs.readdirSync(downloadsDir); } catch {}
-
-                    // Listen for Google Lens server translation response (WqWDPb RPC)
-                    const rpcPromise = page.waitForResponse(resp => {
-                        return resp.url().includes('rpcids=WqWDPb') && resp.status() === 200;
-                    }, { timeout: 15000 }).catch(() => null);
-
-                    let rpcDone = false;
-                    rpcPromise.then(res => { if (res) rpcDone = true; });
-
-                    await imageInput.uploadFile(tempPath);
-
-                    // Wait for translation to process (Check both RPC and DOM!)
-                    let hasTranslation = false;
-                    for (let poll = 0; poll < 35; poll++) {
-                        await new Promise(r => setTimeout(r, 500));
-
-                        if (rpcDone) {
-                            hasTranslation = true;
-                            break;
-                        }
-
-                        const status = await page.evaluate(() => {
-                            const bodyText = document.body.innerText || '';
-                            const isTranslating = bodyText.includes('Translating');
-                            const dlBtn = Array.from(document.querySelectorAll('button, a')).find(b => {
-                                const a = (b.getAttribute('aria-label') || '').toLowerCase();
-                                const t = (b.innerText || '').toLowerCase();
-                                return a.includes('download') || t.includes('download');
-                            });
-                            return { isTranslating, hasDl: !!dlBtn };
-                        });
-
-                        if (!status.isTranslating && status.hasDl && poll >= 3) {
-                            hasTranslation = true;
-                            break;
-                        }
-
-                        // Check if Google explicitly showed no text toast after 5 seconds of analysis
-                        if (poll >= 10) {
-                            const noText = await page.evaluate(() => {
-                                const bodyText = document.body.innerText || '';
-                                return bodyText.includes("Can't detect text") || bodyText.includes("could not detect text");
-                            });
-                            if (noText) {
-                                console.log(`[GoogleTranslate] Image [${i + 1}] has no foreign text (verified in ${((poll + 1) * 0.5).toFixed(1)}s).`);
-                                break;
-                            }
-                        }
-                    }
-
-                    if (hasTranslation) {
-                        // Canvas Settle Delay: Give Google Translate 3s to bake the in-painted canvas into downloadable memory!
-                        await new Promise(r => setTimeout(r, 3000));
-
-                        // Click Download translation button to get true in-painted image
-                        await page.evaluate(() => {
-                            const dlBtn = Array.from(document.querySelectorAll('button, a')).find(b => {
-                                const a = (b.getAttribute('aria-label') || '').toLowerCase();
-                                const t = (b.innerText || '').toLowerCase();
-                                return a.includes('download') || t.includes('download');
-                            });
-                            if (dlBtn) dlBtn.click();
-                        });
-
-                        // Wait for downloaded file in Downloads folder
-                        let downloadedFile = null;
-                        for (let w = 0; w < 24; w++) {
-                            await new Promise(r => setTimeout(r, 250));
-                            try {
-                                const nowDownloads = fs.readdirSync(downloadsDir);
-                                const newFiles = nowDownloads.filter(f => !beforeDownloads.includes(f) && !f.endsWith('.crdownload') && !f.endsWith('.tmp'));
-                                if (newFiles.length > 0) {
-                                    downloadedFile = path.join(downloadsDir, newFiles[0]);
-                                    break;
-                                }
-                            } catch {}
-                        }
-
-                        if (downloadedFile && fs.existsSync(downloadedFile)) {
-                            const filename = `translated-${Date.now()}-${uuidv4().substring(0, 8)}.png`;
-                            const targetFile = path.join(uploadsDir, filename);
-                            fs.copyFileSync(downloadedFile, targetFile);
-                            try { fs.unlinkSync(downloadedFile); } catch {}
-
-                            const publicPath = `/uploads/${filename}`;
-                            console.log(`[GoogleTranslate] Image [${i + 1}] TRUE TRANSLATED IMAGE SAVED in ${((Date.now() - imgStart) / 1000).toFixed(1)}s -> ${publicPath}`);
-
-                            allResults[originalIdx] = {
-                                original: imgInput,
-                                translated: true,
-                                translatedUrl: publicPath
-                            };
-                        } else {
-                            allResults[originalIdx] = { original: imgInput, translated: false };
-                        }
-                    } else {
-                        // Untranslated photo (keep original untouched)
-                        allResults[originalIdx] = {
-                            original: imgInput,
-                            translated: false
-                        };
-                    }
-                } catch (err) {
-                    console.warn(`[GoogleTranslate] Image [${i + 1}] error: ${err.message}`);
-                    allResults[originalIdx] = { original: imgInput, translated: false };
-                } finally {
-                    if (tempPath && fs.existsSync(tempPath)) {
-                        try { fs.unlinkSync(tempPath); } catch {}
-                    }
-                }
             }
-        }, { blockImages: false, timeout: Math.max(60000, queue.length * 15000) });
+
+            if (hasTranslation) {
+                // Step 4: 3s CANVAS SETTLE DELAY to bake translated canvas into memory
+                console.log(`[GoogleTranslate] [3s Settle Delay] Baking canvas in memory...`);
+                await new Promise(r => setTimeout(r, 3000));
+
+                console.log(`[GoogleTranslate] Clicking Download translation button...`);
+                await page.evaluate(() => {
+                    const dlBtn = Array.from(document.querySelectorAll('button, a')).find(b => {
+                        const a = (b.getAttribute('aria-label') || '').toLowerCase();
+                        const t = (b.innerText || '').toLowerCase();
+                        return a.includes('download') || t.includes('download');
+                    });
+                    if (dlBtn) dlBtn.click();
+                });
+
+                // Step 5: Capture downloaded file
+                let downloadedFile = null;
+                for (let w = 0; w < 24; w++) {
+                    await new Promise(r => setTimeout(r, 250));
+                    try {
+                        const nowDownloads = fs.readdirSync(downloadsDir);
+                        const newFiles = nowDownloads.filter(f => !beforeDownloads.includes(f) && !f.endsWith('.crdownload') && !f.endsWith('.tmp'));
+                        if (newFiles.length > 0) {
+                            downloadedFile = path.join(downloadsDir, newFiles[0]);
+                            break;
+                        }
+                    } catch {}
+                }
+
+                if (downloadedFile && fs.existsSync(downloadedFile)) {
+                    const filename = `translated-${Date.now()}-${uuidv4().substring(0, 8)}.png`;
+                    const targetFile = path.join(uploadsDir, filename);
+                    fs.copyFileSync(downloadedFile, targetFile);
+                    try { fs.unlinkSync(downloadedFile); } catch {}
+
+                    const publicPath = `/uploads/${filename}`;
+                    console.log(`[GoogleTranslate] SUCCESS: Image [${i + 1}] saved to ${publicPath} (${fs.statSync(targetFile).size} bytes)`);
+
+                    allResults.push({
+                        original: imgInput,
+                        translated: true,
+                        translatedUrl: publicPath
+                    });
+                } else {
+                    console.warn(`[GoogleTranslate] Could not find downloaded file for image [${i + 1}]`);
+                    allResults.push({ original: imgInput, translated: false });
+                }
+            } else {
+                allResults.push({ original: imgInput, translated: false });
+            }
+        } catch (imgErr) {
+            console.error(`[GoogleTranslate] Error on image [${i + 1}]:`, imgErr.message);
+            allResults.push({ original: imgInput, translated: false });
+        } finally {
+            if (localInfo && localInfo.isTemp && fs.existsSync(localInfo.localPath)) {
+                try { fs.unlinkSync(localInfo.localPath); } catch {}
+            }
+        }
     }
 
-    // Run both workers simultaneously
-    await Promise.all(workerQueues.map((q, idx) => runWorker(idx, q)));
+    try {
+        console.log(`[GoogleTranslate] All images finished. Closing browser session.`);
+        await page.close();
+        await browser.close();
+    } catch {}
 
-    return allResults.filter(Boolean);
-}
-
-/**
- * Single Image translation helper
- */
-async function translateImage(imageInput) {
-    const res = await translateMultipleImages([imageInput]);
-    return res[0] || { translated: false, originalUrl: imageInput };
+    return allResults;
 }
 
 module.exports = {
-    translateImage,
-    translateMultipleImages,
-    getImageBuffer
+    translateMultipleImages
 };
