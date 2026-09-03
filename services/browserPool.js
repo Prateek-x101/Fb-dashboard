@@ -84,22 +84,20 @@ async function ensureBrowser() {
             '--disable-gpu',
             '--disable-web-security',
             '--disable-features=IsolateOrigins,site-per-process',
-            '--single-process',
             '--no-zygote',
             '--disable-extensions',
             '--disable-background-networking',
             '--disable-default-apps',
             '--disable-sync',
-            '--disable-translate',
             '--metrics-recording-only',
             '--mute-audio',
             '--no-first-run',
         ];
 
         let launchOpts = {
-            headless: 'new',
+            headless: isLinux ? 'new' : false, // Visible Chrome on Windows for live debugging!
             args: launchArgs,
-            defaultViewport: { width: 1280, height: 720 },
+            defaultViewport: isLinux ? { width: 1280, height: 720 } : null,
             timeout: 30000,
         };
 

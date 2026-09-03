@@ -154,13 +154,17 @@ async function translateMultipleImages(imageList) {
                     let hasTranslation = false;
                     let translatedBlobUrl = null;
 
-                    for (let poll = 0; poll < 24; poll++) { // 24 * 250ms = 6s max
+                    for (let poll = 0; poll < 40; poll++) { // 40 * 250ms = 10s max
                         await new Promise(r => setTimeout(r, 250));
 
                         const state = await page.evaluate(() => {
-                            const dlBtn = Array.from(document.querySelectorAll('button')).find(b => b.innerText && /download/i.test(b.innerText));
+                            const dlBtn = Array.from(document.querySelectorAll('button, a')).find(b => {
+                                const text = (b.innerText || '').toLowerCase();
+                                const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+                                return text.includes('download') || aria.includes('download') || text.includes('अनुवाद') || aria.includes('अनुवाद');
+                            });
                             const blobImg = Array.from(document.querySelectorAll('img')).find(i => i.src && i.src.startsWith('blob:'));
-                            const clearBtn = document.querySelector('button[aria-label="Clear image"]');
+                            const clearBtn = document.querySelector('button[aria-label="Clear image"]') || Array.from(document.querySelectorAll('button')).find(b => (b.getAttribute('aria-label') || '').toLowerCase().includes('clear'));
                             return {
                                 hasDownload: !!dlBtn,
                                 blobSrc: blobImg ? blobImg.src : null,
@@ -174,9 +178,9 @@ async function translateMultipleImages(imageList) {
                             break;
                         }
 
-                        // If after 3.5 seconds clear button is there and no download button, Google Lens found NO text!
-                        if (poll >= 14 && state.hasClear && !state.hasDownload) {
-                            console.log(`[Worker-${workerId + 1}] Image [${i + 1}] has no foreign text (skipping cleanly in 3.5s).`);
+                        // Only if 6 seconds pass and Clear button exists with NO download button, assume no foreign text
+                        if (poll >= 24 && state.hasClear && !state.hasDownload) {
+                            console.log(`[Worker-${workerId + 1}] Image [${i + 1}] has no foreign text (verified in 6.0s).`);
                             break;
                         }
                     }
