@@ -148,8 +148,11 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                     }
 
                     const fileExt = cleanExt === 'png' ? 'png' : cleanExt === 'webp' ? 'webp' : 'jpg';
+                    const tempName = `temp-w${workerId}-${Date.now()}-${uuidv4().substring(0, 6)}.${fileExt}`;
+                    tempPath = path.join(uploadsDir, tempName);
+                    fs.writeFileSync(tempPath, originalBuffer);
 
-                    // Ensure Images tab is active and clear any old state
+                    // Ensure Images tab is active and dismiss any popups
                     await page.evaluate(() => {
                         const imgTab = Array.from(document.querySelectorAll('button, a')).find(el => (el.innerText || '').trim() === 'Images');
                         if (imgTab) imgTab.click();
@@ -164,24 +167,23 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                         await new Promise(r => setTimeout(r, 400));
                     }
 
-                    // Drop file directly into the Google Translate dropzone (100% format-safe, zero disk errors)
-                    const mimeType = cleanExt === 'png' ? 'image/png' : cleanExt === 'webp' ? 'image/webp' : 'image/jpeg';
-                    await page.evaluate((base64Data, mime, fname) => {
-                        const byteCharacters = atob(base64Data);
-                        const byteNumbers = new Array(byteCharacters.length);
-                        for (let j = 0; j < byteCharacters.length; j++) byteNumbers[j] = byteCharacters.charCodeAt(j);
-                        const byteArray = new Uint8Array(byteNumbers);
-                        const blob = new Blob([byteArray], { type: mime });
-                        const file = new File([blob], fname, { type: mime });
+                    // 100% OS-level Human Trusted Click: Find visible "Browse your files" button
+                    const browseBtnHandle = await page.evaluateHandle(() => {
+                        return Array.from(document.querySelectorAll('button')).find(b => (b.innerText || '').includes('Browse your files') && b.offsetWidth > 0);
+                    });
+                    const box = await browseBtnHandle.asElement()?.boundingBox();
 
-                        const dt = new DataTransfer();
-                        dt.items.add(file);
-
-                        const dropzone = document.querySelector('[role="region"]') || document.body;
-                        dropzone.dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: dt }));
-                        dropzone.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
-                        dropzone.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
-                    }, originalBuffer.toString('base64'), mimeType, `image.${fileExt}`);
+                    if (box) {
+                        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 5 });
+                        const [fileChooser] = await Promise.all([
+                            page.waitForFileChooser({ timeout: 10000 }),
+                            page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+                        ]);
+                        await fileChooser.accept([tempPath]);
+                    } else {
+                        const fileInput = await page.$('input[type="file"]');
+                        if (fileInput) await fileInput.uploadFile(tempPath);
+                    }
 
                     // Smart Polling: Wait up to 8s max
                     let hasTranslation = false;
