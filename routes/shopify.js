@@ -2049,19 +2049,23 @@ Return ONLY valid JSON in this exact shape:
             const allImagesToTranslate = [...descriptionImages, ...galleryImages];
 
             if (allImagesToTranslate.length > 0) {
-                // Detect source store language (German, French, Spanish, etc.) to guarantee 100% Google Translate accuracy
-                let detectedLang = 'auto';
-                const sampleText = ((product.originalTitle || product.title || '') + ' ' + (product.description || '')).toLowerCase();
-                if (/[äöüß]|größe|brust|jacke|hose|anlass|für|mit|und|oder|rabatt|versand/i.test(sampleText)) {
-                    detectedLang = 'de';
-                } else if (/taille|chemise|pantalon|pour|avec|livraison/i.test(sampleText)) {
-                    detectedLang = 'fr';
-                } else if (/talla|camisa|pantalón|para|con|envío/i.test(sampleText)) {
-                    detectedLang = 'es';
+                // Step 1: Ask AI (Gemini Vision) to inspect all images and pick ONLY the ones containing text/tables/callouts!
+                let targetImagesForGoogle = allImagesToTranslate;
+                if (geminiApiKey) {
+                    try {
+                        console.log(`[AI Filter] Asking Gemini Vision to inspect ${allImagesToTranslate.length} images before translation...`);
+                        targetImagesForGoogle = await geminiService.filterImagesNeedingTranslation(geminiApiKey, geminiModel, allImagesToTranslate);
+                        console.log(`[AI Filter] AI selected ${targetImagesForGoogle.length} images containing text/tables out of ${allImagesToTranslate.length}!`);
+                    } catch (aiFilterErr) {
+                        console.warn('[AI Filter] Gemini Vision filter error, proceeding with all images:', aiFilterErr.message);
+                    }
                 }
 
-                console.log(`[Translate] Starting continuous single-tab translation for ${allImagesToTranslate.length} images (detected language: ${detectedLang})...`);
-                const translationResults = await imageTranslator.translateMultipleImages(allImagesToTranslate, detectedLang);
+                // Detect source store language
+                let detectedLang = 'auto';
+
+                console.log(`[Translate] Starting translation for ${targetImagesForGoogle.length} images with Google Translate...`);
+                const translationResults = await imageTranslator.translateMultipleImages(targetImagesForGoogle, detectedLang);
 
                 // Apply translated URLs to gallery and description HTML
                 translationResults.forEach(res => {
