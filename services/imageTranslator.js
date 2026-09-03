@@ -146,34 +146,49 @@ async function translateMultipleImages(imageList) {
                         continue;
                     }
 
-                    const fileExt = cleanExt === 'png' ? 'png' : cleanExt === 'webp' ? 'webp' : 'jpg';
-                    const tempName = `temp-w${workerId}-${Date.now()}-${uuidv4().substring(0, 6)}.${fileExt}`;
-                    tempPath = path.join(uploadsDir, tempName);
-                    fs.writeFileSync(tempPath, originalBuffer);
-
                     // Ensure Images tab is active
                     await page.evaluate(() => {
                         const imgTab = Array.from(document.querySelectorAll('button, a')).find(el => (el.innerText || '').trim() === 'Images');
                         if (imgTab) imgTab.click();
-                        // Dismiss any "Got it" toast if present
                         const gotItBtn = Array.from(document.querySelectorAll('button')).find(b => (b.innerText || '').toLowerCase().includes('got it'));
                         if (gotItBtn) gotItBtn.click();
+                        const clearBtn = document.querySelector('button[aria-label="Clear image"]');
+                        if (clearBtn) clearBtn.click();
                     });
+                    await new Promise(r => setTimeout(r, 300));
 
-                    // Ensure exact image file input is available
-                    let fileInput = await page.$('input[type="file"][accept*=".jpg"], input[type="file"][accept*=".png"], input[type="file"]');
-                    if (!fileInput) {
-                        const clearBtn = await page.$('button[aria-label="Clear image"]');
-                        if (clearBtn) {
-                            await clearBtn.click();
-                            await new Promise(r => setTimeout(r, 400));
+                    // Inject image via native in-memory DataTransfer + Paste event (100% format compatible, 0 disk errors!)
+                    const mimeType = cleanExt === 'png' ? 'image/png' : cleanExt === 'webp' ? 'image/webp' : 'image/jpeg';
+                    const filename = `image.${cleanExt === 'png' ? 'png' : cleanExt === 'webp' ? 'webp' : 'jpg'}`;
+
+                    await page.evaluate((base64Data, mime, fname) => {
+                        const byteCharacters = atob(base64Data);
+                        const byteNumbers = new Array(byteCharacters.length);
+                        for (let j = 0; j < byteCharacters.length; j++) {
+                            byteNumbers[j] = byteCharacters.charCodeAt(j);
                         }
-                        fileInput = await page.$('input[type="file"][accept*=".jpg"], input[type="file"][accept*=".png"], input[type="file"]');
-                    }
+                        const byteArray = new Uint8Array(byteNumbers);
+                        const blob = new Blob([byteArray], { type: mime });
+                        const file = new File([blob], fname, { type: mime });
 
-                    if (!fileInput) throw new Error('File input element not found');
+                        const input = document.querySelector('input[type="file"]');
+                        if (input) {
+                            const dt = new DataTransfer();
+                            dt.items.add(file);
+                            input.files = dt.files;
+                            input.dispatchEvent(new Event('change', { bubbles: true }));
+                            input.dispatchEvent(new Event('input', { bubbles: true }));
+                        }
 
-                    await fileInput.uploadFile(tempPath);
+                        const pasteDt = new DataTransfer();
+                        pasteDt.items.add(file);
+                        const pasteEvt = new ClipboardEvent('paste', {
+                            bubbles: true,
+                            cancelable: true,
+                            clipboardData: pasteDt
+                        });
+                        document.dispatchEvent(pasteEvt);
+                    }, originalBuffer.toString('base64'), mimeType, filename);
 
                     // Smart Polling: Wait up to 6s max
                     // If download button appears -> Translated text ready!
