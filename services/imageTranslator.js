@@ -141,9 +141,9 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                     continue;
                 }
 
-                // Stagger tab startup slightly so Google doesn't redirect
+                // Stagger tab startup by 800ms so Google never redirects
                 if (worker.id > 1) {
-                    await new Promise(r => setTimeout(r, (worker.id - 1) * 500));
+                    await new Promise(r => setTimeout(r, (worker.id - 1) * 800));
                 }
 
                 // Step 1: Fresh Google Translate session
@@ -153,8 +153,10 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                 });
 
                 // Ensure Google Translate is in Images mode
-                await worker.page.evaluate(() => {
-                    if (!window.location.href.includes('op=images')) {
+                const isImages = await worker.page.evaluate(() => window.location.href.includes('op=images'));
+                if (!isImages) {
+                    console.log(`[Tab ${worker.id}] Redirect detected, switching to Images mode...`);
+                    await worker.page.evaluate(() => {
                         const btns = Array.from(document.querySelectorAll('button, a'));
                         const imgBtn = btns.find(b => {
                             const t = (b.innerText || '').toLowerCase();
@@ -162,31 +164,17 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                             return t.includes('images') || a.includes('images');
                         });
                         if (imgBtn) imgBtn.click();
-                    }
-                });
+                    });
+                    await new Promise(r => setTimeout(r, 1500));
+                }
+
+                await worker.page.waitForSelector('input[accept*="image"]', { timeout: 25000 });
 
                 // Step 2: 2s WARM-UP DELAY
                 await new Promise(r => setTimeout(r, 2000));
 
-                // Force file inputs to be visible so Puppeteer NEVER throws "Node not visible"
-                await worker.page.evaluate(() => {
-                    const inputs = document.querySelectorAll('input[type="file"], input[accept*="image"]');
-                    inputs.forEach(inp => {
-                        inp.style.display = 'block';
-                        inp.style.visibility = 'visible';
-                        inp.style.opacity = '1';
-                        inp.style.position = 'fixed';
-                        inp.style.top = '10px';
-                        inp.style.left = '10px';
-                        inp.style.width = '100px';
-                        inp.style.height = '50px';
-                        inp.style.zIndex = '999999';
-                    });
-                });
-
-                await worker.page.waitForSelector('input[type="file"], input[accept*="image"]', { timeout: 15000 });
-                let input = await worker.page.$('input[type="file"]');
-                if (!input) input = await worker.page.$('input[accept*="image"]');
+                // Step 3: REAL OS FILE UPLOAD strictly on input[accept*="image"]
+                const input = await worker.page.$('input[accept*="image"]');
                 await input.uploadFile(localInfo.localPath);
 
                 // Step 4: Wait for translation
