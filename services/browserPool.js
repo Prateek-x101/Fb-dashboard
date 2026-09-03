@@ -42,18 +42,23 @@ function getOptimalMaxTabs() {
     console.log(`[BrowserPool] Detected memory limit: ${totalMemoryMB} MB`);
 
     // Heuristics:
-    // - <= 600MB (e.g. Render 512MB): Max 1 tab (strict sequential)
-    // - <= 1200MB (e.g. 1GB): Max 2 tabs
-    // - <= 2400MB (e.g. 2GB): Max 4 tabs
-    // - > 2400MB: Max 6 tabs
+    // - <= 600MB (Render 512MB): Max 1 tab
+    // - <= 1200MB (1GB): Max 2 tabs
+    // - <= 2400MB (2GB): Max 4 tabs
+    // - <= 4000MB (4GB): Max 6 tabs
+    // - <= 8000MB (8GB): Max 10 tabs
+    // - > 8000MB (16GB+): Max 16 tabs
     if (totalMemoryMB <= 600) return 1;
     if (totalMemoryMB <= 1200) return 2;
     if (totalMemoryMB <= 2400) return 4;
-    return 6;
+    if (totalMemoryMB <= 4000) return 6;
+    if (totalMemoryMB <= 8000) return 10;
+    return 16;
 }
 
 const MAX_TABS = getOptimalMaxTabs();
-console.log(`[BrowserPool] Configured MAX_TABS = ${MAX_TABS}`);let browser = null;          // shared Puppeteer Browser instance
+console.log(`[BrowserPool] Configured MAX_TABS = ${MAX_TABS}`);
+let browser = null;          // shared Puppeteer Browser instance
 const pagePool = [];          // Array of { page, inUse: boolean }
 const waitQueue = [];         // resolve callbacks waiting for a free slot
 let launchPromise = null;     // Promise for serialized browser launch
