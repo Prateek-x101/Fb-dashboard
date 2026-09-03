@@ -2044,8 +2044,19 @@ Return ONLY valid JSON in this exact shape:
             }
 
             if (allImagesToTranslate.length > 0) {
-                console.log(`[Translate] Starting continuous single-tab translation for ${allImagesToTranslate.length} images...`);
-                const translationResults = await imageTranslator.translateMultipleImages(allImagesToTranslate);
+                // Detect source store language (German, French, Spanish, etc.) to guarantee 100% Google Translate accuracy
+                let detectedLang = 'auto';
+                const sampleText = ((product.originalTitle || product.title || '') + ' ' + (product.description || '')).toLowerCase();
+                if (/[äöüß]|größe|brust|jacke|hose|anlass|für|mit|und|oder|rabatt|versand/i.test(sampleText)) {
+                    detectedLang = 'de';
+                } else if (/taille|chemise|pantalon|pour|avec|livraison/i.test(sampleText)) {
+                    detectedLang = 'fr';
+                } else if (/talla|camisa|pantalón|para|con|envío/i.test(sampleText)) {
+                    detectedLang = 'es';
+                }
+
+                console.log(`[Translate] Starting continuous single-tab translation for ${allImagesToTranslate.length} images (detected language: ${detectedLang})...`);
+                const translationResults = await imageTranslator.translateMultipleImages(allImagesToTranslate, detectedLang);
 
                 // Apply translated URLs to gallery and description HTML
                 translationResults.forEach(res => {

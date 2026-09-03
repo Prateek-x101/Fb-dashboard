@@ -68,7 +68,7 @@ async function getImageBuffer(input) {
  * - Accurately detects images WITHOUT foreign text (cleanly skips in 3.5s without timeout errors).
  * - 0 timeouts, 0 rate limits, 0 abuse errors.
  */
-async function translateMultipleImages(imageList) {
+async function translateMultipleImages(imageList, sourceLang = 'auto') {
     if (!Array.isArray(imageList) || imageList.length === 0) {
         return [];
     }
@@ -86,7 +86,7 @@ async function translateMultipleImages(imageList) {
         workerQueues[idx % NUM_WORKERS].push({ img, index: idx });
     });
 
-    console.log(`[GoogleTranslate] Starting ${NUM_WORKERS} parallel workers for ${imageList.length} images...`);
+    console.log(`[GoogleTranslate] Starting ${NUM_WORKERS} parallel workers for ${imageList.length} images (source language: ${sourceLang})...`);
 
     const allResults = new Array(imageList.length);
 
@@ -102,8 +102,9 @@ async function translateMultipleImages(imageList) {
                 await new Promise(r => setTimeout(r, workerId * 1500));
             }
 
-            console.log(`[Worker-${workerId + 1}] Loading Google Translate images page...`);
-            await page.goto('https://translate.google.co.in/?sl=auto&tl=en&op=images', {
+            const targetUrl = `https://translate.google.co.in/?sl=${sourceLang || 'auto'}&tl=en&op=images`;
+            console.log(`[Worker-${workerId + 1}] Loading Google Translate images page (${targetUrl})...`);
+            await page.goto(targetUrl, {
                 waitUntil: 'networkidle2',
                 timeout: 25000
             });
@@ -147,9 +148,6 @@ async function translateMultipleImages(imageList) {
                     }
 
                     const fileExt = cleanExt === 'png' ? 'png' : cleanExt === 'webp' ? 'webp' : 'jpg';
-                    const tempName = `temp-w${workerId}-${Date.now()}-${uuidv4().substring(0, 6)}.${fileExt}`;
-                    tempPath = path.join(uploadsDir, tempName);
-                    fs.writeFileSync(tempPath, originalBuffer);
 
                     // Ensure Images tab is active and clear any old state
                     await page.evaluate(() => {
@@ -185,13 +183,11 @@ async function translateMultipleImages(imageList) {
                         dropzone.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
                     }, originalBuffer.toString('base64'), mimeType, `image.${fileExt}`);
 
-                    // Smart Polling: Wait up to 6s max
-                    // If download button appears -> Translated text ready!
-                    // If clear button exists but no download button after ~3.5s -> No foreign text!
+                    // Smart Polling: Wait up to 8s max
                     let hasTranslation = false;
                     let translatedBlobUrl = null;
 
-                    for (let poll = 0; poll < 40; poll++) { // 40 * 250ms = 10s max
+                    for (let poll = 0; poll < 32; poll++) { // 32 * 250ms = 8s max
                         await new Promise(r => setTimeout(r, 250));
 
                         const state = await page.evaluate(() => {
@@ -200,11 +196,12 @@ async function translateMultipleImages(imageList) {
                                 const aria = (b.getAttribute('aria-label') || '').toLowerCase();
                                 return text.includes('download') || aria.includes('download') || text.includes('अनुवाद') || aria.includes('अनुवाद');
                             });
-                            const blobImg = Array.from(document.querySelectorAll('img')).find(i => i.src && i.src.startsWith('blob:'));
+                            const blobImgs = Array.from(document.querySelectorAll('img')).filter(i => i.src && i.src.startsWith('blob:'));
+                            const renderedImg = blobImgs.find(i => i.naturalWidth > 0 || i.width > 0) || blobImgs[blobImgs.length - 1];
                             const clearBtn = document.querySelector('button[aria-label="Clear image"]') || Array.from(document.querySelectorAll('button')).find(b => (b.getAttribute('aria-label') || '').toLowerCase().includes('clear'));
                             return {
                                 hasDownload: !!dlBtn,
-                                blobSrc: blobImg ? blobImg.src : null,
+                                blobSrc: renderedImg ? renderedImg.src : null,
                                 hasClear: !!clearBtn
                             };
                         });
