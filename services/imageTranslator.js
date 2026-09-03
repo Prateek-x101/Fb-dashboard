@@ -166,20 +166,24 @@ async function translateMultipleImages(imageList) {
                         await new Promise(r => setTimeout(r, 400));
                     }
 
-                    // Native Human-like File Upload
-                    let fileInput = await page.$('input[type="file"]');
-                    if (fileInput) {
-                        await fileInput.uploadFile(tempPath);
-                    } else {
-                        const [fileChooser] = await Promise.all([
-                            page.waitForFileChooser(),
-                            page.evaluate(() => {
-                                const b = Array.from(document.querySelectorAll('button')).find(el => (el.innerText || '').includes('Browse your files'));
-                                if (b) b.click();
-                            })
-                        ]);
-                        await fileChooser.accept([tempPath]);
-                    }
+                    // Drop file directly into the Google Translate dropzone (100% format-safe, zero disk errors)
+                    const mimeType = cleanExt === 'png' ? 'image/png' : cleanExt === 'webp' ? 'image/webp' : 'image/jpeg';
+                    await page.evaluate((base64Data, mime, fname) => {
+                        const byteCharacters = atob(base64Data);
+                        const byteNumbers = new Array(byteCharacters.length);
+                        for (let j = 0; j < byteCharacters.length; j++) byteNumbers[j] = byteCharacters.charCodeAt(j);
+                        const byteArray = new Uint8Array(byteNumbers);
+                        const blob = new Blob([byteArray], { type: mime });
+                        const file = new File([blob], fname, { type: mime });
+
+                        const dt = new DataTransfer();
+                        dt.items.add(file);
+
+                        const dropzone = document.querySelector('[role="region"]') || document.body;
+                        dropzone.dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: dt }));
+                        dropzone.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
+                        dropzone.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+                    }, originalBuffer.toString('base64'), mimeType, `image.${fileExt}`);
 
                     // Smart Polling: Wait up to 6s max
                     // If download button appears -> Translated text ready!
