@@ -426,49 +426,50 @@ Keys are image indices as strings. Only include ${variantValues.length} entries 
         try {
             console.log(`[Gemini Vision] Analyzing ${imageUrls.length} images to detect which ones contain text overlays/charts...`);
 
-            // Fetch thumbnails in parallel
-            const imageParts = [];
-            await Promise.all(imageUrls.map(async (u, idx) => {
-                if (!u || typeof u !== 'string' || u.includes('.gif') || u.includes('.svg') || u.includes('.mp4')) return;
+            // Filter out non-images
+            const validUrls = imageUrls.filter(u => u && typeof u === 'string' && !u.includes('.gif') && !u.includes('.svg') && !u.includes('.mp4'));
+            if (validUrls.length === 0) return [];
 
-                try {
-                    let fetchUrl = u.trim();
-                    if (fetchUrl.startsWith('//')) fetchUrl = 'https:' + fetchUrl;
-                    if (fetchUrl.includes('cdn.shopify.com')) {
-                        fetchUrl = fetchUrl.includes('?') ? `${fetchUrl}&width=400` : `${fetchUrl}?width=400`;
-                    }
+            const allSelectedUrls = [];
+            const BATCH_SIZE = 10; // Process in small batches of 10 to keep payload under 2MB!
 
-                    const resp = await fetch(fetchUrl, {
-                        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-                        timeout: 15000
-                    });
+            for (let b = 0; b < validUrls.length; b += BATCH_SIZE) {
+                const batch = validUrls.slice(b, b + BATCH_SIZE);
+                const imageParts = [];
 
-                    if (resp.ok) {
-                        const buf = Buffer.from(await resp.arrayBuffer());
-                        if (buf.length > 500 && buf.length < 5 * 1024 * 1024) {
-                            imageParts.push({
-                                index: idx,
-                                originalUrl: u,
-                                inline_data: {
-                                    mime_type: 'image/jpeg',
-                                    data: buf.toString('base64')
-                                }
-                            });
+                await Promise.all(batch.map(async (u, idx) => {
+                    try {
+                        let fetchUrl = u.trim();
+                        if (fetchUrl.startsWith('//')) fetchUrl = 'https:' + fetchUrl;
+                        if (fetchUrl.includes('cdn.shopify.com')) {
+                            fetchUrl = fetchUrl.includes('?') ? `${fetchUrl}&width=250` : `${fetchUrl}?width=250`;
                         }
-                    }
-                } catch (fetchErr) {
-                    // Continue even if one thumbnail fails
-                }
-            }));
 
-            // Keep in original order
-            imageParts.sort((a, b) => a.index - b.index);
+                        const resp = await fetch(fetchUrl, {
+                            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+                            timeout: 12000
+                        });
 
-            if (imageParts.length === 0) {
-                return imageUrls;
-            }
+                        if (resp.ok) {
+                            const buf = Buffer.from(await resp.arrayBuffer());
+                            if (buf.length > 500) {
+                                imageParts.push({
+                                    batchIdx: idx,
+                                    originalUrl: u,
+                                    inline_data: {
+                                        mime_type: 'image/jpeg',
+                                        data: buf.toString('base64')
+                                    }
+                                });
+                            }
+                        }
+                    } catch (fetchErr) {}
+                }));
 
-            const prompt = `You are a strict e-commerce OCR analyzer.
+                imageParts.sort((a, b) => a.batchIdx - b.batchIdx);
+                if (imageParts.length === 0) continue;
+
+                const prompt = `You are a strict e-commerce OCR analyzer.
 You are given ${imageParts.length} product images from a Shopify listing.
 
 STRICT INSTRUCTIONS:
@@ -489,47 +490,47 @@ Return ONLY a valid JSON object in this exact format:
   "indicesToTranslate": [0, 2]
 }`;
 
-            const contents = [{
-                parts: [
-                    { text: prompt },
-                    ...imageParts.map(p => ({ inline_data: p.inline_data }))
-                ]
-            }];
+                const contents = [{
+                    parts: [
+                        { text: prompt },
+                        ...imageParts.map(p => ({ inline_data: p.inline_data }))
+                    ]
+                }];
 
-            const visionUrl = `${VISION_BASE_URL}/models/${normalizeModel(model)}:generateContent?key=${apiKey}`;
-            const response = await fetch(visionUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ contents })
-            });
+                const visionUrl = `${VISION_BASE_URL}/models/${normalizeModel(model)}:generateContent?key=${apiKey}`;
+                const response = await fetch(visionUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ contents })
+                });
 
-            const data = await response.json();
-            if (!response.ok) {
-                console.warn('[Gemini Vision] API returned error:', data.error?.message);
-                return imageUrls;
+                const data = await response.json();
+                if (response.ok && data.candidates?.[0]?.content?.parts?.[0]?.text) {
+                    const rawText = data.candidates[0].content.parts[0].text;
+                    const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+                    if (jsonMatch) {
+                        try {
+                            const parsed = JSON.parse(jsonMatch[0]);
+                            const selectedIndices = Array.isArray(parsed.indicesToTranslate)
+                                ? parsed.indicesToTranslate
+                                : (Array.isArray(parsed.imagesNeedingTranslation) ? parsed.imagesNeedingTranslation.map(item => typeof item === 'number' ? item : item.index) : []);
+
+                            selectedIndices.forEach(idx => {
+                                if (imageParts[idx] && imageParts[idx].originalUrl && !allSelectedUrls.includes(imageParts[idx].originalUrl)) {
+                                    allSelectedUrls.push(imageParts[idx].originalUrl);
+                                }
+                            });
+                        } catch (e) {}
+                    }
+                }
             }
 
-            const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-            const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-            if (!jsonMatch) return imageUrls;
-
-            const parsed = JSON.parse(jsonMatch[0]);
-            const selectedIndices = Array.isArray(parsed.indicesToTranslate)
-                ? parsed.indicesToTranslate
-                : (Array.isArray(parsed.imagesNeedingTranslation) ? parsed.imagesNeedingTranslation.map(item => typeof item === 'number' ? item : item.index) : []);
-
-            const filteredUrls = [];
-            selectedIndices.forEach(idx => {
-                if (imageParts[idx] && imageParts[idx].originalUrl && !filteredUrls.includes(imageParts[idx].originalUrl)) {
-                    filteredUrls.push(imageParts[idx].originalUrl);
-                }
-            });
-
-            console.log(`[Gemini Vision] AI Filter: Selected ${filteredUrls.length} images containing text out of ${imageUrls.length} total images.`);
-            return filteredUrls;
+            console.log(`[Gemini Vision] AI Filter: Selected ${allSelectedUrls.length} images containing text out of ${imageUrls.length} total images.`);
+            return allSelectedUrls;
         } catch (err) {
-            console.error('[Gemini Vision] Filter failed, falling back to all images:', err.message);
-            return imageUrls;
+            console.error('[Gemini Vision] Filter failed:', err.message);
+            // Return only first 4 images as safe fallback instead of dumping all 30!
+            return imageUrls.slice(0, 4);
         }
     },
 

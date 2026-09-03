@@ -142,18 +142,50 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                     continue;
                 }
 
+                // Stagger parallel tabs slightly so Google doesn't redirect to Text mode
+                if (worker.id > 1) {
+                    await new Promise(r => setTimeout(r, (worker.id - 1) * 500));
+                }
+
                 // Step 1: Fresh Google Translate session
                 await worker.page.goto('https://translate.google.co.in/?sl=auto&tl=en&op=images', {
                     waitUntil: 'networkidle2',
                     timeout: 35000
                 });
-                await worker.page.waitForSelector('input[accept*="image"]', { timeout: 15000 });
+
+                // Ensure Google Translate is in Images mode
+                await worker.page.evaluate(() => {
+                    if (!window.location.href.includes('op=images')) {
+                        const imgBtn = Array.from(document.querySelectorAll('button, a')).find(b => {
+                            const t = (b.innerText || '').toLowerCase();
+                            return t === 'images' || t.includes('bilder') || t.includes('images');
+                        });
+                        if (imgBtn) imgBtn.click();
+                    }
+                });
 
                 // Step 2: 2s WARM-UP DELAY for Google Lens WebAssembly & OCR models
                 await new Promise(r => setTimeout(r, 2000));
 
-                const imageInput = await worker.page.$('input[accept*="image"]');
-                await imageInput.uploadFile(localInfo.localPath);
+                // Force file input to be visible so Puppeteer NEVER throws "Node not visible"
+                await worker.page.evaluate(() => {
+                    const inputs = document.querySelectorAll('input[type="file"]');
+                    inputs.forEach(inp => {
+                        inp.style.display = 'block';
+                        inp.style.visibility = 'visible';
+                        inp.style.opacity = '1';
+                        inp.style.position = 'fixed';
+                        inp.style.top = '0px';
+                        inp.style.left = '0px';
+                        inp.style.width = '100px';
+                        inp.style.height = '100px';
+                        inp.style.zIndex = '999999';
+                    });
+                });
+
+                await worker.page.waitForSelector('input[type="file"]', { timeout: 15000 });
+                const fileInput = await worker.page.$('input[type="file"]');
+                await fileInput.uploadFile(localInfo.localPath);
 
                 // Step 3: Wait for translation
                 let hasTranslation = false;
