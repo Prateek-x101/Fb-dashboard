@@ -191,29 +191,32 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                     let beforeDownloads = [];
                     try { beforeDownloads = fs.readdirSync(downloadsDir); } catch {}
 
-                    // Smart Polling: Wait for Download translation button to appear
+                    // Smart Polling: Wait for "Translating..." to finish and Download button to appear
                     let hasTranslation = false;
-                    for (let poll = 0; poll < 32; poll++) { // 32 * 250ms = 8s max
-                        await new Promise(r => setTimeout(r, 250));
+                    for (let poll = 0; poll < 45; poll++) { // 45 * 300ms = 13.5s max
+                        await new Promise(r => setTimeout(r, 300));
 
                         const ready = await page.evaluate(() => {
+                            const bodyText = document.body.innerText || '';
+                            const isTranslating = bodyText.includes('Translating') || !!document.querySelector('[aria-label="Cancel"]');
                             const dlBtn = Array.from(document.querySelectorAll('button, a')).find(b => {
                                 const aria = (b.getAttribute('aria-label') || '').toLowerCase();
                                 const text = (b.innerText || '').toLowerCase();
                                 return aria.includes('download') || text.includes('download');
                             });
                             const clearBtn = document.querySelector('button[aria-label="Clear image"]');
-                            return { hasDl: !!dlBtn, hasClear: !!clearBtn };
+                            return { isTranslating, hasDl: !!dlBtn, hasClear: !!clearBtn };
                         });
 
-                        if (ready.hasDl) {
+                        // Only mark ready when Google Lens has finished inpainting (NOT Translating) and Download button is active!
+                        if (!ready.isTranslating && ready.hasDl && poll >= 4) {
                             hasTranslation = true;
                             break;
                         }
 
-                        // If after 6s clear button exists with NO download button, image has no text
-                        if (poll >= 24 && ready.hasClear && !ready.hasDl) {
-                            console.log(`[Worker-${workerId + 1}] Image [${i + 1}] has no foreign text (verified in 6.0s).`);
+                        // If after 6s clear button exists with NO download button and NOT translating, image has no text
+                        if (poll >= 20 && !ready.isTranslating && ready.hasClear && !ready.hasDl) {
+                            console.log(`[GoogleTranslate] Image [${i + 1}] has no foreign text (verified).`);
                             break;
                         }
                     }
@@ -250,7 +253,7 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                             try { fs.unlinkSync(downloadedFile); } catch {}
 
                             const publicPath = `/uploads/${filename}`;
-                            console.log(`[Worker-${workerId + 1}] Image [${i + 1}] TRUE TRANSLATED IMAGE SAVED in ${((Date.now() - imgStart) / 1000).toFixed(1)}s -> ${publicPath}`);
+                            console.log(`[GoogleTranslate] Image [${i + 1}] TRUE TRANSLATED IMAGE SAVED in ${((Date.now() - imgStart) / 1000).toFixed(1)}s -> ${publicPath}`);
 
                             allResults[originalIdx] = {
                                 original: imgInput,
@@ -266,6 +269,13 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                             original: imgInput,
                             translated: false
                         };
+                    }
+
+                    // Reset with (X) Clear image for next photo
+                    const resetBtn = await page.$('button[aria-label="Clear image"]');
+                    if (resetBtn) {
+                        await resetBtn.click();
+                        await new Promise(r => setTimeout(r, 500));
                     }
                 } catch (err) {
                     console.warn(`[Worker-${workerId + 1}] Image [${i + 1}] error: ${err.message}`);
