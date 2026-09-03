@@ -94,7 +94,13 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
         if (queue.length === 0) return;
 
         return await browserPool.withTab(async (page) => {
-            await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+            // Grant clipboard permissions so no file manager dialog ever pops up!
+            try {
+                const context = page.browser().defaultBrowserContext();
+                await context.overridePermissions('https://translate.google.co.in', ['clipboard-read', 'clipboard-write']);
+            } catch (e) {}
+
+            await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36');
             await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9,hi;q=0.8' });
 
             // Stagger workers by 1.5s to prevent concurrent page-load spikes
@@ -134,25 +140,18 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                 const imgStart = Date.now();
                 console.log(`[Worker-${workerId + 1}] Processing image [${i + 1}/${queue.length}]...`);
 
-                let tempPath = null;
                 try {
                     const { buffer: originalBuffer, ext } = await getImageBuffer(imgInput);
                     const cleanExt = (ext || '').toLowerCase();
 
                     // Google Translate only supports static images (.jpg, .jpeg, .png, .webp)
-                    // Skip animated GIFs, SVGs, or videos instantly
                     if (cleanExt === 'gif' || cleanExt === 'svg' || cleanExt === 'mp4' || cleanExt === 'mov') {
                         console.log(`[Worker-${workerId + 1}] Skipping unsupported format (.${cleanExt}) for image [${i + 1}]`);
                         allResults[originalIdx] = { original: imgInput, translated: false };
                         continue;
                     }
 
-                    const fileExt = cleanExt === 'png' ? 'png' : cleanExt === 'webp' ? 'webp' : 'jpg';
-                    const tempName = `temp-w${workerId}-${Date.now()}-${uuidv4().substring(0, 6)}.${fileExt}`;
-                    tempPath = path.join(uploadsDir, tempName);
-                    fs.writeFileSync(tempPath, originalBuffer);
-
-                    // Ensure Images tab is active and dismiss any popups
+                    // Ensure Images tab is active and clear any old state
                     await page.evaluate(() => {
                         const imgTab = Array.from(document.querySelectorAll('button, a')).find(el => (el.innerText || '').trim() === 'Images');
                         if (imgTab) imgTab.click();
@@ -167,90 +166,107 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                         await new Promise(r => setTimeout(r, 400));
                     }
 
-                    // 100% OS-level Human Trusted Click: Find visible "Browse your files" button
-                    const browseBtnHandle = await page.evaluateHandle(() => {
-                        return Array.from(document.querySelectorAll('button')).find(b => (b.innerText || '').includes('Browse your files') && b.offsetWidth > 0);
+                    // 1. Write image into Chrome Clipboard memory (NO file manager dialog opens!)
+                    await page.evaluate(async (base64) => {
+                        const b = atob(base64);
+                        const u = new Uint8Array(b.length);
+                        for (let j = 0; j < b.length; j++) u[j] = b.charCodeAt(j);
+                        const blob = new Blob([u], { type: 'image/png' });
+                        const item = new ClipboardItem({ 'image/png': blob });
+                        await navigator.clipboard.write([item]);
+                    }, originalBuffer.toString('base64'));
+
+                    // 2. Click [Paste from clipboard] button
+                    await page.evaluate(() => {
+                        const pasteBtn = Array.from(document.querySelectorAll('button')).find(b => 
+                            (b.innerText || '').toLowerCase().includes('paste from clipboard') || 
+                            (b.getAttribute('aria-label') || '').toLowerCase().includes('paste')
+                        );
+                        if (pasteBtn) pasteBtn.click();
                     });
-                    const box = await browseBtnHandle.asElement()?.boundingBox();
 
-                    if (box) {
-                        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 5 });
-                        const [fileChooser] = await Promise.all([
-                            page.waitForFileChooser({ timeout: 10000 }),
-                            page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
-                        ]);
-                        await fileChooser.accept([tempPath]);
-                    } else {
-                        const fileInput = await page.$('input[type="file"]');
-                        if (fileInput) await fileInput.uploadFile(tempPath);
-                    }
-
-                    // Smart Polling: Wait up to 8s max
+                    // 3. Smart Polling: Wait for Download translation button to appear
                     let hasTranslation = false;
-                    let translatedBlobUrl = null;
-
                     for (let poll = 0; poll < 32; poll++) { // 32 * 250ms = 8s max
                         await new Promise(r => setTimeout(r, 250));
 
-                        const state = await page.evaluate(() => {
+                        const ready = await page.evaluate(() => {
                             const dlBtn = Array.from(document.querySelectorAll('button, a')).find(b => {
-                                const text = (b.innerText || '').toLowerCase();
                                 const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-                                return text.includes('download') || aria.includes('download') || text.includes('अनुवाद') || aria.includes('अनुवाद');
+                                const text = (b.innerText || '').toLowerCase();
+                                return aria.includes('download') || text.includes('download');
                             });
-                            const blobImgs = Array.from(document.querySelectorAll('img')).filter(i => i.src && i.src.startsWith('blob:'));
-                            const renderedImg = blobImgs.find(i => i.naturalWidth > 0 || i.width > 0) || blobImgs[blobImgs.length - 1];
-                            const clearBtn = document.querySelector('button[aria-label="Clear image"]') || Array.from(document.querySelectorAll('button')).find(b => (b.getAttribute('aria-label') || '').toLowerCase().includes('clear'));
-                            return {
-                                hasDownload: !!dlBtn,
-                                blobSrc: renderedImg ? renderedImg.src : null,
-                                hasClear: !!clearBtn
-                            };
+                            const clearBtn = document.querySelector('button[aria-label="Clear image"]');
+                            return { hasDl: !!dlBtn, hasClear: !!clearBtn };
                         });
 
-                        if (state.hasDownload && state.blobSrc) {
+                        if (ready.hasDl) {
                             hasTranslation = true;
-                            translatedBlobUrl = state.blobSrc;
                             break;
                         }
 
-                        // Only if 6 seconds pass and Clear button exists with NO download button, assume no foreign text
-                        if (poll >= 24 && state.hasClear && !state.hasDownload) {
+                        // If after 6s clear button exists with NO download button, image has no text
+                        if (poll >= 24 && ready.hasClear && !ready.hasDl) {
                             console.log(`[Worker-${workerId + 1}] Image [${i + 1}] has no foreign text (verified in 6.0s).`);
                             break;
                         }
                     }
 
-                    if (hasTranslation && translatedBlobUrl) {
-                        // Extract translated image blob
-                        const base64Data = await page.evaluate(async (blobUrl) => {
-                            const resp = await fetch(blobUrl);
-                            const blob = await resp.blob();
+                    if (hasTranslation) {
+                        // 4. Hook the download click to capture the TRUE in-painted translated file (translated_image_en.png)
+                        const downloadResult = await page.evaluate(async () => {
                             return new Promise((resolve) => {
-                                const reader = new FileReader();
-                                reader.onloadend = () => resolve(reader.result);
-                                reader.readAsDataURL(blob);
-                            });
-                        }, translatedBlobUrl);
+                                let captured = false;
+                                const origClick = HTMLAnchorElement.prototype.click;
+                                HTMLAnchorElement.prototype.click = function() {
+                                    if (!captured && this.href) {
+                                        captured = true;
+                                        const href = this.href;
+                                        fetch(href).then(r => r.blob()).then(blob => {
+                                            const reader = new FileReader();
+                                            reader.onloadend = () => resolve({ success: true, base64: reader.result });
+                                            reader.onerror = () => resolve({ success: false });
+                                            reader.readAsDataURL(blob);
+                                        }).catch(() => resolve({ success: false }));
+                                    }
+                                    return origClick.apply(this, arguments);
+                                };
 
-                        if (base64Data) {
-                            const cleanBase64 = base64Data.replace(/^data:image\/\w+;base64,/, '');
+                                const dlBtn = Array.from(document.querySelectorAll('button, a')).find(b => {
+                                    const a = (b.getAttribute('aria-label') || '').toLowerCase();
+                                    const t = (b.innerText || '').toLowerCase();
+                                    return a.includes('download') || t.includes('download');
+                                });
+
+                                if (dlBtn) dlBtn.click();
+                                else resolve({ success: false });
+
+                                setTimeout(() => {
+                                    if (!captured) resolve({ success: false });
+                                }, 5000);
+                            });
+                        });
+
+                        if (downloadResult && downloadResult.success && downloadResult.base64) {
+                            const cleanBase64 = downloadResult.base64.replace(/^data:image\/\w+;base64,/, '');
                             const renderedBuffer = Buffer.from(cleanBase64, 'base64');
-                            const filename = `translated-${Date.now()}-${uuidv4().substring(0, 8)}.${ext === 'png' ? 'png' : 'jpg'}`;
+                            const filename = `translated-${Date.now()}-${uuidv4().substring(0, 8)}.png`;
                             const targetFile = path.join(uploadsDir, filename);
                             fs.writeFileSync(targetFile, renderedBuffer);
 
                             const publicPath = `/uploads/${filename}`;
-                            console.log(`[Worker-${workerId + 1}] Image [${i + 1}] TRANSLATED in ${((Date.now() - imgStart) / 1000).toFixed(1)}s -> ${publicPath}`);
+                            console.log(`[Worker-${workerId + 1}] Image [${i + 1}] TRUE TRANSLATED IMAGE SAVED in ${((Date.now() - imgStart) / 1000).toFixed(1)}s -> ${publicPath}`);
 
                             allResults[originalIdx] = {
                                 original: imgInput,
                                 translated: true,
                                 translatedUrl: publicPath
                             };
+                        } else {
+                            allResults[originalIdx] = { original: imgInput, translated: false };
                         }
                     } else {
-                        // Keep original image untouched
+                        // Untranslated photo (keep original untouched)
                         allResults[originalIdx] = {
                             original: imgInput,
                             translated: false
