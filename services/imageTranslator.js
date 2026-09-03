@@ -152,8 +152,8 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                     tempPath = path.join(uploadsDir, tempName);
                     fs.writeFileSync(tempPath, originalBuffer);
 
-                    // Load a fresh Google Translate session for each image to eliminate Google's clear-button bug!
-                    const targetUrl = `https://translate.google.co.in/?sl=${sourceLang || 'auto'}&tl=en&op=images`;
+                    // Load a fresh Google Translate session for each image (sl=auto guarantees all text/tables/numbers are recognized!)
+                    const targetUrl = `https://translate.google.co.in/?sl=auto&tl=en&op=images`;
                     await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 35000 });
                     await page.waitForSelector('input[accept*="image"]', { timeout: 15000 });
 
@@ -164,8 +164,8 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                         continue;
                     }
 
-                    // Warm-up delay: Give Google Lens WebAssembly/WebGL OCR models 2.5s to initialize!
-                    await new Promise(r => setTimeout(r, 2500));
+                    // Warm-up delay: Give Google Lens WebAssembly/WebGL OCR models 3s to initialize!
+                    await new Promise(r => setTimeout(r, 3000));
 
                     // Record existing files in Downloads folder
                     const downloadsDir = path.join(process.env.USERPROFILE || 'C:\\Users\\HP-PC', 'Downloads');
@@ -182,32 +182,48 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
 
                     await imageInput.uploadFile(tempPath);
 
-                    // Smart Polling: Wait for Google Lens RPC completion or No-Text toast
+                    // Wait for translation to process (Check both RPC and DOM!)
                     let hasTranslation = false;
-                    for (let poll = 0; poll < 45; poll++) { // 45 * 300ms = 13.5s max
-                        await new Promise(r => setTimeout(r, 300));
+                    for (let poll = 0; poll < 35; poll++) {
+                        await new Promise(r => setTimeout(r, 500));
 
-                        // If Google Lens finished translating on server:
                         if (rpcDone) {
                             hasTranslation = true;
                             break;
                         }
 
-                        // Check if Google Lens showed "Can't detect text" (normal clothing photo)
-                        const noText = await page.evaluate(() => {
+                        const status = await page.evaluate(() => {
                             const bodyText = document.body.innerText || '';
-                            return bodyText.includes("Can't detect text") || bodyText.includes("could not detect text");
+                            const isTranslating = bodyText.includes('Translating');
+                            const dlBtn = Array.from(document.querySelectorAll('button, a')).find(b => {
+                                const a = (b.getAttribute('aria-label') || '').toLowerCase();
+                                const t = (b.innerText || '').toLowerCase();
+                                return a.includes('download') || t.includes('download');
+                            });
+                            return { isTranslating, hasDl: !!dlBtn };
                         });
 
-                        if (noText) {
-                            console.log(`[GoogleTranslate] Image [${i + 1}] has no foreign text (verified by Google Lens in ${((poll + 1) * 0.3).toFixed(1)}s).`);
+                        if (!status.isTranslating && status.hasDl && poll >= 3) {
+                            hasTranslation = true;
                             break;
+                        }
+
+                        // Check if Google explicitly showed no text toast after 5 seconds of analysis
+                        if (poll >= 10) {
+                            const noText = await page.evaluate(() => {
+                                const bodyText = document.body.innerText || '';
+                                return bodyText.includes("Can't detect text") || bodyText.includes("could not detect text");
+                            });
+                            if (noText) {
+                                console.log(`[GoogleTranslate] Image [${i + 1}] has no foreign text (verified in ${((poll + 1) * 0.5).toFixed(1)}s).`);
+                                break;
+                            }
                         }
                     }
 
                     if (hasTranslation) {
-                        // Canvas Settle Delay: Give Google Translate 2.5s to bake the in-painted canvas into downloadable memory!
-                        await new Promise(r => setTimeout(r, 2500));
+                        // Canvas Settle Delay: Give Google Translate 3s to bake the in-painted canvas into downloadable memory!
+                        await new Promise(r => setTimeout(r, 3000));
 
                         // Click Download translation button to get true in-painted image
                         await page.evaluate(() => {

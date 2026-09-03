@@ -78,6 +78,7 @@ async function ensureBrowser() {
         console.log(`[BrowserPool] Launching headless Chromium (platform: ${process.platform})...`);
         
         const launchArgs = [
+            '--start-maximized',
             '--no-sandbox',
             '--disable-blink-features=AutomationControlled',
             '--enable-gpu',
