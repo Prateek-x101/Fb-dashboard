@@ -191,13 +191,14 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                     let beforeDownloads = [];
                     try { beforeDownloads = fs.readdirSync(downloadsDir); } catch {}
 
-                    // Smart Polling: Wait for "Translating..." to finish and Download button to appear
+                    // Smart Polling: Wait for Google Translate response
                     let hasTranslation = false;
                     for (let poll = 0; poll < 45; poll++) { // 45 * 300ms = 13.5s max
                         await new Promise(r => setTimeout(r, 300));
 
-                        const ready = await page.evaluate(() => {
+                        const status = await page.evaluate(() => {
                             const bodyText = document.body.innerText || '';
+                            const noTextToast = bodyText.includes("Can't detect text") || bodyText.includes("could not detect text");
                             const isTranslating = bodyText.includes('Translating') || !!document.querySelector('[aria-label="Cancel"]');
                             const dlBtn = Array.from(document.querySelectorAll('button, a')).find(b => {
                                 const aria = (b.getAttribute('aria-label') || '').toLowerCase();
@@ -205,18 +206,18 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                                 return aria.includes('download') || text.includes('download');
                             });
                             const clearBtn = document.querySelector('button[aria-label="Clear image"]');
-                            return { isTranslating, hasDl: !!dlBtn, hasClear: !!clearBtn };
+                            return { noTextToast, isTranslating, hasDl: !!dlBtn, hasClear: !!clearBtn };
                         });
 
-                        // Only mark ready when Google Lens has finished inpainting (NOT Translating) and Download button is active!
-                        if (!ready.isTranslating && ready.hasDl && poll >= 4) {
-                            hasTranslation = true;
+                        // CASE 1: Google Lens detects NO foreign text (normal clothing photo) -> instantly keep original!
+                        if (status.noTextToast) {
+                            console.log(`[GoogleTranslate] Image [${i + 1}] has no foreign text (verified by Google Lens in ${((poll + 1) * 0.3).toFixed(1)}s).`);
                             break;
                         }
 
-                        // If after 6s clear button exists with NO download button and NOT translating, image has no text
-                        if (poll >= 20 && !ready.isTranslating && ready.hasClear && !ready.hasDl) {
-                            console.log(`[GoogleTranslate] Image [${i + 1}] has no foreign text (verified).`);
+                        // CASE 2: Translation is COMPLETE!
+                        if (!status.isTranslating && status.hasDl && poll >= 4) {
+                            hasTranslation = true;
                             break;
                         }
                     }
