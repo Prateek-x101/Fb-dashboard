@@ -80,24 +80,17 @@ async function ensureBrowser() {
         const launchArgs = [
             '--no-sandbox',
             '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-gpu',
-            '--disable-web-security',
-            '--disable-features=IsolateOrigins,site-per-process',
-            '--no-zygote',
-            '--disable-extensions',
-            '--disable-background-networking',
-            '--disable-default-apps',
-            '--disable-sync',
-            '--metrics-recording-only',
-            '--mute-audio',
+            '--disable-blink-features=AutomationControlled',
+            '--enable-gpu',
+            '--enable-webgl',
             '--no-first-run',
+            '--no-default-browser-check'
         ];
 
         let launchOpts = {
-            headless: isLinux ? 'new' : false, // Visible Chrome on Windows for live debugging!
+            headless: isLinux ? 'new' : false, // Visible real Chrome on Windows
             args: launchArgs,
-            defaultViewport: isLinux ? { width: 1280, height: 720 } : null,
+            defaultViewport: null,
             timeout: 30000,
         };
 
@@ -116,16 +109,19 @@ async function ensureBrowser() {
                 console.log(`[BrowserPool] Using @sparticuz/chromium: ${launchOpts.executablePath}`);
             } catch (err) {
                 console.warn(`[BrowserPool] @sparticuz/chromium not available: ${err.message}`);
-                // Fallback: try regular puppeteer
                 try { puppeteer = require('puppeteer'); } catch { puppeteer = require('puppeteer-core'); }
                 if (process.env.PUPPETEER_EXECUTABLE_PATH) {
                     launchOpts.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
                 }
             }
         } else {
-            // ── Windows / Mac: use regular puppeteer with bundled Chromium ──
+            // ── Windows: Use Real Google Chrome with Full Hardware Acceleration & Anti-Bot Stealth ──
             try { puppeteer = require('puppeteer'); } catch { puppeteer = require('puppeteer-core'); }
-            if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+            const realChromeWin = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+            if (fs.existsSync(realChromeWin)) {
+                launchOpts.executablePath = realChromeWin;
+                console.log(`[BrowserPool] Using Real Google Chrome: ${realChromeWin}`);
+            } else if (process.env.PUPPETEER_EXECUTABLE_PATH) {
                 launchOpts.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
             }
         }
@@ -243,6 +239,11 @@ async function acquirePage(blockImages = true) {
     if (canOpenNewTab) {
         const page = await br.newPage();
         
+        // Hide webdriver flag
+        await page.evaluateOnNewDocument(() => {
+            Object.defineProperty(navigator, 'webdriver', { get: () => false });
+        });
+
         // Configure page interception and user agent ONCE upon creation
         await page.setRequestInterception(true);
         page.on('request', req => {
