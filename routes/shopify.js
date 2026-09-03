@@ -2068,16 +2068,54 @@ Return ONLY valid JSON in this exact shape:
                     console.log(`[Translate] Starting 5-tab parallel translation for ${targetImagesForGoogle.length} images with Google Translate...`);
                     const translationResults = await imageTranslator.translateMultipleImages(targetImagesForGoogle, detectedLang);
 
-                    // Apply translated URLs to gallery and description HTML
+                    // Robust replacement helper that matches //, https:, and base URLs without query parameters
+                    const applyImageReplacement = (targetStr, origUrl, newUrl) => {
+                        if (!targetStr || typeof targetStr !== 'string') return targetStr;
+                        const origClean = origUrl.trim();
+                        const origWithHttps = origClean.startsWith('//') ? 'https:' + origClean : origClean;
+                        const origWithoutHttps = origWithHttps.replace(/^https?:/, '');
+                        const origBase = origClean.split('?')[0];
+                        const origBaseWithoutHttps = origWithoutHttps.split('?')[0];
+
+                        let updated = targetStr;
+                        [origClean, origWithHttps, origWithoutHttps, origBase, origBaseWithoutHttps].forEach(pattern => {
+                            if (pattern && pattern.length > 15) {
+                                updated = updated.split(pattern).join(newUrl);
+                            }
+                        });
+                        return updated;
+                    };
+
+                    // Apply translated URLs to description HTML and guarantee they are added to product.images!
                     translationResults.forEach(res => {
                         if (res.translated && res.translatedUrl) {
-                            // Replace in gallery images
-                            if (Array.isArray(product.images)) {
-                                product.images = product.images.map(img => img === res.original ? res.translatedUrl : img);
-                            }
-                            // Replace in description HTML
+                            console.log(`[Translate] Applying translated image: ${res.original} -> ${res.translatedUrl}`);
+
+                            // 1. Replace in description HTML
                             if (product.description && typeof product.description === 'string') {
-                                product.description = product.description.split(res.original).join(res.translatedUrl);
+                                product.description = applyImageReplacement(product.description, res.original, res.translatedUrl);
+                            }
+
+                            // 2. Replace or ADD to product.images (Gallery)
+                            if (!Array.isArray(product.images)) product.images = [];
+
+                            let foundInGallery = false;
+                            product.images = product.images.map(galleryImg => {
+                                const gStr = typeof galleryImg === 'string' ? galleryImg : (galleryImg?.src || '');
+                                const gClean = gStr.split('?')[0].replace(/^https?:/, '');
+                                const origClean = res.original.split('?')[0].replace(/^https?:/, '');
+
+                                if (gClean === origClean || (origClean.length > 15 && gStr.includes(origClean))) {
+                                    foundInGallery = true;
+                                    return res.translatedUrl;
+                                }
+                                return galleryImg;
+                            });
+
+                            // If this was a description image (like size chart or infographic) not yet in gallery, ADD IT TO GALLERY!
+                            if (!foundInGallery && !product.images.includes(res.translatedUrl)) {
+                                console.log(`[Translate] Adding translated image to product gallery: ${res.translatedUrl}`);
+                                product.images.push(res.translatedUrl);
                             }
                         }
                     });

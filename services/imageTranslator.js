@@ -72,8 +72,8 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
     const isLinux = process.platform === 'linux';
     const chromePath = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 
-    // 3 Parallel Tabs: Proven sweet spot for maximum concurrency without Google throttle
-    const NUM_WORKERS = Math.min(3, imageList.length);
+    // 5 Parallel Tabs
+    const NUM_WORKERS = Math.min(5, imageList.length);
     console.log(`[GoogleTranslate] Launching ${NUM_WORKERS} parallel tabs for ${imageList.length} images (Proven Real-OS-File Pipeline)...`);
 
     let browser = null;
