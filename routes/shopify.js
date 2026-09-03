@@ -2019,29 +2019,34 @@ Return ONLY valid JSON in this exact shape:
     // 2. High-Speed Google Translate Image Session (Single Tab with (X) Clear button)
     if (autoTranslateImages !== false) {
         try {
-            // Collect all unique images (gallery + description)
-            const allImagesToTranslate = [];
-            
-            if (Array.isArray(product.images)) {
-                product.images.forEach(img => {
-                    if (img && !allImagesToTranslate.includes(img) && !img.includes('/uploads/translated-')) {
-                        allImagesToTranslate.push(img);
-                    }
-                });
-            }
-
+            // 1. Description images (Size charts, infographics, callouts) ALMOST ALWAYS have foreign text!
+            // Process them FIRST so all critical text is translated immediately!
+            const descriptionImages = [];
             if (product.description && typeof product.description === 'string') {
                 const imgMatches = product.description.match(/<img[^>]+src=["']([^"']+)["']/gi);
                 if (imgMatches) {
                     imgMatches.forEach(match => {
                         const srcMatch = match.match(/src=["']([^"']+)["']/i);
                         const imgSrc = srcMatch ? srcMatch[1] : null;
-                        if (imgSrc && !allImagesToTranslate.includes(imgSrc) && !imgSrc.includes('/uploads/translated-')) {
-                            allImagesToTranslate.push(imgSrc);
+                        if (imgSrc && !descriptionImages.includes(imgSrc) && !imgSrc.includes('/uploads/translated-')) {
+                            descriptionImages.push(imgSrc);
                         }
                     });
                 }
             }
+
+            // 2. Gallery images (usually plain clothing photos, but check them after description images)
+            const galleryImages = [];
+            if (Array.isArray(product.images)) {
+                product.images.forEach(img => {
+                    if (img && !descriptionImages.includes(img) && !img.includes('/uploads/translated-')) {
+                        galleryImages.push(img);
+                    }
+                });
+            }
+
+            // Prioritize description images first
+            const allImagesToTranslate = [...descriptionImages, ...galleryImages];
 
             if (allImagesToTranslate.length > 0) {
                 // Detect source store language (German, French, Spanish, etc.) to guarantee 100% Google Translate accuracy
