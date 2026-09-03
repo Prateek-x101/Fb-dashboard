@@ -122,7 +122,12 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
 
                         const resp = await fetch(cleanUrl);
                         const blob = await resp.blob();
-                        const file = new File([blob], 'image.png', { type: 'image/png' });
+
+                        let mime = blob.type || 'image/jpeg';
+                        if (!mime || mime === 'application/octet-stream') mime = 'image/jpeg';
+                        const ext = mime.includes('png') ? 'png' : (mime.includes('webp') ? 'webp' : 'jpg');
+
+                        const file = new File([blob], `image.${ext}`, { type: mime });
 
                         const input = document.querySelector('input[type="file"]');
                         if (input) {
