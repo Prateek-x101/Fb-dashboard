@@ -152,72 +152,54 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                     tempPath = path.join(uploadsDir, tempName);
                     fs.writeFileSync(tempPath, originalBuffer);
 
-                    // Ensure Images tab is active and clear any old state
-                    await page.evaluate(() => {
-                        const imgTab = Array.from(document.querySelectorAll('button, a')).find(el => (el.innerText || '').trim() === 'Images');
-                        if (imgTab) imgTab.click();
-                        const gotItBtn = Array.from(document.querySelectorAll('button')).find(b => (b.innerText || '').toLowerCase().includes('got it'));
-                        if (gotItBtn) gotItBtn.click();
-                    });
+                    // Load a fresh Google Translate session for each image to eliminate Google's clear-button bug!
+                    const targetUrl = `https://translate.google.co.in/?sl=${sourceLang || 'auto'}&tl=en&op=images`;
+                    await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 35000 });
+                    await page.waitForSelector('input[accept*="image"]', { timeout: 15000 });
 
-                    // If a previous image was translated, click (X) Clear image first
-                    const clearBtn = await page.$('button[aria-label="Clear image"]');
-                    if (clearBtn) {
-                        await clearBtn.click();
-                        await new Promise(r => setTimeout(r, 400));
-                    }
-
-                    // Upload via programmatic image input (Zero popups!)
-                    let imageInput = await page.$('input[accept*="image"]');
-                    if (!imageInput) {
-                        await page.evaluate(() => {
-                            const imgTab = Array.from(document.querySelectorAll('button, a')).find(el => (el.innerText || '').trim() === 'Images');
-                            if (imgTab) imgTab.click();
-                        });
-                        await new Promise(r => setTimeout(r, 500));
-                        imageInput = await page.$('input[accept*="image"]');
-                    }
-
+                    const imageInput = await page.$('input[accept*="image"]');
                     if (!imageInput) {
                         console.error(`[GoogleTranslate] Could not find image input for image [${i + 1}]`);
                         allResults[originalIdx] = { original: imgInput, translated: false };
                         continue;
                     }
 
-                    await imageInput.uploadFile(tempPath);
-
                     // Record existing files in Downloads folder
                     const downloadsDir = path.join(process.env.USERPROFILE || 'C:\\Users\\HP-PC', 'Downloads');
                     let beforeDownloads = [];
                     try { beforeDownloads = fs.readdirSync(downloadsDir); } catch {}
 
-                    // Smart Polling: Wait for Google Translate response
+                    // Listen for Google Lens server translation response (WqWDPb RPC)
+                    const rpcPromise = page.waitForResponse(resp => {
+                        return resp.url().includes('rpcids=WqWDPb') && resp.status() === 200;
+                    }, { timeout: 15000 }).catch(() => null);
+
+                    let rpcDone = false;
+                    rpcPromise.then(res => { if (res) rpcDone = true; });
+
+                    await imageInput.uploadFile(tempPath);
+
+                    // Smart Polling: Wait for Google Lens RPC completion or No-Text toast
                     let hasTranslation = false;
                     for (let poll = 0; poll < 45; poll++) { // 45 * 300ms = 13.5s max
                         await new Promise(r => setTimeout(r, 300));
 
-                        const status = await page.evaluate(() => {
-                            const bodyText = document.body.innerText || '';
-                            const noTextToast = bodyText.includes("Can't detect text") || bodyText.includes("could not detect text");
-                            const isTranslating = bodyText.includes('Translating') || !!document.querySelector('[aria-label="Cancel"]');
-                            const dlBtn = Array.from(document.querySelectorAll('button, a')).find(b => {
-                                const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-                                const text = (b.innerText || '').toLowerCase();
-                                return aria.includes('download') || text.includes('download');
-                            });
-                            const clearBtn = document.querySelector('button[aria-label="Clear image"]');
-                            return { noTextToast, isTranslating, hasDl: !!dlBtn, hasClear: !!clearBtn };
-                        });
-
-                        // CASE 1: Google Lens detects NO foreign text (normal clothing photo) -> instantly keep original!
-                        if (status.noTextToast) {
-                            console.log(`[GoogleTranslate] Image [${i + 1}] has no foreign text (verified by Google Lens in ${((poll + 1) * 0.3).toFixed(1)}s).`);
+                        // If Google Lens finished translating on server:
+                        if (rpcDone) {
+                            hasTranslation = true;
+                            // Wait 1.2s for Google Translate DOM to render before clicking download
+                            await new Promise(r => setTimeout(r, 1200));
                             break;
                         }
 
-                        // CASE 2: Translation is COMPLETE!
-                        if (!status.isTranslating && status.hasDl && poll >= 4) {
-                            hasTranslation = true;
+                        // Check if Google Lens showed "Can't detect text" (normal clothing photo)
+                        const noText = await page.evaluate(() => {
+                            const bodyText = document.body.innerText || '';
+                            return bodyText.includes("Can't detect text") || bodyText.includes("could not detect text");
+                        });
+
+                        if (noText) {
+                            console.log(`[GoogleTranslate] Image [${i + 1}] has no foreign text (verified by Google Lens in ${((poll + 1) * 0.3).toFixed(1)}s).`);
                             break;
                         }
                     }
@@ -271,21 +253,9 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                             translated: false
                         };
                     }
-
-                    // Reset with (X) Clear image for next photo
-                    const resetBtn = await page.$('button[aria-label="Clear image"]');
-                    if (resetBtn) {
-                        await resetBtn.click();
-                        await new Promise(r => setTimeout(r, 500));
-                    }
                 } catch (err) {
-                    console.warn(`[Worker-${workerId + 1}] Image [${i + 1}] error: ${err.message}`);
+                    console.warn(`[GoogleTranslate] Image [${i + 1}] error: ${err.message}`);
                     allResults[originalIdx] = { original: imgInput, translated: false };
-
-                    try {
-                        const errClearBtn = await page.$('button[aria-label="Clear image"]');
-                        if (errClearBtn) await errClearBtn.click();
-                    } catch {}
                 } finally {
                     if (tempPath && fs.existsSync(tempPath)) {
                         try { fs.unlinkSync(tempPath); } catch {}
