@@ -108,6 +108,13 @@ async function translateMultipleImages(imageList) {
                 timeout: 25000
             });
 
+            // Ensure the "Images" tab is actively selected
+            await page.evaluate(() => {
+                const imgTab = Array.from(document.querySelectorAll('button, a')).find(el => (el.innerText || '').trim() === 'Images');
+                if (imgTab) imgTab.click();
+            });
+            await new Promise(r => setTimeout(r, 500));
+
             // Dismiss cookie/consent dialogs if any
             try {
                 const buttons = await page.$$('button');
@@ -133,15 +140,21 @@ async function translateMultipleImages(imageList) {
                     tempPath = path.join(uploadsDir, tempName);
                     fs.writeFileSync(tempPath, originalBuffer);
 
-                    // Ensure file input is available
-                    let fileInput = await page.$('input[type="file"]');
+                    // Ensure Images tab is active
+                    await page.evaluate(() => {
+                        const imgTab = Array.from(document.querySelectorAll('button, a')).find(el => (el.innerText || '').trim() === 'Images');
+                        if (imgTab) imgTab.click();
+                    });
+
+                    // Ensure exact image file input is available
+                    let fileInput = await page.$('input[type="file"][accept*=".jpg"], input[type="file"][accept*=".png"], input[type="file"]');
                     if (!fileInput) {
                         const clearBtn = await page.$('button[aria-label="Clear image"]');
                         if (clearBtn) {
                             await clearBtn.click();
                             await new Promise(r => setTimeout(r, 400));
                         }
-                        fileInput = await page.$('input[type="file"]');
+                        fileInput = await page.$('input[type="file"][accept*=".jpg"], input[type="file"][accept*=".png"], input[type="file"]');
                     }
 
                     if (!fileInput) throw new Error('File input element not found');
