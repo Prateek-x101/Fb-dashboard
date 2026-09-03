@@ -141,9 +141,9 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                     continue;
                 }
 
-                // Stagger tab startup slightly
+                // Stagger tab startup slightly so Google doesn't redirect
                 if (worker.id > 1) {
-                    await new Promise(r => setTimeout(r, (worker.id - 1) * 350));
+                    await new Promise(r => setTimeout(r, (worker.id - 1) * 500));
                 }
 
                 // Step 1: Fresh Google Translate session
@@ -151,13 +151,42 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                     waitUntil: 'networkidle2',
                     timeout: 35000
                 });
-                await worker.page.waitForSelector('input[accept*="image"]', { timeout: 15000 });
+
+                // Ensure Google Translate is in Images mode
+                await worker.page.evaluate(() => {
+                    if (!window.location.href.includes('op=images')) {
+                        const btns = Array.from(document.querySelectorAll('button, a'));
+                        const imgBtn = btns.find(b => {
+                            const t = (b.innerText || '').toLowerCase();
+                            const a = (b.getAttribute('aria-label') || '').toLowerCase();
+                            return t.includes('images') || a.includes('images');
+                        });
+                        if (imgBtn) imgBtn.click();
+                    }
+                });
 
                 // Step 2: 2s WARM-UP DELAY
                 await new Promise(r => setTimeout(r, 2000));
 
-                // Step 3: REAL OS FILE UPLOAD (Proven 100% reliable)
-                const input = await worker.page.$('input[accept*="image"]');
+                // Force file inputs to be visible so Puppeteer NEVER throws "Node not visible"
+                await worker.page.evaluate(() => {
+                    const inputs = document.querySelectorAll('input[type="file"], input[accept*="image"]');
+                    inputs.forEach(inp => {
+                        inp.style.display = 'block';
+                        inp.style.visibility = 'visible';
+                        inp.style.opacity = '1';
+                        inp.style.position = 'fixed';
+                        inp.style.top = '10px';
+                        inp.style.left = '10px';
+                        inp.style.width = '100px';
+                        inp.style.height = '50px';
+                        inp.style.zIndex = '999999';
+                    });
+                });
+
+                await worker.page.waitForSelector('input[type="file"], input[accept*="image"]', { timeout: 15000 });
+                let input = await worker.page.$('input[type="file"]');
+                if (!input) input = await worker.page.$('input[accept*="image"]');
                 await input.uploadFile(localInfo.localPath);
 
                 // Step 4: Wait for translation
