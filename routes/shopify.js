@@ -2062,6 +2062,8 @@ Return ONLY valid JSON in this exact shape:
                 }
 
                 // Detect source store language
+                const detectedLang = 'auto';
+
                 if (targetImagesForGoogle.length > 0) {
                     console.log(`[Translate] Starting 5-tab parallel translation for ${targetImagesForGoogle.length} images with Google Translate...`);
                     const translationResults = await imageTranslator.translateMultipleImages(targetImagesForGoogle, detectedLang);
