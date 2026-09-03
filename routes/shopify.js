@@ -2117,6 +2117,38 @@ Return ONLY valid JSON in this exact shape:
                                 console.log(`[Translate] Adding translated image to product gallery: ${res.translatedUrl}`);
                                 product.images.push(res.translatedUrl);
                             }
+
+                            // 3. Replace in product.featured_image
+                            if (product.featured_image) {
+                                const fStr = typeof product.featured_image === 'string' ? product.featured_image : (product.featured_image.src || '');
+                                const fClean = fStr.split('?')[0].replace(/^https?:/, '');
+                                const origClean = res.original.split('?')[0].replace(/^https?:/, '');
+                                if (fClean === origClean || (origClean.length > 15 && fStr.includes(origClean))) {
+                                    if (typeof product.featured_image === 'string') {
+                                        product.featured_image = res.translatedUrl;
+                                    } else if (product.featured_image.src) {
+                                        product.featured_image.src = res.translatedUrl;
+                                    }
+                                }
+                            }
+
+                            // 4. Replace in product.variants
+                            if (Array.isArray(product.variants)) {
+                                product.variants.forEach(v => {
+                                    if (v.featured_image) {
+                                        const vStr = typeof v.featured_image === 'string' ? v.featured_image : (v.featured_image.src || '');
+                                        const vClean = vStr.split('?')[0].replace(/^https?:/, '');
+                                        const origClean = res.original.split('?')[0].replace(/^https?:/, '');
+                                        if (vClean === origClean || (origClean.length > 15 && vStr.includes(origClean))) {
+                                            if (typeof v.featured_image === 'string') {
+                                                v.featured_image = res.translatedUrl;
+                                            } else if (v.featured_image.src) {
+                                                v.featured_image.src = res.translatedUrl;
+                                            }
+                                        }
+                                    }
+                                });
+                            }
                         }
                     });
                     console.log(`[Translate] Successfully processed ${targetImagesForGoogle.length} images.`);
