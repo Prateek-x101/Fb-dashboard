@@ -63,7 +63,9 @@ const pagePool = [];          // Array of { page, inUse: boolean }
 const waitQueue = [];         // resolve callbacks waiting for a free slot
 let launchPromise = null;     // Promise for serialized browser launch
 
-const MIN_SAFE_MEMORY_MB = 80; // We need at least 80MB free memory to open a new tab/page
+const MIN_SAFE_MEMORY_MB = 100;
+const SAFETY_RESERVE_RAM_MB = 500;  // Always preserve at least 500MB free RAM for Windows and other apps
+const ESTIMATED_TAB_RAM_MB = 90;    // Average memory per active Puppeteer tab
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -228,13 +230,17 @@ async function acquirePage(blockImages = true) {
         return page;
     }
 
-    // 2. Check if we can open a new page based on MAX_TABS and Memory Guard
+    // 2. Real-Time Dynamic Memory Calculation:
+    // Check how much RAM is CURRENTLY AVAILABLE right now
     const availableMem = getAvailableMemoryMB();
-    console.log(`[BrowserPool] Checking allocation guard. Active tabs: ${pagePool.length}/${MAX_TABS}. Available RAM: ${availableMem}MB.`);
+    
+    // How many additional tabs can we safely open while preserving 500MB safety buffer?
+    const safeParallelLimit = Math.max(1, Math.min(MAX_TABS, Math.floor((availableMem - SAFETY_RESERVE_RAM_MB) / ESTIMATED_TAB_RAM_MB)));
+    
+    // Allow opening new tab if under safe parallel limit and memory is above 500MB buffer (or if pool is totally empty)
+    const canOpenNewTab = pagePool.length < safeParallelLimit && (pagePool.length === 0 || availableMem >= SAFETY_RESERVE_RAM_MB);
 
-    // Memory Guard: If we already have at least 1 active tab, and available memory is below threshold,
-    // we block opening new tabs and queue instead.
-    const canOpenNewTab = pagePool.length < MAX_TABS && (pagePool.length === 0 || availableMem >= MIN_SAFE_MEMORY_MB);
+    console.log(`[BrowserPool] Allocation Guard: Active: ${pagePool.length}/${MAX_TABS} tabs. Current Available RAM: ${availableMem}MB. Dynamic Safe Limit: ${safeParallelLimit} tabs (500MB buffer preserved).`);
 
     if (canOpenNewTab) {
         const page = await br.newPage();
@@ -274,8 +280,8 @@ async function acquirePage(blockImages = true) {
         return page;
     }
 
-    // 3. Queue the request
-    console.log(`[BrowserPool] Queueing request. Waiting for a tab slot or memory release...`);
+    // 3. Queue the request if available RAM or tab limit reached
+    console.log(`[BrowserPool] Queueing request. Waiting for active tab release to preserve ${SAFETY_RESERVE_RAM_MB}MB safety RAM... (Queue length: ${waitQueue.length + 1})`);
     return new Promise(resolve => {
         waitQueue.push(resolve);
     });
