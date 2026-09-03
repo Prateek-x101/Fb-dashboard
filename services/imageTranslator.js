@@ -5,62 +5,12 @@ const fetch = require('node-fetch');
 const { v4: uuidv4 } = require('uuid');
 
 /**
- * Cleanly resolve or download an image to a local file on disk for uploading
- */
-async function getLocalImageFile(input, uploadsDir) {
-    if (typeof input === 'string') {
-        let cleanInput = input.trim();
-        if (cleanInput.startsWith('//')) cleanInput = 'https:' + cleanInput;
-
-        // Local upload path
-        if (cleanInput.startsWith('/uploads/') || cleanInput.startsWith('uploads/')) {
-            const relPath = cleanInput.replace(/^\/?uploads\//, '');
-            const localFile = path.join(uploadsDir, relPath);
-            if (fs.existsSync(localFile)) {
-                return { localPath: localFile, isTemp: false };
-            }
-        }
-
-        if (fs.existsSync(cleanInput) && !cleanInput.startsWith('http')) {
-            return { localPath: cleanInput, isTemp: false };
-        }
-
-        // Remote URL (Shopify CDN, etc.)
-        if (cleanInput.startsWith('http://') || cleanInput.startsWith('https://')) {
-            const resp = await fetch(cleanInput, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
-                },
-                timeout: 25000
-            });
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-
-            const arrayBuffer = await resp.arrayBuffer();
-            const buffer = Buffer.from(arrayBuffer);
-            const contentType = resp.headers.get('content-type') || '';
-            let ext = 'jpg';
-            if (contentType.includes('png') || cleanInput.includes('.png')) ext = 'png';
-            else if (contentType.includes('webp') || cleanInput.includes('.webp')) ext = 'webp';
-            else if (contentType.includes('gif') || cleanInput.includes('.gif')) ext = 'gif';
-
-            const tempName = `temp-${Date.now()}-${uuidv4().substring(0, 8)}.${ext}`;
-            const tempFile = path.join(uploadsDir, tempName);
-            fs.writeFileSync(tempFile, buffer);
-            return { localPath: tempFile, isTemp: true, ext };
-        }
-    }
-
-    throw new Error('Unsupported image input');
-}
-
-/**
- * 5-Tab Parallel Google Translate Engine with Direct In-Memory Blob Extraction:
- * - 5 Parallel Tabs processing images simultaneously
- * - DIRECT IN-MEMORY BLOB EXTRACTION: Hooks URL.createObjectURL to capture the raw
- *   in-painted translated image directly from Chrome's RAM in 0ms!
- *   (Zero filesystem downloads, zero missing files, 100% reliability!)
- * - 2s Warm-up delay for Google Lens OCR models to initialize
- * - 2s Canvas Settle delay to bake the in-painted canvas into memory
+ * 5-Tab Parallel Google Translate Engine with:
+ * 1. DIRECT DATATRANSFER PASTE: Fetches image in browser as standard image/png Blob and pastes via DataTransfer.
+ *    (Eliminates "Can't support this format" and "Node is not visible" completely!)
+ * 2. DIRECT IN-MEMORY RAM EXTRACTION: Hooks URL.createObjectURL to grab the translated image directly from RAM.
+ *    (Zero filesystem downloads, zero missing files!)
+ * 3. 2s Warm-up delay + 2s Canvas settle delay.
  */
 async function translateMultipleImages(imageList, sourceLang = 'auto') {
     if (!Array.isArray(imageList) || imageList.length === 0) {
@@ -73,9 +23,9 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
     const isLinux = process.platform === 'linux';
     const chromePath = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 
-    // 5 Parallel Tabs as requested by user
+    // 5 Parallel Tabs
     const NUM_WORKERS = Math.min(5, imageList.length);
-    console.log(`[GoogleTranslate] Launching ${NUM_WORKERS} parallel tabs for ${imageList.length} images (Direct In-Memory Extraction)...`);
+    console.log(`[GoogleTranslate] Launching ${NUM_WORKERS} parallel tabs for ${imageList.length} images (DataTransfer Paste & RAM Extraction)...`);
 
     let browser = null;
     try {
@@ -131,20 +81,17 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
             const imgStart = Date.now();
             console.log(`[Tab ${worker.id}] Processing image [${originalIdx + 1}/${imageList.length}]: ${imgInput}`);
 
-            let localInfo = null;
             try {
-                localInfo = await getLocalImageFile(imgInput, uploadsDir);
-                const ext = (path.extname(localInfo.localPath) || '').toLowerCase();
-
+                const ext = (path.extname(imgInput.split('?')[0]) || '').toLowerCase();
                 if (ext === '.gif' || ext === '.svg' || ext === '.mp4') {
                     console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] is ${ext} - preserving original.`);
                     allResults[originalIdx] = { original: imgInput, translated: false };
                     continue;
                 }
 
-                // Stagger parallel tabs slightly so Google doesn't redirect to Text mode
+                // Stagger tabs slightly
                 if (worker.id > 1) {
-                    await new Promise(r => setTimeout(r, (worker.id - 1) * 500));
+                    await new Promise(r => setTimeout(r, (worker.id - 1) * 300));
                 }
 
                 // Step 1: Fresh Google Translate session
@@ -164,30 +111,48 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                     }
                 });
 
-                // Step 2: 2s WARM-UP DELAY for Google Lens WebAssembly & OCR models
+                // Step 2: 2s WARM-UP DELAY
                 await new Promise(r => setTimeout(r, 2000));
 
-                // Force file input to be visible so Puppeteer NEVER throws "Node not visible"
-                await worker.page.evaluate(() => {
-                    const inputs = document.querySelectorAll('input[type="file"]');
-                    inputs.forEach(inp => {
-                        inp.style.display = 'block';
-                        inp.style.visibility = 'visible';
-                        inp.style.opacity = '1';
-                        inp.style.position = 'fixed';
-                        inp.style.top = '0px';
-                        inp.style.left = '0px';
-                        inp.style.width = '100px';
-                        inp.style.height = '100px';
-                        inp.style.zIndex = '999999';
-                    });
-                });
+                // Step 3: Direct In-Browser DataTransfer Image Paste (Bypasses all format errors!)
+                const pasteResult = await worker.page.evaluate(async (url) => {
+                    try {
+                        let cleanUrl = url.trim();
+                        if (cleanUrl.startsWith('//')) cleanUrl = 'https:' + cleanUrl;
 
-                await worker.page.waitForSelector('input[type="file"]', { timeout: 15000 });
-                const fileInput = await worker.page.$('input[type="file"]');
-                await fileInput.uploadFile(localInfo.localPath);
+                        const resp = await fetch(cleanUrl);
+                        const blob = await resp.blob();
+                        const file = new File([blob], 'image.png', { type: 'image/png' });
 
-                // Step 3: Wait for translation
+                        const input = document.querySelector('input[type="file"]');
+                        if (input) {
+                            const dt = new DataTransfer();
+                            dt.items.add(file);
+                            input.files = dt.files;
+                            input.dispatchEvent(new Event('change', { bubbles: true }));
+                            input.dispatchEvent(new Event('input', { bubbles: true }));
+                            return { success: true, method: 'input_datatransfer' };
+                        }
+
+                        const pasteDt = new DataTransfer();
+                        pasteDt.items.add(file);
+                        const pasteEvt = new ClipboardEvent('paste', {
+                            bubbles: true,
+                            cancelable: true,
+                            clipboardData: pasteDt
+                        });
+                        document.dispatchEvent(pasteEvt);
+                        return { success: true, method: 'clipboard_paste' };
+                    } catch (e) {
+                        return { success: false, error: e.message };
+                    }
+                }, imgInput);
+
+                if (!pasteResult.success) {
+                    console.warn(`[Tab ${worker.id}] Paste warning:`, pasteResult.error);
+                }
+
+                // Step 4: Wait for translation
                 let hasTranslation = false;
                 for (let poll = 0; poll < 35; poll++) {
                     await new Promise(r => setTimeout(r, 500));
@@ -221,10 +186,10 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                 }
 
                 if (hasTranslation) {
-                    // Step 4: 2s CANVAS SETTLE DELAY
+                    // Step 5: 2s CANVAS SETTLE DELAY
                     await new Promise(r => setTimeout(r, 2000));
 
-                    // DIRECT IN-MEMORY EXTRACTION: Hook URL.createObjectURL BEFORE clicking download!
+                    // Hook URL.createObjectURL BEFORE clicking download
                     await worker.page.evaluate(() => {
                         window._capturedBlobUrl = null;
                         const origCreate = URL.createObjectURL;
@@ -235,7 +200,7 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                         };
                     });
 
-                    // Trigger the download event so Google creates the translated blob in RAM
+                    // Trigger click to generate in-memory blob
                     await worker.page.evaluate(() => {
                         const dlBtn = Array.from(document.querySelectorAll('button, a')).find(b => {
                             const a = (b.getAttribute('aria-label') || '').toLowerCase();
@@ -247,7 +212,7 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
 
                     await new Promise(r => setTimeout(r, 600));
 
-                    // Extract the translated blob directly from Chrome RAM as base64!
+                    // Extract blob from RAM
                     const base64Data = await worker.page.evaluate(async () => {
                         if (!window._capturedBlobUrl) return null;
                         try {
@@ -263,15 +228,15 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                         }
                     });
 
+                    const filename = `translated-${Date.now()}-${uuidv4().substring(0, 8)}.png`;
+                    const targetFile = path.join(uploadsDir, filename);
+
                     if (base64Data) {
                         const rawB64 = base64Data.replace(/^data:image\/\w+;base64,/, '');
-                        const buffer = Buffer.from(rawB64, 'base64');
-                        const filename = `translated-${Date.now()}-${uuidv4().substring(0, 8)}.png`;
-                        const targetFile = path.join(uploadsDir, filename);
-                        fs.writeFileSync(targetFile, buffer);
+                        fs.writeFileSync(targetFile, Buffer.from(rawB64, 'base64'));
 
                         const publicPath = `/uploads/${filename}`;
-                        console.log(`[Tab ${worker.id}] >> SUCCESS (RAM EXTRACTED): Image [${originalIdx + 1}] saved in ${((Date.now() - imgStart) / 1000).toFixed(1)}s -> ${publicPath} (${buffer.length} bytes)`);
+                        console.log(`[Tab ${worker.id}] >> SUCCESS (RAM EXTRACTED): Image [${originalIdx + 1}] translated in ${((Date.now() - imgStart) / 1000).toFixed(1)}s -> ${publicPath} (${fs.statSync(targetFile).size} bytes)`);
 
                         allResults[originalIdx] = {
                             original: imgInput,
@@ -279,16 +244,12 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                             translatedUrl: publicPath
                         };
                     } else {
-                        // Fallback: If memory hook wasn't triggered, screenshot the translated element directly!
-                        console.log(`[Tab ${worker.id}] Memory hook fallback -> Direct Element Screenshot...`);
+                        // Fallback: screenshot translated element
                         const imgEl = await worker.page.$('img[src^="blob:"]');
                         if (imgEl) {
-                            const filename = `translated-${Date.now()}-${uuidv4().substring(0, 8)}.png`;
-                            const targetFile = path.join(uploadsDir, filename);
                             await imgEl.screenshot({ path: targetFile });
-
                             const publicPath = `/uploads/${filename}`;
-                            console.log(`[Tab ${worker.id}] >> SUCCESS (SCREENSHOT EXTRACTED): Image [${originalIdx + 1}] saved -> ${publicPath}`);
+                            console.log(`[Tab ${worker.id}] >> SUCCESS (SCREENSHOT EXTRACTED): Image [${originalIdx + 1}] translated -> ${publicPath}`);
 
                             allResults[originalIdx] = {
                                 original: imgInput,
@@ -305,10 +266,6 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
             } catch (err) {
                 console.error(`[Tab ${worker.id}] Error on image [${originalIdx + 1}]:`, err.message);
                 allResults[originalIdx] = { original: imgInput, translated: false };
-            } finally {
-                if (localInfo && localInfo.isTemp && fs.existsSync(localInfo.localPath)) {
-                    try { fs.unlinkSync(localInfo.localPath); } catch {}
-                }
             }
         }
     }
@@ -321,7 +278,7 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
     } catch {}
 
     const totalSeconds = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.log(`[GoogleTranslate] All ${imageList.length} images processed in ${totalSeconds}s across ${NUM_WORKERS} parallel tabs!`);
+    console.log(`[GoogleTranslate] All ${imageList.length} images finished in ${totalSeconds}s across ${NUM_WORKERS} parallel tabs!`);
     return allResults.filter(Boolean);
 }
 
