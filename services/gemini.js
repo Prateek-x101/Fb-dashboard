@@ -468,23 +468,25 @@ Keys are image indices as strings. Only include ${variantValues.length} entries 
                 return imageUrls;
             }
 
-            const prompt = `You are an expert e-commerce image localization and OCR specialist.
-You are given ${imageParts.length} product images from an e-commerce product listing.
+            const prompt = `You are a strict e-commerce OCR analyzer.
+You are given ${imageParts.length} product images from a Shopify listing.
 
-TASK:
-Examine every image in order (0 to ${imageParts.length - 1}) and identify WHICH images contain foreign text (e.g. German, French, Dutch, Spanish) or informative text overlays that MUST be translated.
-Examples of images that NEED translation:
-- Size charts and measurement tables (e.g. GRÖSSENTABELLE, Chest, Length, cm, Inches)
-- Feature infographics with callouts, badges, or icons with text (e.g. Breathable, Comfortable, Fabric features)
-- Promotional banners, headline text, callouts, or FAQs.
+STRICT INSTRUCTIONS:
+ONLY select an image if it has clearly visible PRINTED or DIGITAL TEXT OVERLAYS that must be translated into English, such as:
+- Sizing charts / measurement tables (tables with Chest, Sleeve, Length, Waist measurements).
+- Infographic feature callouts (e.g., icons with labels like "Atmungsaktiv", "Elastisch", "Bequem").
+- Text headline overlays, FAQ banners, or promotional text written on the image.
 
-Examples of images that DO NOT need translation:
-- Plain clothing photos showing only the model or product with ZERO text.
-- Plain brand logos or tiny fabric washing care tags.
+STRICT EXCLUSIONS (DO NOT SELECT):
+- Plain product photos showing a model wearing clothes with NO text overlay on the photo.
+- Plain product photos of jackets, pants, or fabric with NO text overlay.
+- Photos that just show an outfit in a room, on a sofa, or on the street with NO text written on the image.
+
+In most listings, ONLY 2 to 5 images actually contain text. All other plain photos MUST BE EXCLUDED.
 
 Return ONLY a valid JSON object in this exact format:
 {
-  "indicesToTranslate": [0, 2, 4]
+  "indicesToTranslate": [0, 2]
 }`;
 
             const contents = [{
@@ -518,13 +520,13 @@ Return ONLY a valid JSON object in this exact format:
 
             const filteredUrls = [];
             selectedIndices.forEach(idx => {
-                if (imageParts[idx] && imageParts[idx].originalUrl) {
+                if (imageParts[idx] && imageParts[idx].originalUrl && !filteredUrls.includes(imageParts[idx].originalUrl)) {
                     filteredUrls.push(imageParts[idx].originalUrl);
                 }
             });
 
             console.log(`[Gemini Vision] AI Filter: Selected ${filteredUrls.length} images containing text out of ${imageUrls.length} total images.`);
-            return filteredUrls.length > 0 ? filteredUrls : imageUrls;
+            return filteredUrls;
         } catch (err) {
             console.error('[Gemini Vision] Filter failed, falling back to all images:', err.message);
             return imageUrls;

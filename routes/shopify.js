@@ -2062,25 +2062,27 @@ Return ONLY valid JSON in this exact shape:
                 }
 
                 // Detect source store language
-                let detectedLang = 'auto';
+                if (targetImagesForGoogle.length > 0) {
+                    console.log(`[Translate] Starting 5-tab parallel translation for ${targetImagesForGoogle.length} images with Google Translate...`);
+                    const translationResults = await imageTranslator.translateMultipleImages(targetImagesForGoogle, detectedLang);
 
-                console.log(`[Translate] Starting translation for ${targetImagesForGoogle.length} images with Google Translate...`);
-                const translationResults = await imageTranslator.translateMultipleImages(targetImagesForGoogle, detectedLang);
-
-                // Apply translated URLs to gallery and description HTML
-                translationResults.forEach(res => {
-                    if (res.translated && res.translatedUrl) {
-                        // Replace in gallery images
-                        if (Array.isArray(product.images)) {
-                            product.images = product.images.map(img => img === res.original ? res.translatedUrl : img);
+                    // Apply translated URLs to gallery and description HTML
+                    translationResults.forEach(res => {
+                        if (res.translated && res.translatedUrl) {
+                            // Replace in gallery images
+                            if (Array.isArray(product.images)) {
+                                product.images = product.images.map(img => img === res.original ? res.translatedUrl : img);
+                            }
+                            // Replace in description HTML
+                            if (product.description && typeof product.description === 'string') {
+                                product.description = product.description.split(res.original).join(res.translatedUrl);
+                            }
                         }
-                        // Replace in description HTML
-                        if (product.description && typeof product.description === 'string') {
-                            product.description = product.description.split(res.original).join(res.translatedUrl);
-                        }
-                    }
-                });
-                console.log(`[Translate] Successfully processed ${allImagesToTranslate.length} images.`);
+                    });
+                    console.log(`[Translate] Successfully processed ${targetImagesForGoogle.length} images.`);
+                } else {
+                    console.log(`[Translate] No images have text overlays to translate. All original clean photos preserved.`);
+                }
             }
         } catch (imgLoopErr) {
             console.error('[Translate] Image translation session error:', imgLoopErr.message);
