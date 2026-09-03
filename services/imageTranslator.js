@@ -122,6 +122,7 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
     console.log(`[GoogleTranslate] All ${NUM_WORKERS} parallel tabs ready.`);
 
     async function processQueue(worker) {
+        let isFirstImage = true;
         while (queue.length > 0) {
             const item = queue.shift();
             if (!item) break;
@@ -141,37 +142,61 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                     continue;
                 }
 
-                // Stagger tab startup by 800ms so Google never redirects
-                if (worker.id > 1) {
-                    await new Promise(r => setTimeout(r, (worker.id - 1) * 800));
-                }
+                if (isFirstImage) {
+                    // Stagger initial tab startup so Google never redirects
+                    if (worker.id > 1) {
+                        await new Promise(r => setTimeout(r, (worker.id - 1) * 800));
+                    }
 
-                // Step 1: Fresh Google Translate session
-                await worker.page.goto('https://translate.google.co.in/?sl=auto&tl=en&op=images', {
-                    waitUntil: 'networkidle2',
-                    timeout: 35000
-                });
+                    // Step 1: Fresh Google Translate session
+                    await worker.page.goto('https://translate.google.co.in/?sl=auto&tl=en&op=images', {
+                        waitUntil: 'networkidle2',
+                        timeout: 35000
+                    });
 
-                // Ensure Google Translate is in Images mode
-                const isImages = await worker.page.evaluate(() => window.location.href.includes('op=images'));
-                if (!isImages) {
-                    console.log(`[Tab ${worker.id}] Redirect detected, switching to Images mode...`);
-                    await worker.page.evaluate(() => {
-                        const btns = Array.from(document.querySelectorAll('button, a'));
-                        const imgBtn = btns.find(b => {
+                    // Ensure Google Translate is in Images mode
+                    const isImages = await worker.page.evaluate(() => window.location.href.includes('op=images'));
+                    if (!isImages) {
+                        console.log(`[Tab ${worker.id}] Redirect detected, switching to Images mode...`);
+                        await worker.page.evaluate(() => {
+                            const btns = Array.from(document.querySelectorAll('button, a'));
+                            const imgBtn = btns.find(b => {
+                                const t = (b.innerText || '').toLowerCase();
+                                const a = (b.getAttribute('aria-label') || '').toLowerCase();
+                                return t.includes('images') || a.includes('images');
+                            });
+                            if (imgBtn) imgBtn.click();
+                        });
+                        await new Promise(r => setTimeout(r, 1500));
+                    }
+
+                    await worker.page.waitForSelector('input[accept*="image"]', { timeout: 25000 });
+
+                    // Step 2: 2s WARM-UP DELAY
+                    await new Promise(r => setTimeout(r, 2000));
+                    isFirstImage = false;
+                } else {
+                    // Clear previous image instantly without page reload (zero redirect risk!)
+                    const cleared = await worker.page.evaluate(() => {
+                        const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
+                        const clearBtn = btns.find(b => {
                             const t = (b.innerText || '').toLowerCase();
                             const a = (b.getAttribute('aria-label') || '').toLowerCase();
-                            return t.includes('images') || a.includes('images');
+                            return t.includes('clear') || a.includes('clear');
                         });
-                        if (imgBtn) imgBtn.click();
+                        if (clearBtn) {
+                            clearBtn.click();
+                            return true;
+                        }
+                        return false;
                     });
-                    await new Promise(r => setTimeout(r, 1500));
+
+                    if (!cleared) {
+                        await worker.page.goto('https://translate.google.co.in/?sl=auto&tl=en&op=images', { waitUntil: 'networkidle2' });
+                    }
+                    await new Promise(r => setTimeout(r, 800));
+                    await worker.page.waitForSelector('input[accept*="image"]', { timeout: 15000 });
                 }
-
-                await worker.page.waitForSelector('input[accept*="image"]', { timeout: 25000 });
-
-                // Step 2: 2s WARM-UP DELAY
-                await new Promise(r => setTimeout(r, 2000));
 
                 // Step 3: REAL OS FILE UPLOAD strictly on input[accept*="image"]
                 const input = await worker.page.$('input[accept*="image"]');
