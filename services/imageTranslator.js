@@ -140,6 +140,7 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                 const imgStart = Date.now();
                 console.log(`[Worker-${workerId + 1}] Processing image [${i + 1}/${queue.length}]...`);
 
+                let tempPath = null;
                 try {
                     const { buffer: originalBuffer, ext } = await getImageBuffer(imgInput);
                     const cleanExt = (ext || '').toLowerCase();
@@ -150,6 +151,11 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                         allResults[originalIdx] = { original: imgInput, translated: false };
                         continue;
                     }
+
+                    const fileExt = cleanExt === 'png' ? 'png' : cleanExt === 'webp' ? 'webp' : 'jpg';
+                    const tempName = `temp-w${workerId}-${Date.now()}-${uuidv4().substring(0, 6)}.${fileExt}`;
+                    tempPath = path.join(uploadsDir, tempName);
+                    fs.writeFileSync(tempPath, originalBuffer);
 
                     // Ensure Images tab is active and clear any old state
                     await page.evaluate(() => {
@@ -166,26 +172,22 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                         await new Promise(r => setTimeout(r, 400));
                     }
 
-                    // 1. Write image into Chrome Clipboard memory (NO file manager dialog opens!)
-                    await page.evaluate(async (base64) => {
-                        const b = atob(base64);
-                        const u = new Uint8Array(b.length);
-                        for (let j = 0; j < b.length; j++) u[j] = b.charCodeAt(j);
-                        const blob = new Blob([u], { type: 'image/png' });
-                        const item = new ClipboardItem({ 'image/png': blob });
-                        await navigator.clipboard.write([item]);
-                    }, originalBuffer.toString('base64'));
+                    // Upload via programmatic image input (Zero popups!)
+                    const imageInput = await page.$('input[accept*="image"]');
+                    if (!imageInput) {
+                        console.error(`[Worker-${workerId + 1}] Could not find image input`);
+                        allResults[originalIdx] = { original: imgInput, translated: false };
+                        continue;
+                    }
 
-                    // 2. Click [Paste from clipboard] button
-                    await page.evaluate(() => {
-                        const pasteBtn = Array.from(document.querySelectorAll('button')).find(b => 
-                            (b.innerText || '').toLowerCase().includes('paste from clipboard') || 
-                            (b.getAttribute('aria-label') || '').toLowerCase().includes('paste')
-                        );
-                        if (pasteBtn) pasteBtn.click();
-                    });
+                    await imageInput.uploadFile(tempPath);
 
-                    // 3. Smart Polling: Wait for Download translation button to appear
+                    // Record existing files in Downloads folder
+                    const downloadsDir = path.join(process.env.USERPROFILE || 'C:\\Users\\HP-PC', 'Downloads');
+                    let beforeDownloads = [];
+                    try { beforeDownloads = fs.readdirSync(downloadsDir); } catch {}
+
+                    // Smart Polling: Wait for Download translation button to appear
                     let hasTranslation = false;
                     for (let poll = 0; poll < 32; poll++) { // 32 * 250ms = 8s max
                         await new Promise(r => setTimeout(r, 250));
@@ -213,46 +215,35 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                     }
 
                     if (hasTranslation) {
-                        // 4. Hook the download click to capture the TRUE in-painted translated file (translated_image_en.png)
-                        const downloadResult = await page.evaluate(async () => {
-                            return new Promise((resolve) => {
-                                let captured = false;
-                                const origClick = HTMLAnchorElement.prototype.click;
-                                HTMLAnchorElement.prototype.click = function() {
-                                    if (!captured && this.href) {
-                                        captured = true;
-                                        const href = this.href;
-                                        fetch(href).then(r => r.blob()).then(blob => {
-                                            const reader = new FileReader();
-                                            reader.onloadend = () => resolve({ success: true, base64: reader.result });
-                                            reader.onerror = () => resolve({ success: false });
-                                            reader.readAsDataURL(blob);
-                                        }).catch(() => resolve({ success: false }));
-                                    }
-                                    return origClick.apply(this, arguments);
-                                };
-
-                                const dlBtn = Array.from(document.querySelectorAll('button, a')).find(b => {
-                                    const a = (b.getAttribute('aria-label') || '').toLowerCase();
-                                    const t = (b.innerText || '').toLowerCase();
-                                    return a.includes('download') || t.includes('download');
-                                });
-
-                                if (dlBtn) dlBtn.click();
-                                else resolve({ success: false });
-
-                                setTimeout(() => {
-                                    if (!captured) resolve({ success: false });
-                                }, 5000);
+                        // Click Download translation button to get true in-painted image
+                        await page.evaluate(() => {
+                            const dlBtn = Array.from(document.querySelectorAll('button, a')).find(b => {
+                                const a = (b.getAttribute('aria-label') || '').toLowerCase();
+                                const t = (b.innerText || '').toLowerCase();
+                                return a.includes('download') || t.includes('download');
                             });
+                            if (dlBtn) dlBtn.click();
                         });
 
-                        if (downloadResult && downloadResult.success && downloadResult.base64) {
-                            const cleanBase64 = downloadResult.base64.replace(/^data:image\/\w+;base64,/, '');
-                            const renderedBuffer = Buffer.from(cleanBase64, 'base64');
+                        // Wait for downloaded file in Downloads folder
+                        let downloadedFile = null;
+                        for (let w = 0; w < 24; w++) {
+                            await new Promise(r => setTimeout(r, 250));
+                            try {
+                                const nowDownloads = fs.readdirSync(downloadsDir);
+                                const newFiles = nowDownloads.filter(f => !beforeDownloads.includes(f) && !f.endsWith('.crdownload') && !f.endsWith('.tmp'));
+                                if (newFiles.length > 0) {
+                                    downloadedFile = path.join(downloadsDir, newFiles[0]);
+                                    break;
+                                }
+                            } catch {}
+                        }
+
+                        if (downloadedFile && fs.existsSync(downloadedFile)) {
                             const filename = `translated-${Date.now()}-${uuidv4().substring(0, 8)}.png`;
                             const targetFile = path.join(uploadsDir, filename);
-                            fs.writeFileSync(targetFile, renderedBuffer);
+                            fs.copyFileSync(downloadedFile, targetFile);
+                            try { fs.unlinkSync(downloadedFile); } catch {}
 
                             const publicPath = `/uploads/${filename}`;
                             console.log(`[Worker-${workerId + 1}] Image [${i + 1}] TRUE TRANSLATED IMAGE SAVED in ${((Date.now() - imgStart) / 1000).toFixed(1)}s -> ${publicPath}`);
@@ -271,13 +262,6 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                             original: imgInput,
                             translated: false
                         };
-                    }
-
-                    // Click (X) Clear image button to instantly reset dropzone for the next image!
-                    const resetBtn = await page.$('button[aria-label="Clear image"]');
-                    if (resetBtn) {
-                        await resetBtn.click();
-                        await new Promise(r => setTimeout(r, 400));
                     }
                 } catch (err) {
                     console.warn(`[Worker-${workerId + 1}] Image [${i + 1}] error: ${err.message}`);
