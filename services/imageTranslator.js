@@ -171,23 +171,14 @@ async function translateMultipleImages(imageList) {
                         const blob = new Blob([byteArray], { type: mime });
                         const file = new File([blob], fname, { type: mime });
 
-                        const input = document.querySelector('input[type="file"]');
-                        if (input) {
-                            const dt = new DataTransfer();
-                            dt.items.add(file);
-                            input.files = dt.files;
-                            input.dispatchEvent(new Event('change', { bubbles: true }));
-                            input.dispatchEvent(new Event('input', { bubbles: true }));
-                        }
+                        const dt = new DataTransfer();
+                        dt.items.add(file);
 
-                        const pasteDt = new DataTransfer();
-                        pasteDt.items.add(file);
-                        const pasteEvt = new ClipboardEvent('paste', {
-                            bubbles: true,
-                            cancelable: true,
-                            clipboardData: pasteDt
-                        });
-                        document.dispatchEvent(pasteEvt);
+                        // Drop file directly into the Google Translate dropzone
+                        const dropzone = document.querySelector('[role="region"]') || document.body;
+                        dropzone.dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: dt }));
+                        dropzone.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
+                        dropzone.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
                     }, originalBuffer.toString('base64'), mimeType, filename);
 
                     // Smart Polling: Wait up to 6s max
