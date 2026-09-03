@@ -136,7 +136,18 @@ async function translateMultipleImages(imageList) {
                 let tempPath = null;
                 try {
                     const { buffer: originalBuffer, ext } = await getImageBuffer(imgInput);
-                    const tempName = `temp-w${workerId}-${Date.now()}-${uuidv4().substring(0, 6)}.${ext === 'png' ? 'png' : 'jpg'}`;
+                    const cleanExt = (ext || '').toLowerCase();
+
+                    // Google Translate only supports static images (.jpg, .jpeg, .png, .webp)
+                    // Skip animated GIFs, SVGs, or videos instantly
+                    if (cleanExt === 'gif' || cleanExt === 'svg' || cleanExt === 'mp4' || cleanExt === 'mov') {
+                        console.log(`[Worker-${workerId + 1}] Skipping unsupported format (.${cleanExt}) for image [${i + 1}]`);
+                        allResults[originalIdx] = { original: imgInput, translated: false };
+                        continue;
+                    }
+
+                    const fileExt = cleanExt === 'png' ? 'png' : cleanExt === 'webp' ? 'webp' : 'jpg';
+                    const tempName = `temp-w${workerId}-${Date.now()}-${uuidv4().substring(0, 6)}.${fileExt}`;
                     tempPath = path.join(uploadsDir, tempName);
                     fs.writeFileSync(tempPath, originalBuffer);
 
@@ -144,6 +155,9 @@ async function translateMultipleImages(imageList) {
                     await page.evaluate(() => {
                         const imgTab = Array.from(document.querySelectorAll('button, a')).find(el => (el.innerText || '').trim() === 'Images');
                         if (imgTab) imgTab.click();
+                        // Dismiss any "Got it" toast if present
+                        const gotItBtn = Array.from(document.querySelectorAll('button')).find(b => (b.innerText || '').toLowerCase().includes('got it'));
+                        if (gotItBtn) gotItBtn.click();
                     });
 
                     // Ensure exact image file input is available
