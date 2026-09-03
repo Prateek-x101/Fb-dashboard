@@ -5,12 +5,60 @@ const fetch = require('node-fetch');
 const { v4: uuidv4 } = require('uuid');
 
 /**
- * 5-Tab Parallel Google Translate Engine with:
- * 1. DIRECT DATATRANSFER PASTE: Fetches image in browser as standard image/png Blob and pastes via DataTransfer.
- *    (Eliminates "Can't support this format" and "Node is not visible" completely!)
- * 2. DIRECT IN-MEMORY RAM EXTRACTION: Hooks URL.createObjectURL to grab the translated image directly from RAM.
- *    (Zero filesystem downloads, zero missing files!)
- * 3. 2s Warm-up delay + 2s Canvas settle delay.
+ * Cleanly download or resolve an image to a real OS file on disk
+ */
+async function getLocalImageFile(input, uploadsDir) {
+    if (typeof input === 'string') {
+        let cleanInput = input.trim();
+        if (cleanInput.startsWith('//')) cleanInput = 'https:' + cleanInput;
+
+        // Local upload path
+        if (cleanInput.startsWith('/uploads/') || cleanInput.startsWith('uploads/')) {
+            const relPath = cleanInput.replace(/^\/?uploads\//, '');
+            const localFile = path.join(uploadsDir, relPath);
+            if (fs.existsSync(localFile)) {
+                return { localPath: localFile, isTemp: false };
+            }
+        }
+
+        if (fs.existsSync(cleanInput) && !cleanInput.startsWith('http')) {
+            return { localPath: cleanInput, isTemp: false };
+        }
+
+        // Remote URL (Shopify CDN, etc.)
+        if (cleanInput.startsWith('http://') || cleanInput.startsWith('https://')) {
+            const resp = await fetch(cleanInput, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+                },
+                timeout: 25000
+            });
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+            const arrayBuffer = await resp.arrayBuffer();
+            const buffer = Buffer.from(arrayBuffer);
+            const contentType = resp.headers.get('content-type') || '';
+            let ext = 'jpg';
+            if (contentType.includes('png') || cleanInput.includes('.png')) ext = 'png';
+            else if (contentType.includes('webp') || cleanInput.includes('.webp')) ext = 'webp';
+            else if (contentType.includes('gif') || cleanInput.includes('.gif')) ext = 'gif';
+
+            const tempName = `temp-${Date.now()}-${uuidv4().substring(0, 8)}.${ext}`;
+            const tempFile = path.join(uploadsDir, tempName);
+            fs.writeFileSync(tempFile, buffer);
+            return { localPath: tempFile, isTemp: true, ext };
+        }
+    }
+
+    throw new Error('Unsupported image input');
+}
+
+/**
+ * 5-Tab Parallel Google Translate Engine:
+ * 1. REAL OS FILE UPLOAD: Uploads standard real files on disk (Zero synthetic format errors!)
+ * 2. STRICT IMAGES MODE: Checks and forces Images tab if Google ever redirects to Text mode
+ * 3. DIRECT IN-MEMORY RAM EXTRACTION: Hooks URL.createObjectURL to grab translated PNG directly from RAM
+ * 4. 2s Warm-up delay + 2s Canvas settle delay
  */
 async function translateMultipleImages(imageList, sourceLang = 'auto') {
     if (!Array.isArray(imageList) || imageList.length === 0) {
@@ -25,7 +73,7 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
 
     // 5 Parallel Tabs
     const NUM_WORKERS = Math.min(5, imageList.length);
-    console.log(`[GoogleTranslate] Launching ${NUM_WORKERS} parallel tabs for ${imageList.length} images (DataTransfer Paste & RAM Extraction)...`);
+    console.log(`[GoogleTranslate] Launching ${NUM_WORKERS} parallel tabs for ${imageList.length} images (Real OS Upload + RAM Extraction)...`);
 
     let browser = null;
     try {
@@ -81,8 +129,11 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
             const imgStart = Date.now();
             console.log(`[Tab ${worker.id}] Processing image [${originalIdx + 1}/${imageList.length}]: ${imgInput}`);
 
+            let localInfo = null;
             try {
-                const ext = (path.extname(imgInput.split('?')[0]) || '').toLowerCase();
+                localInfo = await getLocalImageFile(imgInput, uploadsDir);
+                const ext = (path.extname(localInfo.localPath) || '').toLowerCase();
+
                 if (ext === '.gif' || ext === '.svg' || ext === '.mp4') {
                     console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] is ${ext} - preserving original.`);
                     allResults[originalIdx] = { original: imgInput, translated: false };
@@ -111,53 +162,30 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                     }
                 });
 
-                // Step 2: 2s WARM-UP DELAY
+                // Step 2: 2s WARM-UP DELAY for Google Lens WebAssembly & OCR models
                 await new Promise(r => setTimeout(r, 2000));
 
-                // Step 3: Direct In-Browser DataTransfer Image Paste (Bypasses all format errors!)
-                const pasteResult = await worker.page.evaluate(async (url) => {
-                    try {
-                        let cleanUrl = url.trim();
-                        if (cleanUrl.startsWith('//')) cleanUrl = 'https:' + cleanUrl;
+                // Force file input to be visible and upload REAL OS FILE
+                await worker.page.evaluate(() => {
+                    const inputs = document.querySelectorAll('input[type="file"]');
+                    inputs.forEach(inp => {
+                        inp.style.display = 'block';
+                        inp.style.visibility = 'visible';
+                        inp.style.opacity = '1';
+                        inp.style.position = 'fixed';
+                        inp.style.top = '0px';
+                        inp.style.left = '0px';
+                        inp.style.width = '100px';
+                        inp.style.height = '100px';
+                        inp.style.zIndex = '999999';
+                    });
+                });
 
-                        const resp = await fetch(cleanUrl);
-                        const blob = await resp.blob();
+                await worker.page.waitForSelector('input[type="file"]', { timeout: 15000 });
+                const fileInput = await worker.page.$('input[type="file"]');
+                await fileInput.uploadFile(localInfo.localPath);
 
-                        let mime = blob.type || 'image/jpeg';
-                        if (!mime || mime === 'application/octet-stream') mime = 'image/jpeg';
-                        const ext = mime.includes('png') ? 'png' : (mime.includes('webp') ? 'webp' : 'jpg');
-
-                        const file = new File([blob], `image.${ext}`, { type: mime });
-
-                        const input = document.querySelector('input[type="file"]');
-                        if (input) {
-                            const dt = new DataTransfer();
-                            dt.items.add(file);
-                            input.files = dt.files;
-                            input.dispatchEvent(new Event('change', { bubbles: true }));
-                            input.dispatchEvent(new Event('input', { bubbles: true }));
-                            return { success: true, method: 'input_datatransfer' };
-                        }
-
-                        const pasteDt = new DataTransfer();
-                        pasteDt.items.add(file);
-                        const pasteEvt = new ClipboardEvent('paste', {
-                            bubbles: true,
-                            cancelable: true,
-                            clipboardData: pasteDt
-                        });
-                        document.dispatchEvent(pasteEvt);
-                        return { success: true, method: 'clipboard_paste' };
-                    } catch (e) {
-                        return { success: false, error: e.message };
-                    }
-                }, imgInput);
-
-                if (!pasteResult.success) {
-                    console.warn(`[Tab ${worker.id}] Paste warning:`, pasteResult.error);
-                }
-
-                // Step 4: Wait for translation
+                // Step 3: Wait for translation
                 let hasTranslation = false;
                 for (let poll = 0; poll < 35; poll++) {
                     await new Promise(r => setTimeout(r, 500));
@@ -191,7 +219,7 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                 }
 
                 if (hasTranslation) {
-                    // Step 5: 2s CANVAS SETTLE DELAY
+                    // Step 4: 2s CANVAS SETTLE DELAY
                     await new Promise(r => setTimeout(r, 2000));
 
                     // Hook URL.createObjectURL BEFORE clicking download
@@ -271,6 +299,10 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
             } catch (err) {
                 console.error(`[Tab ${worker.id}] Error on image [${originalIdx + 1}]:`, err.message);
                 allResults[originalIdx] = { original: imgInput, translated: false };
+            } finally {
+                if (localInfo && localInfo.isTemp && fs.existsSync(localInfo.localPath)) {
+                    try { fs.unlinkSync(localInfo.localPath); } catch {}
+                }
             }
         }
     }
