@@ -910,40 +910,43 @@
                 const isUrlImport = !!url && !files.length;
 
                 if (isUrlImport) {
-                    // Determine log steps based on URL type
-                    const isShopifyUrl = /myshopify\.com|shopify\.com/i.test(url);
+                    // Determine log steps based on URL type (accurately detect all Shopify product links)
+                    const isShopifyUrl = /\/products\/[a-zA-Z0-9-_]+/i.test(url) && !url.includes('amazon.') && !url.includes('alibaba.');
                     const logSteps = isShopifyUrl ? [
                         { time: 0, text: "Connecting to Shopify store... 🏪" },
-                        { time: 2, text: "Fetching product data via API... 📦" },
-                        { time: 5, text: "Downloading product images... 🖼️" },
-                        { time: 8, text: "Mapping variants & options... 🧩" },
-                        { time: 12, text: "Generating listing preview... ✨" }
+                        { time: 2, text: "Fetching product metadata & options... 📦" },
+                        { time: 5, text: "Translating product text & size charts with AI... 🌐" },
+                        { time: 10, text: "Processing images & variant combinations... 🖼️" },
+                        { time: 16, text: "Generating clean Shopify listing preview... ✨" },
+                        { time: 25, text: "Finalizing product data... ⏳" }
                     ] : [
                         { time: 0, text: "Launching headless browser... 🌐" },
                         { time: 2, text: "Loading product page... 📄" },
                         { time: 5, text: "Waiting for page render & JS hydration... ⚡" },
                         { time: 8, text: "Extracting images from DOM... 🖼️" },
                         { time: 11, text: "Detecting color/size variant links... 🔍" },
-                        { time: 14, text: "Crawling sibling variant pages (1 tab only)... 🧲" },
+                        { time: 14, text: "Crawling sibling variant pages... 🧲" },
                         { time: 18, text: "Sending data to Gemini AI for analysis... 🤖" },
                         { time: 22, text: "AI generating title, tags, variants, description... ✍️" },
                         { time: 28, text: "Matching collections & finalizing... 🎯" },
                         { time: 35, text: "Almost done... hold on... ⏳" }
                     ];
 
+                    procMsg.textContent = logSteps[0].text;
                     importToast = window.AppController.showToast(
                         `🛍️ Import: ${logSteps[0].text}`, 'info', null
                     );
 
-                    // RAM polling every 2s
+                    // RAM polling every 1s
                     importRamInterval = setInterval(async () => {
                         try {
                             const ramData = await window.API.getRamStatus();
                             if (ramData && typeof ramData.free === 'number') {
-                                importRamText = ` | 🧠 RAM: ${ramData.free}MB free`;
+                                const freeGB = (ramData.free / 1024).toFixed(1);
+                                importRamText = ` | 🧠 Free RAM: ${freeGB} GB`;
                             }
                         } catch {}
-                    }, 2000);
+                    }, 1000);
 
                     // Progress step updates every 500ms
                     importProgressInterval = setInterval(() => {
@@ -953,6 +956,9 @@
                             if (importSeconds >= step.time) {
                                 currentStepText = step.text;
                             }
+                        }
+                        if (procMsg) {
+                            procMsg.innerHTML = `${currentStepText} <br/><span style="font-size:0.75rem; color:#a78bfa; opacity:0.85;">${importRamText} (⏱️ ${importSeconds.toFixed(1)}s)</span>`;
                         }
                         if (importToast) {
                             importToast.update(

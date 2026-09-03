@@ -2019,41 +2019,56 @@ Return ONLY valid JSON in this exact shape:
     // 2. Direct Image Translation via Google Translate (One by One)
     if (autoTranslateImages !== false) {
         try {
-            // A. Gallery Images (One by One)
+            // A. Gallery Images (Parallel chunks of 4)
             if (Array.isArray(product.images) && product.images.length > 0) {
-                console.log(`[Translate] Translating ${product.images.length} gallery images one by one via Google Translate...`);
-                for (let i = 0; i < product.images.length; i++) {
-                    const oldImg = product.images[i];
-                    try {
-                        const imgRes = await imageTranslator.translateImage(oldImg, geminiApiKey, geminiModel);
-                        if (imgRes.translated && imgRes.translatedUrl) {
-                            product.images[i] = imgRes.translatedUrl;
-                            if (product.description && typeof product.description === 'string') {
-                                product.description = product.description.split(oldImg).join(imgRes.translatedUrl);
+                console.log(`[Translate] Translating ${product.images.length} gallery images in parallel chunks...`);
+                const chunkSize = 4;
+                for (let i = 0; i < product.images.length; i += chunkSize) {
+                    const chunk = product.images.slice(i, i + chunkSize);
+                    await Promise.all(chunk.map(async (oldImg, chunkIdx) => {
+                        const actualIdx = i + chunkIdx;
+                        try {
+                            const imgRes = await imageTranslator.translateImage(oldImg, geminiApiKey, geminiModel);
+                            if (imgRes.translated && imgRes.translatedUrl) {
+                                product.images[actualIdx] = imgRes.translatedUrl;
+                                if (product.description && typeof product.description === 'string') {
+                                    product.description = product.description.split(oldImg).join(imgRes.translatedUrl);
+                                }
                             }
+                        } catch (imgErr) {
+                            console.warn(`[Translate] Gallery image ${actualIdx} skipped:`, imgErr.message);
                         }
-                    } catch (imgErr) {
-                        console.warn(`[Translate] Gallery image ${i} skipped:`, imgErr.message);
-                    }
+                    }));
                 }
             }
 
-            // B. Embedded Description Images (e.g. Size Charts in Description HTML) (One by One)
+            // B. Embedded Description Images (Parallel chunks of 4)
             if (product.description && typeof product.description === 'string') {
                 const imgMatches = product.description.match(/<img[^>]+src=["']([^"']+)["']/gi);
                 if (imgMatches) {
+                    const extraImgSrcs = [];
                     for (const match of imgMatches) {
                         const srcMatch = match.match(/src=["']([^"']+)["']/i);
                         const imgSrc = srcMatch ? srcMatch[1] : null;
-                        if (imgSrc && !product.images.includes(imgSrc) && !imgSrc.includes('/uploads/translated-')) {
-                            try {
-                                const imgRes = await imageTranslator.translateImage(imgSrc, geminiApiKey, geminiModel);
-                                if (imgRes.translated && imgRes.translatedUrl) {
-                                    product.description = product.description.split(imgSrc).join(imgRes.translatedUrl);
+                        if (imgSrc && !product.images.includes(imgSrc) && !imgSrc.includes('/uploads/translated-') && !extraImgSrcs.includes(imgSrc)) {
+                            extraImgSrcs.push(imgSrc);
+                        }
+                    }
+
+                    if (extraImgSrcs.length > 0) {
+                        const chunkSize = 4;
+                        for (let i = 0; i < extraImgSrcs.length; i += chunkSize) {
+                            const chunk = extraImgSrcs.slice(i, i + chunkSize);
+                            await Promise.all(chunk.map(async (imgSrc) => {
+                                try {
+                                    const imgRes = await imageTranslator.translateImage(imgSrc, geminiApiKey, geminiModel);
+                                    if (imgRes.translated && imgRes.translatedUrl) {
+                                        product.description = product.description.split(imgSrc).join(imgRes.translatedUrl);
+                                    }
+                                } catch (e) {
+                                    console.warn(`[Translate] Inline description image skipped:`, e.message);
                                 }
-                            } catch (e) {
-                                console.warn(`[Translate] Inline description image skipped:`, e.message);
-                            }
+                            }));
                         }
                     }
                 }
