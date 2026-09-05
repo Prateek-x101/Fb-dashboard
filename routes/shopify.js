@@ -2192,45 +2192,76 @@ Return ONLY valid JSON in this exact shape:
                     console.log(`[Translate] Running Gemini Vision to compare ${descriptionImages.length} Description & ${galleryImages.length} Gallery images for visual duplicates & text overlays...`);
                     const visualAnalysis = await geminiService.analyzeAndDeduplicateListingImages(geminiApiKey, geminiModel, descriptionImages, galleryImages);
                     if (visualAnalysis && Array.isArray(visualAnalysis.uniqueImagesToTranslate) && visualAnalysis.uniqueImagesToTranslate.length > 0) {
-                        const descToGalMap = new Map();
-                        const galToDescMap = new Map();
+                        const galToDescUrls = new Map();
+                        const descToGalUrls = new Map();
                         if (Array.isArray(visualAnalysis.duplicatePairs)) {
                             visualAnalysis.duplicatePairs.forEach(pair => {
                                 if (typeof pair.descIndex === 'number' && typeof pair.galIndex === 'number') {
-                                    descToGalMap.set(pair.descIndex, pair.galIndex);
-                                    galToDescMap.set(pair.galIndex, pair.descIndex);
+                                    if (descriptionImages[pair.descIndex] && galleryImages[pair.galIndex]) {
+                                        if (!galToDescUrls.has(pair.galIndex)) galToDescUrls.set(pair.galIndex, new Set());
+                                        galToDescUrls.get(pair.galIndex).add(descriptionImages[pair.descIndex]);
+
+                                        if (!descToGalUrls.has(pair.descIndex)) descToGalUrls.set(pair.descIndex, new Set());
+                                        descToGalUrls.get(pair.descIndex).add(galleryImages[pair.galIndex]);
+                                    }
                                 }
                             });
                         }
 
                         visualAnalysis.uniqueImagesToTranslate.forEach(item => {
                             let u = null;
-                            let pairedDescUrl = null;
-                            let pairedGalUrl = null;
+                            let pairedDescUrls = [];
+                            let pairedGalUrls = [];
                             let isGal = false;
                             let isDesc = false;
 
                             if (item.source === 'gal' && galleryImages[item.index]) {
                                 u = galleryImages[item.index];
                                 isGal = true;
-                                let dIdx = (item.pairedDescIndex !== null && item.pairedDescIndex !== undefined) ? item.pairedDescIndex : galToDescMap.get(item.index);
-                                if (typeof dIdx === 'number' && descriptionImages[dIdx]) {
-                                    pairedDescUrl = descriptionImages[dIdx];
+                                const descSet = galToDescUrls.get(item.index) || new Set();
+                                if (item.pairedDescIndex !== null && item.pairedDescIndex !== undefined && descriptionImages[item.pairedDescIndex]) {
+                                    descSet.add(descriptionImages[item.pairedDescIndex]);
+                                }
+                                if (descSet.size > 0) {
                                     isDesc = true;
+                                    pairedDescUrls = Array.from(descSet);
                                 }
                             } else if (item.source === 'desc' && descriptionImages[item.index]) {
                                 u = descriptionImages[item.index];
                                 isDesc = true;
-                                let gIdx = (item.pairedGalIndex !== null && item.pairedGalIndex !== undefined) ? item.pairedGalIndex : descToGalMap.get(item.index);
-                                if (typeof gIdx === 'number' && galleryImages[gIdx]) {
-                                    pairedGalUrl = galleryImages[gIdx];
+                                pairedDescUrls = [u];
+                                const galSet = descToGalUrls.get(item.index) || new Set();
+                                if (item.pairedGalIndex !== null && item.pairedGalIndex !== undefined && galleryImages[item.pairedGalIndex]) {
+                                    galSet.add(galleryImages[item.pairedGalIndex]);
+                                }
+                                if (galSet.size > 0) {
                                     isGal = true;
+                                    pairedGalUrls = Array.from(galSet);
                                 }
                             }
 
                             if (u && !targetImagesForGoogle.includes(u)) {
                                 targetImagesForGoogle.push(u);
-                                imageMetadataMap.set(u, { isDesc, isGal, pairedDescUrl, pairedGalUrl });
+                                imageMetadataMap.set(u, { isDesc, isGal, pairedDescUrls, pairedGalUrls });
+                            }
+                        });
+
+                        // Safety net: ensure every non-gif description image is covered!
+                        // If Gemini missed an "About Us" or unique description image, auto-include it so it's 100% translated!
+                        descriptionImages.forEach((dImg, dIdx) => {
+                            if (!dImg || dImg.includes('.gif') || dImg.includes('.svg') || dImg.includes('.mp4')) return;
+
+                            const alreadyCovered = targetImagesForGoogle.some(tUrl => {
+                                const meta = imageMetadataMap.get(tUrl);
+                                if (areSameImageUrls(tUrl, dImg)) return true;
+                                if (meta && Array.isArray(meta.pairedDescUrls) && meta.pairedDescUrls.some(p => areSameImageUrls(p, dImg))) return true;
+                                return false;
+                            });
+
+                            if (!alreadyCovered) {
+                                console.log(`[Translate] Auto-including unmapped description image [${dIdx}] (e.g. About Us / Infographic): ${dImg}`);
+                                targetImagesForGoogle.push(dImg);
+                                imageMetadataMap.set(dImg, { isDesc: true, isGal: false, pairedDescUrls: [dImg], pairedGalUrls: [] });
                             }
                         });
 
@@ -2303,18 +2334,22 @@ Return ONLY valid JSON in this exact shape:
                         const meta = imageMetadataMap.get(res.original);
 
                         // 1. Description replacement:
-                        // Check if this image is for Description (either directly or via pairing/matching)
+                        const descTargets = new Set();
+                        if (meta && Array.isArray(meta.pairedDescUrls)) {
+                            meta.pairedDescUrls.forEach(p => descTargets.add(p));
+                        }
+                        if (meta && meta.pairedDescUrl) descTargets.add(meta.pairedDescUrl);
+                        descTargets.add(res.original);
+
                         const isForDescription = (meta && meta.isDesc) || descriptionImages.some(dImg => areSameImageUrls(dImg, res.original));
                         if (isForDescription && product.description && typeof product.description === 'string') {
-                            const descTargetUrls = [res.original];
-                            if (meta && meta.pairedDescUrl) descTargetUrls.push(meta.pairedDescUrl);
                             descriptionImages.forEach(dImg => {
-                                if (areSameImageUrls(dImg, res.original) || (meta && meta.pairedDescUrl && areSameImageUrls(dImg, meta.pairedDescUrl))) {
-                                    if (!descTargetUrls.includes(dImg)) descTargetUrls.push(dImg);
+                                if (Array.from(descTargets).some(tUrl => areSameImageUrls(dImg, tUrl))) {
+                                    descTargets.add(dImg);
                                 }
                             });
 
-                            descTargetUrls.forEach(dUrl => {
+                            Array.from(descTargets).forEach(dUrl => {
                                 product.description = applyImageReplacement(product.description, dUrl, res.translatedUrl);
                             });
 
@@ -2323,7 +2358,7 @@ Return ONLY valid JSON in this exact shape:
                             if (imgTagMatches) {
                                 imgTagMatches.forEach(tag => {
                                     const m = tag.match(/\b(?:src|data-src|data-original)=["']([^"']+)["']/i);
-                                    if (m && m[1] && descTargetUrls.some(dUrl => areSameImageUrls(m[1], dUrl))) {
+                                    if (m && m[1] && Array.from(descTargets).some(dUrl => areSameImageUrls(m[1], dUrl))) {
                                         product.description = product.description.split(m[1]).join(res.translatedUrl);
                                     }
                                 });
@@ -2332,19 +2367,23 @@ Return ONLY valid JSON in this exact shape:
                         }
 
                         // 2. Gallery replacement:
-                        // Check if this image is for Gallery (either directly or via pairing/matching)
-                        const isForGallery = (meta && meta.isGal) || galleryImages.some(gImg => areSameImageUrls(gImg, res.original));
-                        const galTargetUrls = [res.original];
-                        if (meta && meta.pairedGalUrl) galTargetUrls.push(meta.pairedGalUrl);
-                        galleryImages.forEach(gImg => {
-                            if (areSameImageUrls(gImg, res.original) || (meta && meta.pairedGalUrl && areSameImageUrls(gImg, meta.pairedGalUrl))) {
-                                if (!galTargetUrls.includes(gImg)) galTargetUrls.push(gImg);
-                            }
-                        });
+                        const galTargets = new Set();
+                        if (meta && Array.isArray(meta.pairedGalUrls)) {
+                            meta.pairedGalUrls.forEach(p => galTargets.add(p));
+                        }
+                        if (meta && meta.pairedGalUrl) galTargets.add(meta.pairedGalUrl);
+                        galTargets.add(res.original);
 
+                        const isForGallery = (meta && meta.isGal) || galleryImages.some(gImg => areSameImageUrls(gImg, res.original));
                         if (isForGallery && Array.isArray(product.images)) {
+                            galleryImages.forEach(gImg => {
+                                if (Array.from(galTargets).some(tUrl => areSameImageUrls(gImg, tUrl))) {
+                                    galTargets.add(gImg);
+                                }
+                            });
+
                             product.images = product.images.map(galleryImg => {
-                                if (galTargetUrls.some(gUrl => areSameImageUrls(galleryImg, gUrl))) {
+                                if (Array.from(galTargets).some(gUrl => areSameImageUrls(galleryImg, gUrl))) {
                                     console.log(`[Translate] Replaced in Gallery: ${typeof galleryImg === 'string' ? galleryImg : galleryImg?.src} -> ${res.translatedUrl}`);
                                     return res.translatedUrl;
                                 }
