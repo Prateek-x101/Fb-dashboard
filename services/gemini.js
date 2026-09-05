@@ -2,8 +2,16 @@ const fetch = require('node-fetch');
 
 const BASE_URL = 'https://generativelanguage.googleapis.com/v1';
 const VISION_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
-const DEFAULT_MODEL = 'gemini-1.5-flash';
-const OBSOLETE_MODELS = new Set();
+const DEFAULT_MODEL = 'gemini-3.6-flash';
+const OBSOLETE_MODELS = new Set([
+    'gemini-1.5-flash',
+    'gemini-1.5-pro',
+    'gemini-1.0-pro',
+    'gemini-pro',
+    'gemini-2.0-flash',
+    'gemini-2.5-flash',
+    'gemini-2.5-pro'
+]);
 
 function normalizeModel(model) {
     return !model || OBSOLETE_MODELS.has(model) ? DEFAULT_MODEL : model;
@@ -476,10 +484,13 @@ Select EVERY image that contains ANY visible PRINTED OR DIGITAL TEXT, NUMBERS, O
 - Sizing charts / measurement tables (tables with Chest, Sleeve, Length, Waist measurements, size codes S/M/L/XL/XXL).
 - Infographic feature callouts and icons with text labels (e.g. "Atmungsaktiv", "Elastisch", "Bequem", material specs, waterproof, etc.).
 - Text headline overlays, FAQ banners, promotional text, or warranty badges written on the image.
+- "About Us" / brand story sections, company info, store guarantees, return policy banners, or customer service notices.
+- Any lifestyle or model photos that have text headings, subheadings, or captions overlaying them.
+- If an image has ANY German, French, Italian, Spanish, or other non-English words or headings, YOU MUST SELECT IT for translation!
 
 STRICT EXCLUSIONS (DO NOT SELECT):
-- Plain product photos showing a model wearing clothes with NO text overlay on the photo.
-- Plain product photos of clothing, fabric, or accessories with NO text or tables added.
+- Plain product photos showing a model wearing clothes with 100% ZERO text overlay on the photo.
+- Plain product photos of clothing, fabric, or accessories with 100% NO text or tables added.
 
 Return ONLY a valid JSON object in this exact format:
 {
@@ -503,7 +514,8 @@ Return ONLY a valid JSON object in this exact format:
                             temperature: 0.1,
                             response_mime_type: 'application/json'
                         }
-                    })
+                    }),
+                    timeout: 60000
                 });
 
                 const data = await response.json();
@@ -531,8 +543,8 @@ Return ONLY a valid JSON object in this exact format:
             return allSelectedUrls;
         } catch (err) {
             console.error('[Gemini Vision] Filter failed:', err.message);
-            // Return only first 4 images as safe fallback instead of dumping all 30!
-            return imageUrls.slice(0, 4);
+            // Safe fallback: return all imageUrls so no description images get dropped!
+            return imageUrls;
         }
     },
 
@@ -585,15 +597,18 @@ RULES:
    - If an image in Group A depicts the same infographic, size chart, feature breakdown, or diagram as an image in Group B, they ARE VISUAL DUPLICATES (even if they have different resolutions, aspect ratios, crops, borders, or CDN links).
    - In "duplicatePairs", list EVERY matching pair { "descIndex": <number>, "galIndex": <number> }.
 
-2. TEXT & INFOGRAPHIC SELECTION (DO NOT MISS ANY TEXT OR TABLES):
-   - Select EVERY unique image that has ANY visible printed or digital text, numbers, or informational overlays that need translation into English.
+2. TEXT & INFOGRAPHIC SELECTION (DO NOT MISS ANY TEXT, TABLES, OR BANNERS):
+   - Select EVERY unique image that has ANY visible printed or digital text, numbers, headings, or informational overlays that need translation into English.
    - ALWAYS include:
      * Sizing charts / measurement tables (tables with chest, waist, length, sleeves, sizes S/M/L/XL).
      * Feature callouts, benefit badges, icons with descriptive text (e.g. breathable, warm, elastic, material specs, waterproof).
      * Informational banners, guarantees, FAQ graphics, step-by-step instructions.
+     * "About Us" / brand story banners, company info, trust badges, customer care notices, or warranty information.
+     * Any product photo or lifestyle photo that has text headings, subheadings, or German/foreign captions overlaying it (e.g. "VIELSEITIGE URBANE ELEGANZ", "ÜBER UNS", "QUALITÄTSVERSPRECHEN", etc.).
+   - If an image is from GROUP A (Description Images), be extra permissive: if it contains ANY non-English text words, it MUST be translated so the listing is fully in English!
    - STRICT EXCLUSIONS (DO NOT SELECT):
-     * Plain photos of a model wearing clothes with ZERO text overlay, ZERO tables, and ZERO labels.
-     * Plain product photos showing just the item on a plain background with NO text overlay.
+     * Plain photos of a model wearing clothes with 100% ZERO text overlay, ZERO tables, and ZERO labels.
+     * Plain product photos showing just the item on a plain background with 100% NO text overlay.
 
 3. MAPPING (TRANSLATE EACH UNIQUE IMAGE ONLY ONCE):
    - For every unique image that contains text/charts to translate:
@@ -629,7 +644,8 @@ Return ONLY a valid JSON object in this exact format:
                         temperature: 0.1,
                         response_mime_type: 'application/json'
                     }
-                })
+                }),
+                timeout: 60000
             });
             const data = await response.json();
             const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
