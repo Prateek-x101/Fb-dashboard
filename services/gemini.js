@@ -534,6 +534,93 @@ Return ONLY a valid JSON object in this exact format:
         }
     },
 
+    async analyzeAndDeduplicateListingImages(apiKey, model, descriptionImages = [], galleryImages = []) {
+        if (!apiKey) return null;
+
+        try {
+            console.log(`[Gemini Vision] Comparing ${descriptionImages.length} Description images and ${galleryImages.length} Gallery images for visual duplicates and text overlays...`);
+
+            // Fetch lightweight 200px thumbnails
+            const descParts = await Promise.all(descriptionImages.map(async (u, i) => {
+                try {
+                    let fetchUrl = u.trim();
+                    if (fetchUrl.startsWith('//')) fetchUrl = 'https:' + fetchUrl;
+                    if (fetchUrl.includes('cdn.shopify.com')) fetchUrl = fetchUrl.includes('?') ? `${fetchUrl}&width=200` : `${fetchUrl}?width=200`;
+                    const resp = await fetch(fetchUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 10000 });
+                    if (!resp.ok) return null;
+                    const buf = Buffer.from(await resp.arrayBuffer());
+                    return { type: 'desc', idx: i, url: u, inline_data: { mime_type: 'image/jpeg', data: buf.toString('base64') } };
+                } catch { return null; }
+            }));
+
+            const galParts = await Promise.all(galleryImages.map(async (u, i) => {
+                try {
+                    let fetchUrl = u.trim();
+                    if (fetchUrl.startsWith('//')) fetchUrl = 'https:' + fetchUrl;
+                    if (fetchUrl.includes('cdn.shopify.com')) fetchUrl = fetchUrl.includes('?') ? `${fetchUrl}&width=200` : `${fetchUrl}?width=200`;
+                    const resp = await fetch(fetchUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 10000 });
+                    if (!resp.ok) return null;
+                    const buf = Buffer.from(await resp.arrayBuffer());
+                    return { type: 'gal', idx: i, url: u, inline_data: { mime_type: 'image/jpeg', data: buf.toString('base64') } };
+                } catch { return null; }
+            }));
+
+            const validDesc = descParts.filter(Boolean);
+            const validGal = galParts.filter(Boolean);
+
+            if (validDesc.length === 0 && validGal.length === 0) return null;
+
+            const prompt = `You are an expert e-commerce image deduplication and OCR analyzer.
+You are given images from a Shopify listing:
+- GROUP A (Description Images): ${validDesc.length} images (labelled D0 to D${validDesc.length - 1})
+- GROUP B (Gallery Images): ${validGal.length} images (labelled G0 to G${validGal.length - 1})
+
+TASKS:
+1. Identify all pairs of VISUAL DUPLICATES between Group A and Group B (i.e. images that show the exact same content/infographic/chart, even if resolutions, dimensions, or URLs differ).
+2. Determine which unique images contain PRINTED OR DIGITAL TEXT OVERLAYS (size charts, measurements, foreign text callouts, infographics) that must be translated into English. Exclude plain photos of clothing with no text overlay.
+3. For each unique image needing translation, choose the Gallery image (G) if available, otherwise Description (D).
+
+Return ONLY valid JSON in this exact structure:
+{
+  "duplicatePairs": [
+    { "descIndex": 0, "galIndex": 7 }
+  ],
+  "uniqueImagesToTranslate": [
+    { "source": "gal", "index": 7, "pairedDescIndex": 0 },
+    { "source": "desc", "index": 5, "pairedDescIndex": null }
+  ]
+}`;
+
+            const contents = [{
+                parts: [
+                    { text: prompt },
+                    ...validDesc.map(p => ([{ text: `[D${p.idx}] (Description Image ${p.idx})` }, { inline_data: p.inline_data }])).flat(),
+                    ...validGal.map(p => ([{ text: `[G${p.idx}] (Gallery Image ${p.idx})` }, { inline_data: p.inline_data }])).flat()
+                ]
+            }];
+
+            const visionUrl = `${VISION_BASE_URL}/models/${normalizeModel(model)}:generateContent?key=${apiKey}`;
+            const response = await fetch(visionUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contents })
+            });
+            const data = await response.json();
+            const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (rawText) {
+                const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+                if (jsonMatch) {
+                    const parsed = JSON.parse(jsonMatch[0]);
+                    console.log(`[Gemini Vision] Found ${parsed.duplicatePairs?.length || 0} visual duplicate pairs, selected ${parsed.uniqueImagesToTranslate?.length || 0} unique images for translation.`);
+                    return parsed;
+                }
+            }
+        } catch (err) {
+            console.error('[Gemini Vision] Deduplication analysis error:', err.message);
+        }
+        return null;
+    },
+
     async testConnection(apiKey, model) {
         const url = `${BASE_URL}/models/${normalizeModel(model)}:generateContent?key=${apiKey}`;
         const response = await fetch(url, {

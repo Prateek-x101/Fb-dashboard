@@ -2114,130 +2114,210 @@ Return ONLY valid JSON in this exact shape:
                 });
             }
 
-            // 3. Deduplicate common images:
-            // Any image present in BOTH Description and Gallery is COMMON.
-            // We include it in allImagesToTranslate ONLY ONCE so Gemini and Translate never duplicate work!
-            const allImagesToTranslate = [...descriptionImages];
+            // 3. Visual Deduplication & Text Detection with Gemini Vision
+            let targetImagesForGoogle = [];
+            const imageMetadataMap = new Map();
+            let aiVisualDeduplicated = false;
 
-            galleryImages.forEach(gImg => {
-                const isCommon = descriptionImages.some(dImg => areSameImageUrls(dImg, gImg));
-                if (!isCommon) {
-                    allImagesToTranslate.push(gImg);
-                } else {
-                    console.log(`[Translate] Image is common to both Description and Gallery (will only scan & translate once): ${gImg}`);
+            if (geminiApiKey) {
+                try {
+                    console.log(`[Translate] Running Gemini Vision to compare ${descriptionImages.length} Description & ${galleryImages.length} Gallery images for visual duplicates & text overlays...`);
+                    const visualAnalysis = await geminiService.analyzeAndDeduplicateListingImages(geminiApiKey, geminiModel, descriptionImages, galleryImages);
+                    if (visualAnalysis && Array.isArray(visualAnalysis.uniqueImagesToTranslate) && visualAnalysis.uniqueImagesToTranslate.length > 0) {
+                        const descToGalMap = new Map();
+                        const galToDescMap = new Map();
+                        if (Array.isArray(visualAnalysis.duplicatePairs)) {
+                            visualAnalysis.duplicatePairs.forEach(pair => {
+                                if (typeof pair.descIndex === 'number' && typeof pair.galIndex === 'number') {
+                                    descToGalMap.set(pair.descIndex, pair.galIndex);
+                                    galToDescMap.set(pair.galIndex, pair.descIndex);
+                                }
+                            });
+                        }
+
+                        visualAnalysis.uniqueImagesToTranslate.forEach(item => {
+                            let u = null;
+                            let pairedDescUrl = null;
+                            let pairedGalUrl = null;
+                            let isGal = false;
+                            let isDesc = false;
+
+                            if (item.source === 'gal' && galleryImages[item.index]) {
+                                u = galleryImages[item.index];
+                                isGal = true;
+                                let dIdx = (item.pairedDescIndex !== null && item.pairedDescIndex !== undefined) ? item.pairedDescIndex : galToDescMap.get(item.index);
+                                if (typeof dIdx === 'number' && descriptionImages[dIdx]) {
+                                    pairedDescUrl = descriptionImages[dIdx];
+                                    isDesc = true;
+                                }
+                            } else if (item.source === 'desc' && descriptionImages[item.index]) {
+                                u = descriptionImages[item.index];
+                                isDesc = true;
+                                let gIdx = (item.pairedGalIndex !== null && item.pairedGalIndex !== undefined) ? item.pairedGalIndex : descToGalMap.get(item.index);
+                                if (typeof gIdx === 'number' && galleryImages[gIdx]) {
+                                    pairedGalUrl = galleryImages[gIdx];
+                                    isGal = true;
+                                }
+                            }
+
+                            if (u && !targetImagesForGoogle.includes(u)) {
+                                targetImagesForGoogle.push(u);
+                                imageMetadataMap.set(u, { isDesc, isGal, pairedDescUrl, pairedGalUrl });
+                            }
+                        });
+
+                        if (targetImagesForGoogle.length > 0) {
+                            aiVisualDeduplicated = true;
+                            console.log(`[Translate] Gemini Vision deduplicated images: ${targetImagesForGoogle.length} unique images to translate (saved ${descriptionImages.length + galleryImages.length - targetImagesForGoogle.length} duplicate translations).`);
+                        }
+                    }
+                } catch (visionErr) {
+                    console.warn('[Translate] Gemini Vision deduplication error, falling back to standard filter:', visionErr.message);
                 }
-            });
+            }
 
-            if (allImagesToTranslate.length > 0) {
-                // Step 1: Ask AI (Gemini Vision) to inspect all images and pick ONLY the ones containing text/tables/callouts!
-                let targetImagesForGoogle = allImagesToTranslate;
-                if (geminiApiKey) {
-                    try {
-                        console.log(`[AI Filter] Asking Gemini Vision to inspect ${allImagesToTranslate.length} images before translation...`);
-                        targetImagesForGoogle = await geminiService.filterImagesNeedingTranslation(geminiApiKey, geminiModel, allImagesToTranslate);
-                        console.log(`[AI Filter] AI selected ${targetImagesForGoogle.length} images containing text/tables out of ${allImagesToTranslate.length}!`);
-                    } catch (aiFilterErr) {
-                        console.warn('[AI Filter] Gemini Vision filter error, proceeding with all images:', aiFilterErr.message);
+            // Fallback to URL-based deduplication & filter if Gemini Vision deduplication didn't run
+            if (!aiVisualDeduplicated) {
+                const allImagesToTranslate = [...descriptionImages];
+                galleryImages.forEach(gImg => {
+                    const isCommon = descriptionImages.some(dImg => areSameImageUrls(dImg, gImg));
+                    if (!isCommon) {
+                        allImagesToTranslate.push(gImg);
+                    } else {
+                        console.log(`[Translate] Image is common to both Description and Gallery (will only scan & translate once): ${gImg}`);
+                    }
+                });
+
+                if (allImagesToTranslate.length > 0) {
+                    targetImagesForGoogle = allImagesToTranslate;
+                    if (geminiApiKey) {
+                        try {
+                            console.log(`[AI Filter] Asking Gemini Vision to inspect ${allImagesToTranslate.length} images before translation...`);
+                            targetImagesForGoogle = await geminiService.filterImagesNeedingTranslation(geminiApiKey, geminiModel, allImagesToTranslate);
+                            console.log(`[AI Filter] AI selected ${targetImagesForGoogle.length} images containing text/tables out of ${allImagesToTranslate.length}!`);
+                        } catch (aiFilterErr) {
+                            console.warn('[AI Filter] Gemini Vision filter error, proceeding with all images:', aiFilterErr.message);
+                        }
                     }
                 }
+            }
 
+            if (targetImagesForGoogle.length > 0) {
                 // Detect source store language
                 const detectedLang = 'auto';
 
-                if (targetImagesForGoogle.length > 0) {
-                    console.log(`[Translate] Starting 5-tab parallel translation for ${targetImagesForGoogle.length} images with Google Translate...`);
-                    const translationResults = await imageTranslator.translateMultipleImages(targetImagesForGoogle, detectedLang);
+                console.log(`[Translate] Starting 5-tab parallel translation for ${targetImagesForGoogle.length} images with Google Translate...`);
+                const translationResults = await imageTranslator.translateMultipleImages(targetImagesForGoogle, detectedLang);
 
-                    // Robust replacement helper that matches //, https:, and base URLs without query parameters
-                    const applyImageReplacement = (targetStr, origUrl, newUrl) => {
-                        if (!targetStr || typeof targetStr !== 'string') return targetStr;
-                        const origClean = origUrl.trim();
-                        const origWithHttps = origClean.startsWith('//') ? 'https:' + origClean : origClean;
-                        const origWithoutHttps = origWithHttps.replace(/^https?:/, '');
-                        const origBase = origClean.split('?')[0];
-                        const origBaseWithoutHttps = origWithoutHttps.split('?')[0];
+                // Robust replacement helper that matches //, https:, and base URLs without query parameters
+                const applyImageReplacement = (targetStr, origUrl, newUrl) => {
+                    if (!targetStr || typeof targetStr !== 'string') return targetStr;
+                    const origClean = origUrl.trim();
+                    const origWithHttps = origClean.startsWith('//') ? 'https:' + origClean : origClean;
+                    const origWithoutHttps = origWithHttps.replace(/^https?:/, '');
+                    const origBase = origClean.split('?')[0];
+                    const origBaseWithoutHttps = origWithoutHttps.split('?')[0];
 
-                        let updated = targetStr;
-                        [origClean, origWithHttps, origWithoutHttps, origBase, origBaseWithoutHttps].forEach(pattern => {
-                            if (pattern && pattern.length > 15) {
-                                updated = updated.split(pattern).join(newUrl);
+                    let updated = targetStr;
+                    [origClean, origWithHttps, origWithoutHttps, origBase, origBaseWithoutHttps].forEach(pattern => {
+                        if (pattern && pattern.length > 15) {
+                            updated = updated.split(pattern).join(newUrl);
+                        }
+                    });
+                    return updated;
+                };
+
+                // Apply translated URLs to description HTML and/or product.images
+                translationResults.forEach(res => {
+                    if (res.translated && res.translatedUrl) {
+                        console.log(`[Translate] Applying translated image: ${res.original} -> ${res.translatedUrl}`);
+
+                        const meta = imageMetadataMap.get(res.original);
+
+                        // 1. Description replacement:
+                        // Check if this image is for Description (either directly or via pairing/matching)
+                        const isForDescription = (meta && meta.isDesc) || descriptionImages.some(dImg => areSameImageUrls(dImg, res.original));
+                        if (isForDescription && product.description && typeof product.description === 'string') {
+                            const descTargetUrls = [res.original];
+                            if (meta && meta.pairedDescUrl) descTargetUrls.push(meta.pairedDescUrl);
+                            descriptionImages.forEach(dImg => {
+                                if (areSameImageUrls(dImg, res.original) || (meta && meta.pairedDescUrl && areSameImageUrls(dImg, meta.pairedDescUrl))) {
+                                    if (!descTargetUrls.includes(dImg)) descTargetUrls.push(dImg);
+                                }
+                            });
+
+                            descTargetUrls.forEach(dUrl => {
+                                product.description = applyImageReplacement(product.description, dUrl, res.translatedUrl);
+                            });
+
+                            // Also replace any matching <img src="..."> in the HTML directly
+                            const imgTagMatches = product.description.match(/<img[^>]+src=["']([^"']+)["']/gi);
+                            if (imgTagMatches) {
+                                imgTagMatches.forEach(tag => {
+                                    const m = tag.match(/src=["']([^"']+)["']/i);
+                                    if (m && m[1] && descTargetUrls.some(dUrl => areSameImageUrls(m[1], dUrl))) {
+                                        product.description = product.description.split(m[1]).join(res.translatedUrl);
+                                    }
+                                });
+                            }
+                            console.log(`[Translate] Replaced in Description at original place: ${res.original} -> ${res.translatedUrl}`);
+                        }
+
+                        // 2. Gallery replacement:
+                        // Check if this image is for Gallery (either directly or via pairing/matching)
+                        const isForGallery = (meta && meta.isGal) || galleryImages.some(gImg => areSameImageUrls(gImg, res.original));
+                        const galTargetUrls = [res.original];
+                        if (meta && meta.pairedGalUrl) galTargetUrls.push(meta.pairedGalUrl);
+                        galleryImages.forEach(gImg => {
+                            if (areSameImageUrls(gImg, res.original) || (meta && meta.pairedGalUrl && areSameImageUrls(gImg, meta.pairedGalUrl))) {
+                                if (!galTargetUrls.includes(gImg)) galTargetUrls.push(gImg);
                             }
                         });
-                        return updated;
-                    };
 
-                    // Apply translated URLs to description HTML and/or product.images
-                    translationResults.forEach(res => {
-                        if (res.translated && res.translatedUrl) {
-                            console.log(`[Translate] Applying translated image: ${res.original} -> ${res.translatedUrl}`);
-
-                            // 1. Description replacement:
-                            // Check if this translated image belonged to descriptionImages
-                            const isInDescription = descriptionImages.some(dImg => areSameImageUrls(dImg, res.original));
-                            if (isInDescription && product.description && typeof product.description === 'string') {
-                                // Replace in description right at its original place
-                                descriptionImages.forEach(dImg => {
-                                    if (areSameImageUrls(dImg, res.original)) {
-                                        product.description = applyImageReplacement(product.description, dImg, res.translatedUrl);
-                                    }
-                                });
-                                product.description = applyImageReplacement(product.description, res.original, res.translatedUrl);
-
-                                // Also replace any matching <img src="..."> in the HTML directly
-                                const imgTagMatches = product.description.match(/<img[^>]+src=["']([^"']+)["']/gi);
-                                if (imgTagMatches) {
-                                    imgTagMatches.forEach(tag => {
-                                        const m = tag.match(/src=["']([^"']+)["']/i);
-                                        if (m && m[1] && areSameImageUrls(m[1], res.original)) {
-                                            product.description = product.description.split(m[1]).join(res.translatedUrl);
-                                        }
-                                    });
+                        if (isForGallery && Array.isArray(product.images)) {
+                            product.images = product.images.map(galleryImg => {
+                                if (galTargetUrls.some(gUrl => areSameImageUrls(galleryImg, gUrl))) {
+                                    console.log(`[Translate] Replaced in Gallery: ${typeof galleryImg === 'string' ? galleryImg : galleryImg?.src} -> ${res.translatedUrl}`);
+                                    return res.translatedUrl;
                                 }
-                                console.log(`[Translate] Replaced in Description at original place: ${res.original} -> ${res.translatedUrl}`);
-                            }
+                                return galleryImg;
+                            });
+                        }
+                        // NOTE: If !isForGallery (i.e. description-only image), we DO NOT add it to product.images (Gallery)!
+                        // It stays strictly inside the description at its original place!
 
-                            // 2. Gallery replacement:
-                            // Check if this translated image belonged to galleryImages
-                            const isInGallery = galleryImages.some(gImg => areSameImageUrls(gImg, res.original));
-                            if (isInGallery && Array.isArray(product.images)) {
-                                product.images = product.images.map(galleryImg => {
-                                    if (areSameImageUrls(galleryImg, res.original)) {
-                                        console.log(`[Translate] Replaced in Gallery: ${typeof galleryImg === 'string' ? galleryImg : galleryImg?.src} -> ${res.translatedUrl}`);
-                                        return res.translatedUrl;
-                                    }
-                                    return galleryImg;
-                                });
-                            }
-                            // NOTE: If !isInGallery (i.e. description-only image), we DO NOT add it to product.images (Gallery)!
-                            // It stays strictly inside the description at its place!
-
-                            // 3. Replace in product.featured_image
-                            if (product.featured_image && areSameImageUrls(product.featured_image, res.original)) {
+                        // 3. Replace in product.featured_image
+                        if (product.featured_image) {
+                            const isFeat = galTargetUrls.some(gUrl => areSameImageUrls(product.featured_image, gUrl));
+                            if (isFeat) {
                                 if (typeof product.featured_image === 'string') {
                                     product.featured_image = res.translatedUrl;
                                 } else if (product.featured_image.src) {
                                     product.featured_image.src = res.translatedUrl;
                                 }
                             }
+                        }
 
-                            // 4. Replace in product.variants
-                            if (Array.isArray(product.variants)) {
-                                product.variants.forEach(v => {
-                                    if (v.featured_image && areSameImageUrls(v.featured_image, res.original)) {
+                        // 4. Replace in product.variants
+                        if (Array.isArray(product.variants)) {
+                            product.variants.forEach(v => {
+                                if (v.featured_image) {
+                                    const isVar = galTargetUrls.some(gUrl => areSameImageUrls(v.featured_image, gUrl));
+                                    if (isVar) {
                                         if (typeof v.featured_image === 'string') {
                                             v.featured_image = res.translatedUrl;
                                         } else if (v.featured_image.src) {
                                             v.featured_image.src = res.translatedUrl;
                                         }
                                     }
-                                });
-                            }
+                                }
+                            });
                         }
-                    });
-                    console.log(`[Translate] Successfully processed ${targetImagesForGoogle.length} images.`);
-                } else {
-                    console.log(`[Translate] No images have text overlays to translate. All original clean photos preserved.`);
-                }
+                    }
+                });
+                console.log(`[Translate] Successfully processed ${targetImagesForGoogle.length} images.`);
+            } else {
+                console.log(`[Translate] No images have text overlays to translate. All original clean photos preserved.`);
             }
         } catch (imgLoopErr) {
             console.error('[Translate] Image translation session error:', imgLoopErr.message);

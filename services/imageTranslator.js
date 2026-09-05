@@ -175,9 +175,9 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                     const cleared = await worker.page.evaluate(() => {
                         const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
                         const clearBtn = btns.find(b => {
-                            const t = (b.innerText || '').toLowerCase();
                             const a = (b.getAttribute('aria-label') || '').toLowerCase();
-                            return t.includes('clear') || a.includes('clear');
+                            const t = (b.innerText || '').toLowerCase();
+                            return a.includes('clear image') || t.includes('clear image') || a === 'clear image';
                         });
                         if (clearBtn) {
                             clearBtn.click();
