@@ -1976,6 +1976,26 @@ function autoAppendSizeCharts(product, storage) {
     }
 }
 
+function areSameImageUrls(url1, url2) {
+    if (!url1 || !url2) return false;
+    const str1 = typeof url1 === 'string' ? url1.trim() : (url1?.src || '');
+    const str2 = typeof url2 === 'string' ? url2.trim() : (url2?.src || '');
+    if (!str1 || !str2) return false;
+    if (str1 === str2) return true;
+
+    // Normalize: remove protocol (https:, http:, //), and query parameters (?v=...)
+    const clean1 = str1.replace(/^https?:/, '').replace(/^\/\//, '').split('?')[0];
+    const clean2 = str2.replace(/^https?:/, '').replace(/^\/\//, '').split('?')[0];
+    if (clean1 === clean2) return true;
+
+    // Match basenames (accounting for Shopify size suffixes like _small, _medium, _large, _grande, _800x, etc.)
+    const base1 = path.basename(clean1).replace(/_(small|compact|medium|large|grande|pico|thumb|\d+x\d*|\d*x\d+)(\.[a-z0-9]+)$/i, '$2');
+    const base2 = path.basename(clean2).replace(/_(small|compact|medium|large|grande|pico|thumb|\d+x\d*|\d*x\d+)(\.[a-z0-9]+)$/i, '$2');
+    if (base1.length > 5 && base1 === base2) return true;
+
+    return false;
+}
+
 async function translateProductToEnglish(product, geminiApiKey, geminiModel, autoTranslateImages = true) {
     if (!geminiApiKey) return product;
 
@@ -2062,34 +2082,51 @@ Return ONLY valid JSON in this exact shape:
     // 2. High-Speed Google Translate Image Session (Single Tab with (X) Clear button)
     if (autoTranslateImages !== false) {
         try {
-            // 1. Description images (Size charts, infographics, callouts) ALMOST ALWAYS have foreign text!
-            // Process them FIRST so all critical text is translated immediately!
+            // 1. Description images (Size charts, infographics, callouts)
             const descriptionImages = [];
             if (product.description && typeof product.description === 'string') {
                 const imgMatches = product.description.match(/<img[^>]+src=["']([^"']+)["']/gi);
                 if (imgMatches) {
                     imgMatches.forEach(match => {
                         const srcMatch = match.match(/src=["']([^"']+)["']/i);
-                        const imgSrc = srcMatch ? srcMatch[1] : null;
-                        if (imgSrc && !descriptionImages.includes(imgSrc) && !imgSrc.includes('/uploads/translated-')) {
-                            descriptionImages.push(imgSrc);
+                        const imgSrc = srcMatch ? srcMatch[1].trim() : null;
+                        if (imgSrc && !imgSrc.includes('/uploads/translated-')) {
+                            const exists = descriptionImages.some(existing => areSameImageUrls(existing, imgSrc));
+                            if (!exists) {
+                                descriptionImages.push(imgSrc);
+                            }
                         }
                     });
                 }
             }
 
-            // 2. Gallery images (usually plain clothing photos, but check them after description images)
+            // 2. Gallery images from product.images
             const galleryImages = [];
             if (Array.isArray(product.images)) {
                 product.images.forEach(img => {
-                    if (img && !descriptionImages.includes(img) && !img.includes('/uploads/translated-')) {
-                        galleryImages.push(img);
+                    const gStr = typeof img === 'string' ? img.trim() : (img?.src || '');
+                    if (gStr && !gStr.includes('/uploads/translated-')) {
+                        const exists = galleryImages.some(existing => areSameImageUrls(existing, gStr));
+                        if (!exists) {
+                            galleryImages.push(gStr);
+                        }
                     }
                 });
             }
 
-            // Prioritize description images first
-            const allImagesToTranslate = [...descriptionImages, ...galleryImages];
+            // 3. Deduplicate common images:
+            // Any image present in BOTH Description and Gallery is COMMON.
+            // We include it in allImagesToTranslate ONLY ONCE so Gemini and Translate never duplicate work!
+            const allImagesToTranslate = [...descriptionImages];
+
+            galleryImages.forEach(gImg => {
+                const isCommon = descriptionImages.some(dImg => areSameImageUrls(dImg, gImg));
+                if (!isCommon) {
+                    allImagesToTranslate.push(gImg);
+                } else {
+                    console.log(`[Translate] Image is common to both Description and Gallery (will only scan & translate once): ${gImg}`);
+                }
+            });
 
             if (allImagesToTranslate.length > 0) {
                 // Step 1: Ask AI (Gemini Vision) to inspect all images and pick ONLY the ones containing text/tables/callouts!
@@ -2129,73 +2166,68 @@ Return ONLY valid JSON in this exact shape:
                         return updated;
                     };
 
-                    // Apply translated URLs to description HTML and guarantee they are added to product.images!
+                    // Apply translated URLs to description HTML and/or product.images
                     translationResults.forEach(res => {
                         if (res.translated && res.translatedUrl) {
                             console.log(`[Translate] Applying translated image: ${res.original} -> ${res.translatedUrl}`);
 
-                            // 1. Replace in description HTML
-                            if (product.description && typeof product.description === 'string') {
+                            // 1. Description replacement:
+                            // Check if this translated image belonged to descriptionImages
+                            const isInDescription = descriptionImages.some(dImg => areSameImageUrls(dImg, res.original));
+                            if (isInDescription && product.description && typeof product.description === 'string') {
+                                // Replace in description right at its original place
+                                descriptionImages.forEach(dImg => {
+                                    if (areSameImageUrls(dImg, res.original)) {
+                                        product.description = applyImageReplacement(product.description, dImg, res.translatedUrl);
+                                    }
+                                });
                                 product.description = applyImageReplacement(product.description, res.original, res.translatedUrl);
-                            }
 
-                            // If this translated image is not yet in product.description, append it so it's guaranteed in the listing description!
-                            if (product.description && typeof product.description === 'string' && !product.description.includes(res.translatedUrl)) {
-                                console.log(`[Translate] Embedding translated image into product description: ${res.translatedUrl}`);
-                                product.description += `<div style="text-align:center; margin: 20px auto;"><img src="${res.translatedUrl}" style="max-width:100%; border-radius:8px; display:block; margin: 0 auto;" /></div>`;
-                            }
-
-                            // 2. Replace or ADD to product.images (Gallery)
-                            if (!Array.isArray(product.images)) product.images = [];
-
-                            let foundInGallery = false;
-                            product.images = product.images.map(galleryImg => {
-                                const gStr = typeof galleryImg === 'string' ? galleryImg : (galleryImg?.src || '');
-                                const gClean = gStr.split('?')[0].replace(/^https?:/, '');
-                                const origClean = res.original.split('?')[0].replace(/^https?:/, '');
-                                const gBase = path.basename(gClean);
-                                const origBase = path.basename(origClean);
-
-                                if (gClean === origClean || (origClean.length > 15 && gStr.includes(origClean)) || (origBase.length > 8 && gBase === origBase)) {
-                                    foundInGallery = true;
-                                    return res.translatedUrl;
+                                // Also replace any matching <img src="..."> in the HTML directly
+                                const imgTagMatches = product.description.match(/<img[^>]+src=["']([^"']+)["']/gi);
+                                if (imgTagMatches) {
+                                    imgTagMatches.forEach(tag => {
+                                        const m = tag.match(/src=["']([^"']+)["']/i);
+                                        if (m && m[1] && areSameImageUrls(m[1], res.original)) {
+                                            product.description = product.description.split(m[1]).join(res.translatedUrl);
+                                        }
+                                    });
                                 }
-                                return galleryImg;
-                            });
-
-                            // If this was a description image (like size chart or infographic) not yet in gallery, ADD IT TO GALLERY!
-                            if (!foundInGallery && !product.images.includes(res.translatedUrl)) {
-                                console.log(`[Translate] Adding translated image to product gallery: ${res.translatedUrl}`);
-                                product.images.push(res.translatedUrl);
+                                console.log(`[Translate] Replaced in Description at original place: ${res.original} -> ${res.translatedUrl}`);
                             }
+
+                            // 2. Gallery replacement:
+                            // Check if this translated image belonged to galleryImages
+                            const isInGallery = galleryImages.some(gImg => areSameImageUrls(gImg, res.original));
+                            if (isInGallery && Array.isArray(product.images)) {
+                                product.images = product.images.map(galleryImg => {
+                                    if (areSameImageUrls(galleryImg, res.original)) {
+                                        console.log(`[Translate] Replaced in Gallery: ${typeof galleryImg === 'string' ? galleryImg : galleryImg?.src} -> ${res.translatedUrl}`);
+                                        return res.translatedUrl;
+                                    }
+                                    return galleryImg;
+                                });
+                            }
+                            // NOTE: If !isInGallery (i.e. description-only image), we DO NOT add it to product.images (Gallery)!
+                            // It stays strictly inside the description at its place!
 
                             // 3. Replace in product.featured_image
-                            if (product.featured_image) {
-                                const fStr = typeof product.featured_image === 'string' ? product.featured_image : (product.featured_image.src || '');
-                                const fClean = fStr.split('?')[0].replace(/^https?:/, '');
-                                const origClean = res.original.split('?')[0].replace(/^https?:/, '');
-                                if (fClean === origClean || (origClean.length > 15 && fStr.includes(origClean))) {
-                                    if (typeof product.featured_image === 'string') {
-                                        product.featured_image = res.translatedUrl;
-                                    } else if (product.featured_image.src) {
-                                        product.featured_image.src = res.translatedUrl;
-                                    }
+                            if (product.featured_image && areSameImageUrls(product.featured_image, res.original)) {
+                                if (typeof product.featured_image === 'string') {
+                                    product.featured_image = res.translatedUrl;
+                                } else if (product.featured_image.src) {
+                                    product.featured_image.src = res.translatedUrl;
                                 }
                             }
 
                             // 4. Replace in product.variants
                             if (Array.isArray(product.variants)) {
                                 product.variants.forEach(v => {
-                                    if (v.featured_image) {
-                                        const vStr = typeof v.featured_image === 'string' ? v.featured_image : (v.featured_image.src || '');
-                                        const vClean = vStr.split('?')[0].replace(/^https?:/, '');
-                                        const origClean = res.original.split('?')[0].replace(/^https?:/, '');
-                                        if (vClean === origClean || (origClean.length > 15 && vStr.includes(origClean))) {
-                                            if (typeof v.featured_image === 'string') {
-                                                v.featured_image = res.translatedUrl;
-                                            } else if (v.featured_image.src) {
-                                                v.featured_image.src = res.translatedUrl;
-                                            }
+                                    if (v.featured_image && areSameImageUrls(v.featured_image, res.original)) {
+                                        if (typeof v.featured_image === 'string') {
+                                            v.featured_image = res.translatedUrl;
+                                        } else if (v.featured_image.src) {
+                                            v.featured_image.src = res.translatedUrl;
                                         }
                                     }
                                 });
