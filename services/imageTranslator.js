@@ -192,13 +192,25 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                     });
 
                     if (!cleared) {
-                        await worker.page.goto('https://translate.google.co.in/?sl=auto&tl=en&op=images', { waitUntil: 'networkidle2' });
+                        await worker.page.goto('https://translate.google.com/?sl=auto&tl=en&op=images', { waitUntil: 'networkidle2' });
                     }
                     await new Promise(r => setTimeout(r, 800));
                     await worker.page.waitForSelector('input[accept*="image"]', { timeout: 15000 });
                 }
 
-                // Step 3: REAL OS FILE UPLOAD strictly on input[accept*="image"]
+                // Step 3: Ensure visibility and upload strictly on input[accept*="image"]
+                await worker.page.evaluate(() => {
+                    const inp = document.querySelector('input[accept*="image"]');
+                    if (inp) {
+                        inp.style.display = 'block';
+                        inp.style.visibility = 'visible';
+                        inp.style.opacity = '1';
+                        inp.style.position = 'fixed';
+                        inp.style.top = '0px';
+                        inp.style.left = '0px';
+                        inp.style.zIndex = '999999';
+                    }
+                });
                 const input = await worker.page.$('input[accept*="image"]');
                 await input.uploadFile(localInfo.localPath);
 
