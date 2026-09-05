@@ -2341,15 +2341,16 @@ Return ONLY valid JSON in this exact shape:
                         if (meta && meta.pairedDescUrl) descTargets.add(meta.pairedDescUrl);
                         descTargets.add(res.original);
 
+                        descriptionImages.forEach(dImg => {
+                            if (Array.from(descTargets).some(tUrl => areSameImageUrls(dImg, tUrl))) {
+                                descTargets.add(dImg);
+                            }
+                        });
+                        const descTargetUrls = Array.from(descTargets);
+
                         const isForDescription = (meta && meta.isDesc) || descriptionImages.some(dImg => areSameImageUrls(dImg, res.original));
                         if (isForDescription && product.description && typeof product.description === 'string') {
-                            descriptionImages.forEach(dImg => {
-                                if (Array.from(descTargets).some(tUrl => areSameImageUrls(dImg, tUrl))) {
-                                    descTargets.add(dImg);
-                                }
-                            });
-
-                            Array.from(descTargets).forEach(dUrl => {
+                            descTargetUrls.forEach(dUrl => {
                                 product.description = applyImageReplacement(product.description, dUrl, res.translatedUrl);
                             });
 
@@ -2358,7 +2359,7 @@ Return ONLY valid JSON in this exact shape:
                             if (imgTagMatches) {
                                 imgTagMatches.forEach(tag => {
                                     const m = tag.match(/\b(?:src|data-src|data-original)=["']([^"']+)["']/i);
-                                    if (m && m[1] && Array.from(descTargets).some(dUrl => areSameImageUrls(m[1], dUrl))) {
+                                    if (m && m[1] && descTargetUrls.some(dUrl => areSameImageUrls(m[1], dUrl))) {
                                         product.description = product.description.split(m[1]).join(res.translatedUrl);
                                     }
                                 });
@@ -2374,16 +2375,17 @@ Return ONLY valid JSON in this exact shape:
                         if (meta && meta.pairedGalUrl) galTargets.add(meta.pairedGalUrl);
                         galTargets.add(res.original);
 
+                        galleryImages.forEach(gImg => {
+                            if (Array.from(galTargets).some(tUrl => areSameImageUrls(gImg, tUrl))) {
+                                galTargets.add(gImg);
+                            }
+                        });
+                        const galTargetUrls = Array.from(galTargets);
+
                         const isForGallery = (meta && meta.isGal) || galleryImages.some(gImg => areSameImageUrls(gImg, res.original));
                         if (isForGallery && Array.isArray(product.images)) {
-                            galleryImages.forEach(gImg => {
-                                if (Array.from(galTargets).some(tUrl => areSameImageUrls(gImg, tUrl))) {
-                                    galTargets.add(gImg);
-                                }
-                            });
-
                             product.images = product.images.map(galleryImg => {
-                                if (Array.from(galTargets).some(gUrl => areSameImageUrls(galleryImg, gUrl))) {
+                                if (galTargetUrls.some(gUrl => areSameImageUrls(galleryImg, gUrl))) {
                                     console.log(`[Translate] Replaced in Gallery: ${typeof galleryImg === 'string' ? galleryImg : galleryImg?.src} -> ${res.translatedUrl}`);
                                     return res.translatedUrl;
                                 }
