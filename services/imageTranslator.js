@@ -72,8 +72,8 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
     const isLinux = process.platform === 'linux';
     const chromePath = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 
-    // 3 Dedicated Parallel Tabs (Optimal sweet spot for 100% stability, zero Google redirects, and max speed)
-    const NUM_WORKERS = Math.min(3, imageList.length);
+    // 5 Dedicated Parallel Tabs with Startup Stagger & Instant Clear-Button Reuse
+    const NUM_WORKERS = Math.min(5, imageList.length);
     console.log(`[GoogleTranslate] Launching ${NUM_WORKERS} parallel tabs for ${imageList.length} images (Proven Real-OS-File Pipeline)...`);
 
     let browser = null;
@@ -143,9 +143,9 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                 }
 
                 if (isFirstImage) {
-                    // Stagger initial tab startup by 1200ms so Google never redirects
+                    // Stagger initial tab startup by 1500ms so Google never redirects
                     if (worker.id > 1) {
-                        await new Promise(r => setTimeout(r, (worker.id - 1) * 1200));
+                        await new Promise(r => setTimeout(r, (worker.id - 1) * 1500));
                     }
 
                     // Step 1: Fresh Google Translate session using global google.com

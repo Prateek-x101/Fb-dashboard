@@ -632,6 +632,46 @@ router.post('/import', async (req, res) => {
 
         console.log(`Product created successfully with ID: ${createdProductId}`);
 
+        // Update product description in Shopify to replace any local /uploads/ URLs with live Shopify CDN URLs!
+        const createdImages = createdProduct.images || [];
+        let updatedBodyHtml = product.description || '';
+        let hasLocalUploads = false;
+
+        createdImages.forEach(cImg => {
+            const originalLocalUrl = (product.images || [])[cImg.position - 1];
+            if (originalLocalUrl && originalLocalUrl.includes('/uploads/')) {
+                const baseName = path.basename(originalLocalUrl);
+                [originalLocalUrl, `/uploads/${baseName}`, baseName].forEach(pat => {
+                    if (updatedBodyHtml.includes(pat)) {
+                        updatedBodyHtml = updatedBodyHtml.split(pat).join(cImg.src);
+                        hasLocalUploads = true;
+                    }
+                });
+            }
+        });
+
+        if (hasLocalUploads) {
+            console.log(`[ShopifyImport] Updating product description with live Shopify CDN image URLs...`);
+            try {
+                await fetch(`https://${store.shopUrl}/admin/api/2024-04/products/${createdProductId}.json`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Shopify-Access-Token': store.accessToken
+                    },
+                    body: JSON.stringify({
+                        product: {
+                            id: createdProductId,
+                            body_html: updatedBodyHtml
+                        }
+                    })
+                });
+                console.log(`[ShopifyImport] Successfully updated body_html with Shopify CDN images!`);
+            } catch (descUpdateErr) {
+                console.warn('[ShopifyImport] Could not update body_html with CDN images:', descUpdateErr.message);
+            }
+        }
+
         // Associate variants with images based on assignments
         if (imageAssignments && Object.keys(imageAssignments).length > 0) {
             const createdImages = createdProduct.images || [];
@@ -1327,21 +1367,24 @@ router.post('/universal-import', videoUpload.array('files', 20), async (req, res
                 const defaultAssignments = {};
                 const assignedVariantValues = new Set(); // Track which variant values already have an image
                 const variants = (product.variants || []).map(v => {
-                    const imgUrl = v.featured_image ? v.featured_image.src : null;
+                    const imgUrl = v.featured_image ? (typeof v.featured_image === 'string' ? v.featured_image : v.featured_image.src) : null;
                     if (imgUrl && v.option1 && !assignedVariantValues.has(v.option1)) {
                         const normalizedVariantImg = imgUrl.startsWith('//') ? 'https:' + imgUrl : imgUrl;
                         const cleanVariantImg = normalizedVariantImg.split('?')[0];
+                        const variantBase = path.basename(cleanVariantImg);
                         
                         // Find the matching image in the product images array
                         const matchedProductImg = images.find(prodImg => {
                             const cleanProdImg = prodImg.split('?')[0];
-                            return cleanProdImg === cleanVariantImg;
+                            const prodBase = path.basename(cleanProdImg);
+                            return cleanProdImg === cleanVariantImg || (variantBase.length > 8 && prodBase === variantBase);
                         });
                         
                         if (matchedProductImg) {
                             defaultAssignments[matchedProductImg] = v.option1;
-                            // Also store clean URL version for fallback matching
+                            // Also store clean URL and basename for fallback matching
                             defaultAssignments[matchedProductImg.split('?')[0]] = v.option1;
+                            defaultAssignments[path.basename(matchedProductImg)] = v.option1;
                             assignedVariantValues.add(v.option1);
                         }
                     }
@@ -2096,6 +2139,12 @@ Return ONLY valid JSON in this exact shape:
                                 product.description = applyImageReplacement(product.description, res.original, res.translatedUrl);
                             }
 
+                            // If this translated image is not yet in product.description, append it so it's guaranteed in the listing description!
+                            if (product.description && typeof product.description === 'string' && !product.description.includes(res.translatedUrl)) {
+                                console.log(`[Translate] Embedding translated image into product description: ${res.translatedUrl}`);
+                                product.description += `<div style="text-align:center; margin: 20px auto;"><img src="${res.translatedUrl}" style="max-width:100%; border-radius:8px; display:block; margin: 0 auto;" /></div>`;
+                            }
+
                             // 2. Replace or ADD to product.images (Gallery)
                             if (!Array.isArray(product.images)) product.images = [];
 
@@ -2104,8 +2153,10 @@ Return ONLY valid JSON in this exact shape:
                                 const gStr = typeof galleryImg === 'string' ? galleryImg : (galleryImg?.src || '');
                                 const gClean = gStr.split('?')[0].replace(/^https?:/, '');
                                 const origClean = res.original.split('?')[0].replace(/^https?:/, '');
+                                const gBase = path.basename(gClean);
+                                const origBase = path.basename(origClean);
 
-                                if (gClean === origClean || (origClean.length > 15 && gStr.includes(origClean))) {
+                                if (gClean === origClean || (origClean.length > 15 && gStr.includes(origClean)) || (origBase.length > 8 && gBase === origBase)) {
                                     foundInGallery = true;
                                     return res.translatedUrl;
                                 }
