@@ -650,6 +650,74 @@ router.post('/import', async (req, res) => {
             }
         });
 
+        // Upload any remaining description-only /uploads/ images directly to Shopify CDN!
+        // This ensures description images are never broken on the live store, while keeping them out of the gallery carousel.
+        const uploadsDir = path.join(__dirname, '..', 'uploads');
+        const remainingLocalMatches = updatedBodyHtml.match(/\/uploads\/[^\s"'<>]+\.(?:png|jpg|jpeg|webp|gif)/gi) || [];
+        const uniqueLocalUploads = [...new Set(remainingLocalMatches)];
+
+        for (const localUrlPath of uniqueLocalUploads) {
+            const baseFileName = path.basename(localUrlPath);
+            const diskPath = path.join(uploadsDir, baseFileName);
+            if (fs.existsSync(diskPath)) {
+                try {
+                    console.log(`[ShopifyImport] Uploading description-only translated image to Shopify CDN: ${baseFileName}...`);
+                    const imgBuffer = fs.readFileSync(diskPath);
+                    const base64Data = imgBuffer.toString('base64');
+                    
+                    const uploadResp = await fetch(`https://${store.shopUrl}/admin/api/2024-04/products/${createdProductId}/images.json`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Shopify-Access-Token': store.accessToken
+                        },
+                        body: JSON.stringify({
+                            image: {
+                                attachment: base64Data,
+                                filename: baseFileName
+                            }
+                        })
+                    });
+
+                    if (uploadResp.ok) {
+                        const uploadData = await uploadResp.json();
+                        const cdnSrc = uploadData.image && uploadData.image.src;
+                        const tempImgId = uploadData.image && uploadData.image.id;
+
+                        if (cdnSrc) {
+                            console.log(`[ShopifyImport] Successfully uploaded description image to Shopify CDN: ${cdnSrc}`);
+                            [localUrlPath, `/uploads/${baseFileName}`, baseFileName].forEach(pat => {
+                                if (updatedBodyHtml.includes(pat)) {
+                                    updatedBodyHtml = updatedBodyHtml.split(pat).join(cdnSrc);
+                                    hasLocalUploads = true;
+                                }
+                            });
+
+                            // Remove from product gallery carousel so description images stay exclusively in description!
+                            if (tempImgId) {
+                                try {
+                                    await fetch(`https://${store.shopUrl}/admin/api/2024-04/products/${createdProductId}/images/${tempImgId}.json`, {
+                                        method: 'DELETE',
+                                        headers: {
+                                            'X-Shopify-Access-Token': store.accessToken
+                                        }
+                                    });
+                                    console.log(`[ShopifyImport] Description image safely removed from product gallery (id: ${tempImgId})`);
+                                } catch (delErr) {
+                                    console.warn(`[ShopifyImport] Non-critical: error cleaning gallery image:`, delErr.message);
+                                }
+                            }
+                        }
+                    } else {
+                        const errText = await uploadResp.text();
+                        console.warn(`[ShopifyImport] Failed to upload description image ${baseFileName} to Shopify CDN:`, errText);
+                    }
+                } catch (readErr) {
+                    console.warn(`[ShopifyImport] Error reading/uploading local file ${diskPath}:`, readErr.message);
+                }
+            }
+        }
+
         if (hasLocalUploads) {
             console.log(`[ShopifyImport] Updating product description with live Shopify CDN image URLs...`);
             try {
@@ -2085,10 +2153,10 @@ Return ONLY valid JSON in this exact shape:
             // 1. Description images (Size charts, infographics, callouts)
             const descriptionImages = [];
             if (product.description && typeof product.description === 'string') {
-                const imgMatches = product.description.match(/<img[^>]+src=["']([^"']+)["']/gi);
+                const imgMatches = product.description.match(/<img\b[^>]*>/gi);
                 if (imgMatches) {
-                    imgMatches.forEach(match => {
-                        const srcMatch = match.match(/src=["']([^"']+)["']/i);
+                    imgMatches.forEach(tag => {
+                        const srcMatch = tag.match(/\b(?:src|data-src|data-original)=["']([^"']+)["']/i);
                         const imgSrc = srcMatch ? srcMatch[1].trim() : null;
                         if (imgSrc && !imgSrc.includes('/uploads/translated-')) {
                             const exists = descriptionImages.some(existing => areSameImageUrls(existing, imgSrc));
@@ -2251,10 +2319,10 @@ Return ONLY valid JSON in this exact shape:
                             });
 
                             // Also replace any matching <img src="..."> in the HTML directly
-                            const imgTagMatches = product.description.match(/<img[^>]+src=["']([^"']+)["']/gi);
+                            const imgTagMatches = product.description.match(/<img\b[^>]*>/gi);
                             if (imgTagMatches) {
                                 imgTagMatches.forEach(tag => {
-                                    const m = tag.match(/src=["']([^"']+)["']/i);
+                                    const m = tag.match(/\b(?:src|data-src|data-original)=["']([^"']+)["']/i);
                                     if (m && m[1] && descTargetUrls.some(dUrl => areSameImageUrls(m[1], dUrl))) {
                                         product.description = product.description.split(m[1]).join(res.translatedUrl);
                                     }
