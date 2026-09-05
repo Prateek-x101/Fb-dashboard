@@ -432,7 +432,6 @@ Keys are image indices as strings. Only include ${variantValues.length} entries 
 
             const allSelectedUrls = [];
             const BATCH_SIZE = 10; // Process in small batches of 10 to keep payload under 2MB!
-
             for (let b = 0; b < validUrls.length; b += BATCH_SIZE) {
                 const batch = validUrls.slice(b, b + BATCH_SIZE);
                 const imageParts = [];
@@ -442,7 +441,7 @@ Keys are image indices as strings. Only include ${variantValues.length} entries 
                         let fetchUrl = u.trim();
                         if (fetchUrl.startsWith('//')) fetchUrl = 'https:' + fetchUrl;
                         if (fetchUrl.includes('cdn.shopify.com')) {
-                            fetchUrl = fetchUrl.includes('?') ? `${fetchUrl}&width=250` : `${fetchUrl}?width=250`;
+                            fetchUrl = fetchUrl.includes('?') ? `${fetchUrl}&width=400` : `${fetchUrl}?width=400`;
                         }
 
                         const resp = await fetch(fetchUrl, {
@@ -469,21 +468,18 @@ Keys are image indices as strings. Only include ${variantValues.length} entries 
                 imageParts.sort((a, b) => a.batchIdx - b.batchIdx);
                 if (imageParts.length === 0) continue;
 
-                const prompt = `You are a strict e-commerce OCR analyzer.
+                const prompt = `You are a strict, high-precision e-commerce OCR analyzer.
 You are given ${imageParts.length} product images from a Shopify listing.
 
 STRICT INSTRUCTIONS:
-ONLY select an image if it has clearly visible PRINTED or DIGITAL TEXT OVERLAYS that must be translated into English, such as:
-- Sizing charts / measurement tables (tables with Chest, Sleeve, Length, Waist measurements).
-- Infographic feature callouts (e.g., icons with labels like "Atmungsaktiv", "Elastisch", "Bequem").
-- Text headline overlays, FAQ banners, or promotional text written on the image.
+Select EVERY image that contains ANY visible PRINTED OR DIGITAL TEXT, NUMBERS, OR OVERLAYS that must be translated into English, including:
+- Sizing charts / measurement tables (tables with Chest, Sleeve, Length, Waist measurements, size codes S/M/L/XL/XXL).
+- Infographic feature callouts and icons with text labels (e.g. "Atmungsaktiv", "Elastisch", "Bequem", material specs, waterproof, etc.).
+- Text headline overlays, FAQ banners, promotional text, or warranty badges written on the image.
 
 STRICT EXCLUSIONS (DO NOT SELECT):
 - Plain product photos showing a model wearing clothes with NO text overlay on the photo.
-- Plain product photos of jackets, pants, or fabric with NO text overlay.
-- Photos that just show an outfit in a room, on a sofa, or on the street with NO text written on the image.
-
-In most listings, ONLY 2 to 5 images actually contain text. All other plain photos MUST BE EXCLUDED.
+- Plain product photos of clothing, fabric, or accessories with NO text or tables added.
 
 Return ONLY a valid JSON object in this exact format:
 {
@@ -501,7 +497,13 @@ Return ONLY a valid JSON object in this exact format:
                 const response = await fetch(visionUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ contents })
+                    body: JSON.stringify({
+                        contents,
+                        generationConfig: {
+                            temperature: 0.1,
+                            response_mime_type: 'application/json'
+                        }
+                    })
                 });
 
                 const data = await response.json();
@@ -540,12 +542,12 @@ Return ONLY a valid JSON object in this exact format:
         try {
             console.log(`[Gemini Vision] Comparing ${descriptionImages.length} Description images and ${galleryImages.length} Gallery images for visual duplicates and text overlays...`);
 
-            // Fetch lightweight 200px thumbnails
+            // Fetch crisp 400px thumbnails for high-accuracy OCR & deduplication
             const descParts = await Promise.all(descriptionImages.map(async (u, i) => {
                 try {
                     let fetchUrl = u.trim();
                     if (fetchUrl.startsWith('//')) fetchUrl = 'https:' + fetchUrl;
-                    if (fetchUrl.includes('cdn.shopify.com')) fetchUrl = fetchUrl.includes('?') ? `${fetchUrl}&width=200` : `${fetchUrl}?width=200`;
+                    if (fetchUrl.includes('cdn.shopify.com')) fetchUrl = fetchUrl.includes('?') ? `${fetchUrl}&width=400` : `${fetchUrl}?width=400`;
                     const resp = await fetch(fetchUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 10000 });
                     if (!resp.ok) return null;
                     const buf = Buffer.from(await resp.arrayBuffer());
@@ -557,7 +559,7 @@ Return ONLY a valid JSON object in this exact format:
                 try {
                     let fetchUrl = u.trim();
                     if (fetchUrl.startsWith('//')) fetchUrl = 'https:' + fetchUrl;
-                    if (fetchUrl.includes('cdn.shopify.com')) fetchUrl = fetchUrl.includes('?') ? `${fetchUrl}&width=200` : `${fetchUrl}?width=200`;
+                    if (fetchUrl.includes('cdn.shopify.com')) fetchUrl = fetchUrl.includes('?') ? `${fetchUrl}&width=400` : `${fetchUrl}?width=400`;
                     const resp = await fetch(fetchUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 10000 });
                     if (!resp.ok) return null;
                     const buf = Buffer.from(await resp.arrayBuffer());
@@ -570,24 +572,42 @@ Return ONLY a valid JSON object in this exact format:
 
             if (validDesc.length === 0 && validGal.length === 0) return null;
 
-            const prompt = `You are an expert e-commerce image deduplication and OCR analyzer.
-You are given images from a Shopify listing:
-- GROUP A (Description Images): ${validDesc.length} images (labelled D0 to D${validDesc.length - 1})
-- GROUP B (Gallery Images): ${validGal.length} images (labelled G0 to G${validGal.length - 1})
+            const prompt = `You are a strict, high-precision e-commerce OCR and image deduplication expert.
+You are inspecting images from a Shopify listing to prepare them for translation.
 
-TASKS:
-1. Identify all pairs of VISUAL DUPLICATES between Group A and Group B (i.e. images that show the exact same content/infographic/chart, even if resolutions, dimensions, or URLs differ).
-2. Determine which unique images contain PRINTED OR DIGITAL TEXT OVERLAYS (size charts, measurements, foreign text callouts, infographics) that must be translated into English. Exclude plain photos of clothing with no text overlay.
-3. For each unique image needing translation, choose the Gallery image (G) if available, otherwise Description (D).
+We have two groups of images:
+- GROUP A (Description Images): labelled [D0] to [D${validDesc.length - 1}]
+- GROUP B (Gallery Images): labelled [G0] to [G${validGal.length - 1}]
 
-Return ONLY valid JSON in this exact structure:
+RULES:
+1. VISUAL DUPLICATES (CRITICAL):
+   - Compare EVERY image in Group A against EVERY image in Group B.
+   - If an image in Group A depicts the same infographic, size chart, feature breakdown, or diagram as an image in Group B, they ARE VISUAL DUPLICATES (even if they have different resolutions, aspect ratios, crops, borders, or CDN links).
+   - In "duplicatePairs", list EVERY matching pair { "descIndex": <number>, "galIndex": <number> }.
+
+2. TEXT & INFOGRAPHIC SELECTION (DO NOT MISS ANY TEXT OR TABLES):
+   - Select EVERY unique image that has ANY visible printed or digital text, numbers, or informational overlays that need translation into English.
+   - ALWAYS include:
+     * Sizing charts / measurement tables (tables with chest, waist, length, sleeves, sizes S/M/L/XL).
+     * Feature callouts, benefit badges, icons with descriptive text (e.g. breathable, warm, elastic, material specs, waterproof).
+     * Informational banners, guarantees, FAQ graphics, step-by-step instructions.
+   - STRICT EXCLUSIONS (DO NOT SELECT):
+     * Plain photos of a model wearing clothes with ZERO text overlay, ZERO tables, and ZERO labels.
+     * Plain product photos showing just the item on a plain background with NO text overlay.
+
+3. MAPPING (TRANSLATE EACH UNIQUE IMAGE ONLY ONCE):
+   - For every unique image that contains text/charts to translate:
+     * If the image is present in Gallery (or in both Gallery & Description), select "source": "gal", "index": <galIndex>, and set "pairedDescIndex" to the matching descIndex (or null if not in Description).
+     * If the image is ONLY present in Description (not in Gallery), select "source": "desc", "index": <descIndex>, and set "pairedGalIndex": null.
+
+Return ONLY a valid JSON object in this exact format:
 {
   "duplicatePairs": [
-    { "descIndex": 0, "galIndex": 7 }
+    { "descIndex": 0, "galIndex": 6 }
   ],
   "uniqueImagesToTranslate": [
-    { "source": "gal", "index": 7, "pairedDescIndex": 0 },
-    { "source": "desc", "index": 5, "pairedDescIndex": null }
+    { "source": "gal", "index": 6, "pairedDescIndex": 0 },
+    { "source": "desc", "index": 5, "pairedGalIndex": null }
   ]
 }`;
 
@@ -603,7 +623,13 @@ Return ONLY valid JSON in this exact structure:
             const response = await fetch(visionUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ contents })
+                body: JSON.stringify({
+                    contents,
+                    generationConfig: {
+                        temperature: 0.1,
+                        response_mime_type: 'application/json'
+                    }
+                })
             });
             const data = await response.json();
             const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
