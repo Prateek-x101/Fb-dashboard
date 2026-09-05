@@ -112,10 +112,11 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
     const queue = imageList.map((img, idx) => ({ img, originalIdx: idx }));
     const allResults = new Array(imageList.length);
 
-    // Initialize worker tabs
+    // Initialize worker tabs: reuse initial tab opened with Chrome so no blank tab remains
+    const initialPages = await browser.pages();
     const workers = [];
     for (let w = 0; w < NUM_WORKERS; w++) {
-        const page = await browser.newPage();
+        const page = (w === 0 && initialPages.length > 0) ? initialPages[0] : await browser.newPage();
         workers.push({ id: w + 1, page });
     }
 
@@ -142,53 +143,28 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                     continue;
                 }
 
-                if (isFirstImage) {
-                    // Slight 600ms stagger to prevent socket collision
-                    if (worker.id > 1) {
-                        await new Promise(r => setTimeout(r, (worker.id - 1) * 600));
+                let hasTranslation = false;
+                for (let attempt = 1; attempt <= 2; attempt++) {
+                    if (attempt > 1) {
+                        console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] Retrying upload (attempt ${attempt}/2) after 1s delay...`);
+                        await new Promise(r => setTimeout(r, 1000));
                     }
 
-                    // Step 1: Fresh Google Translate session using global google.com
-                    await worker.page.goto('https://translate.google.com/?sl=auto&tl=en&op=images', {
-                        waitUntil: 'networkidle2',
-                        timeout: 35000
-                    });
-
-                    // Ensure Google Translate is in Images mode
-                    if (!worker.page.url().includes('op=images')) {
-                        console.log(`[Tab ${worker.id}] Switching to Images mode...`);
-                        await worker.page.evaluate(() => {
-                            const btns = Array.from(document.querySelectorAll('button'));
-                            const b = btns.find(x => (x.innerText || '').trim() === 'Images' || (x.getAttribute('aria-label') || '').includes('Image translation'));
-                            if (b) b.click();
-                        });
-                        await worker.page.waitForFunction(() => window.location.href.includes('op=images'), { timeout: 8000 }).catch(() => {});
-                    }
-
-                    await worker.page.waitForSelector('input[accept*="image"]', { timeout: 25000 });
-
-                    // Step 2: 1.5s WARM-UP DELAY
-                    await new Promise(r => setTimeout(r, 1500));
-                    isFirstImage = false;
-                } else {
-                    // Clear previous image instantly without page reload (zero redirect risk!)
-                    const cleared = await worker.page.evaluate(() => {
-                        const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
-                        const clearBtn = btns.find(b => {
-                            const a = (b.getAttribute('aria-label') || '').toLowerCase();
-                            const t = (b.innerText || '').toLowerCase();
-                            return a.includes('clear image') || t.includes('clear image') || a === 'clear image';
-                        });
-                        if (clearBtn) {
-                            clearBtn.click();
-                            return true;
+                    if (isFirstImage) {
+                        // Slight 600ms stagger to prevent socket collision
+                        if (worker.id > 1) {
+                            await new Promise(r => setTimeout(r, (worker.id - 1) * 600));
                         }
-                        return false;
-                    });
 
-                    if (!cleared) {
-                        await worker.page.goto('https://translate.google.com/?sl=auto&tl=en&op=images', { waitUntil: 'networkidle2' });
+                        // Step 1: Fresh Google Translate session using global google.com
+                        await worker.page.goto('https://translate.google.com/?sl=auto&tl=en&op=images', {
+                            waitUntil: 'networkidle2',
+                            timeout: 35000
+                        });
+
+                        // Ensure Google Translate is in Images mode
                         if (!worker.page.url().includes('op=images')) {
+                            console.log(`[Tab ${worker.id}] Switching to Images mode...`);
                             await worker.page.evaluate(() => {
                                 const btns = Array.from(document.querySelectorAll('button'));
                                 const b = btns.find(x => (x.innerText || '').trim() === 'Images' || (x.getAttribute('aria-label') || '').includes('Image translation'));
@@ -196,52 +172,116 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                             });
                             await worker.page.waitForFunction(() => window.location.href.includes('op=images'), { timeout: 8000 }).catch(() => {});
                         }
+
+                        await worker.page.waitForSelector('input[accept*="image"]', { timeout: 25000 });
+
+                        // Step 2: 1.5s WARM-UP DELAY
+                        await new Promise(r => setTimeout(r, 1500));
+                        isFirstImage = false;
+                    } else {
+                        // Dismiss any error toast/dialog ("Got it") if visible
+                        await worker.page.evaluate(() => {
+                            const btns = Array.from(document.querySelectorAll('button'));
+                            const gotIt = btns.find(b => (b.innerText || '').trim().toLowerCase() === 'got it');
+                            if (gotIt) gotIt.click();
+                        }).catch(() => {});
+
+                        // Clear previous image instantly without page reload (zero redirect risk!)
+                        const cleared = await worker.page.evaluate(() => {
+                            const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
+                            const clearBtn = btns.find(b => {
+                                const a = (b.getAttribute('aria-label') || '').toLowerCase();
+                                const t = (b.innerText || '').toLowerCase();
+                                return a.includes('clear image') || t.includes('clear image') || a === 'clear image';
+                            });
+                            if (clearBtn) {
+                                clearBtn.click();
+                                return true;
+                            }
+                            return false;
+                        });
+
+                        if (!cleared) {
+                            await worker.page.goto('https://translate.google.com/?sl=auto&tl=en&op=images', { waitUntil: 'networkidle2' });
+                            if (!worker.page.url().includes('op=images')) {
+                                await worker.page.evaluate(() => {
+                                    const btns = Array.from(document.querySelectorAll('button'));
+                                    const b = btns.find(x => (x.innerText || '').trim() === 'Images' || (x.getAttribute('aria-label') || '').includes('Image translation'));
+                                    if (b) b.click();
+                                });
+                                await worker.page.waitForFunction(() => window.location.href.includes('op=images'), { timeout: 8000 }).catch(() => {});
+                            }
+                        }
+                        await new Promise(r => setTimeout(r, 800));
+                        await worker.page.waitForSelector('input[accept*="image"]', { timeout: 15000 });
                     }
-                    await new Promise(r => setTimeout(r, 800));
-                    await worker.page.waitForSelector('input[accept*="image"]', { timeout: 15000 });
-                }
 
-                // Step 3: Upload strictly on input[accept*="image"]
-                const input = await worker.page.waitForSelector('input[accept*="image"]', { timeout: 15000 });
-                await new Promise(r => setTimeout(r, 500));
-                await input.uploadFile(localInfo.localPath);
-                console.log(`[Tab ${worker.id}] Uploaded image [${originalIdx + 1}], waiting for translation...`);
-
-                // Step 4: Wait for translation
-                let hasTranslation = false;
-                for (let poll = 0; poll < 50; poll++) {
+                    // Step 3: Upload strictly on input[accept*="image"]
+                    const input = await worker.page.waitForSelector('input[accept*="image"]', { timeout: 15000 });
                     await new Promise(r => setTimeout(r, 500));
+                    await input.uploadFile(localInfo.localPath);
+                    console.log(`[Tab ${worker.id}] Uploaded image [${originalIdx + 1}] (attempt ${attempt}/2), waiting for translation...`);
 
-                    const status = await worker.page.evaluate(() => {
-                        const bodyText = document.body.innerText || '';
-                        const isTranslating = bodyText.includes('Translating');
-                        const dlBtn = Array.from(document.querySelectorAll('button, a')).find(b => {
-                            const a = (b.getAttribute('aria-label') || '').toLowerCase();
-                            const t = (b.innerText || '').toLowerCase();
-                            return a.includes('download') || t.includes('download');
-                        });
-                        return { isTranslating, hasDl: !!dlBtn };
-                    });
+                    // Step 4: Wait for translation
+                    let errorDetected = false;
+                    for (let poll = 0; poll < 50; poll++) {
+                        await new Promise(r => setTimeout(r, 500));
 
-                    if (!status.isTranslating && status.hasDl && poll >= 3) {
-                        hasTranslation = true;
-                        console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] Detected download button on poll ${poll}`);
-                        break;
-                    }
-
-                    if (poll >= 12) {
-                        const noText = await worker.page.evaluate(() => {
+                        const status = await worker.page.evaluate(() => {
                             const bodyText = document.body.innerText || '';
-                            return bodyText.includes("Can't detect text") || bodyText.includes("could not detect text");
+                            const isTranslating = bodyText.includes('Translating');
+                            const dlBtn = Array.from(document.querySelectorAll('button, a')).find(b => {
+                                const a = (b.getAttribute('aria-label') || '').toLowerCase();
+                                const t = (b.innerText || '').toLowerCase();
+                                return a.includes('download') || t.includes('download');
+                            });
+                            return { isTranslating, hasDl: !!dlBtn };
                         });
-                        if (noText) {
-                            console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] has no foreign text - preserving original.`);
+
+                        if (!status.isTranslating && status.hasDl && poll >= 3) {
+                            hasTranslation = true;
+                            console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] Detected download button on poll ${poll}`);
                             break;
+                        }
+
+                        if (poll >= 6) {
+                            const errCheck = await worker.page.evaluate(() => {
+                                const bodyText = (document.body.innerText || '').toLowerCase();
+                                return bodyText.includes("can't detect text") ||
+                                       bodyText.includes("cant detect text") ||
+                                       bodyText.includes("can't translate") ||
+                                       bodyText.includes("cant translate") ||
+                                       bodyText.includes("could not detect text") ||
+                                       bodyText.includes("language may not be supported") ||
+                                       bodyText.includes("couldn't translate");
+                            });
+                            if (errCheck) {
+                                errorDetected = true;
+                                console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] Detected error toast: "Can't detect text / translate".`);
+                                break;
+                            }
+                        }
+
+                        if (poll === 49 && !hasTranslation) {
+                            console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] Polling timed out (no download button).`);
                         }
                     }
 
-                    if (poll === 49 && !hasTranslation) {
-                        console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] Polling timed out (no download button).`);
+                    if (hasTranslation) {
+                        break; // Translation succeeded!
+                    }
+
+                    if (errorDetected) {
+                        if (attempt === 1) {
+                            console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] Translation error on attempt 1. Will clear and re-upload after 1s delay...`);
+                            // Loop to attempt 2
+                        } else {
+                            console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] Translation error persisted on retry (attempt 2). Preserving original image.`);
+                            break;
+                        }
+                    } else {
+                        // Timeout or other non-toast situation, don't loop endlessly
+                        break;
                     }
                 }
 
