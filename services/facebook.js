@@ -260,31 +260,61 @@ const facebookService = {
         const startTime = Date.now();
         console.log(`[FacebookService] Waiting for video ${videoId} to be ready on Meta's servers...`);
 
+        let consecutiveErrors = 0;
+        let lastErrorMsg = '';
+
         while (Date.now() - startTime < maxWaitMs) {
             try {
-                const url = `${BASE_URL}/${videoId}?fields=status&access_token=${token}`;
-                const res = await fetchWithRetry(url, { timeout: 5000 });
+                const url = `${BASE_URL}/${videoId}?fields=status,published,thumbnails&access_token=${token}`;
+                const res = await fetchWithRetry(url, { timeout: 15000 });
                 const data = await res.json();
                 
                 if (res.status >= 400 || data.error) {
-                    throw new Error(data.error ? (data.error.error_user_msg || data.error.message) : 'Failed to query video status');
+                    const errMsg = data.error ? (data.error.error_user_msg || data.error.message) : `HTTP ${res.status}`;
+                    const errCode = data.error?.code;
+                    // Fail immediately on fatal auth / permission / non-existent ID errors
+                    if (errCode === 190 || errCode === 100 || res.status === 401 || res.status === 403) {
+                        const fatalErr = new Error(`Meta API error: ${errMsg}`);
+                        fatalErr.provider = 'facebook';
+                        fatalErr.code = errCode;
+                        fatalErr.errorSubcode = data.error?.error_subcode;
+                        throw fatalErr;
+                    }
+                    throw new Error(errMsg);
                 }
 
-                const videoStatus = data.status?.video_status;
-                console.log(`[FacebookService] Video ${videoId} status: ${videoStatus}`);
+                consecutiveErrors = 0;
+                const statusObj = data.status || {};
+                const videoStatus = typeof statusObj === 'string' ? statusObj.toLowerCase() : (statusObj.video_status || '').toLowerCase();
+                const processingPhase = (statusObj.processing_phase?.status || '').toLowerCase();
+                const publishingPhase = (statusObj.publishing_phase?.status || '').toLowerCase();
+                const isPublished = data.published === true;
 
-                if (videoStatus === 'ready') {
-                    return true;
+                console.log(`[FacebookService] Video ${videoId} status: ${videoStatus}, processing: ${processingPhase}, publishing: ${publishingPhase}, published: ${isPublished}`);
+
+                if (videoStatus === 'ready' || processingPhase === 'complete' || publishingPhase === 'complete' || isPublished) {
+                    console.log(`[FacebookService] Video ${videoId} is ready on Meta's servers.`);
+                    let preferredThumbnailUrl = '';
+                    if (Array.isArray(data.thumbnails?.data)) {
+                        const pref = data.thumbnails.data.find(t => t.is_preferred) || data.thumbnails.data[0];
+                        if (pref && pref.uri) preferredThumbnailUrl = pref.uri;
+                    }
+                    return { ready: true, preferredThumbnailUrl };
                 }
                 
-                if (videoStatus === 'error') {
+                if (videoStatus === 'error' || processingPhase === 'error') {
                     throw new Error('Meta failed to process this video.');
                 }
             } catch (err) {
-                if (err.message.includes('process this video')) {
+                if (err.provider === 'facebook' || err.message.includes('process this video')) {
                     throw err;
                 }
-                console.warn(`[FacebookService] Warning during video status polling: ${err.message}`);
+                consecutiveErrors++;
+                lastErrorMsg = err.message;
+                console.warn(`[FacebookService] Warning during video status polling (attempt ${consecutiveErrors}): ${err.message}`);
+                if (consecutiveErrors >= 8) {
+                    throw new Error(`Failed to check video status on Meta after multiple attempts: ${lastErrorMsg}`);
+                }
             }
 
             await new Promise(r => setTimeout(r, pollIntervalMs));

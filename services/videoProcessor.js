@@ -441,6 +441,7 @@ async function processVideo(inputPath, outputFilename, canvasType = 'original') 
             '-c:v', 'libx264',
             '-crf', '20',
             '-preset', 'ultrafast',
+            '-movflags', '+faststart',
             '-map_metadata', '-1',
             '-c:a', 'aac',
             '-b:a', '128k',
@@ -466,6 +467,7 @@ async function processVideo(inputPath, outputFilename, canvasType = 'original') 
             '-y',
             '-i', inputPath,
             '-c', 'copy',
+            '-movflags', '+faststart',
             '-map_metadata', '-1',
             finalOutputPath
         ];
@@ -487,6 +489,7 @@ async function processVideo(inputPath, outputFilename, canvasType = 'original') 
                     '-c:v', 'libx264',
                     '-crf', '22',
                     '-preset', 'ultrafast',
+                    '-movflags', '+faststart',
                     '-map_metadata', '-1',
                     '-c:a', 'aac',
                     '-b:a', '128k',
