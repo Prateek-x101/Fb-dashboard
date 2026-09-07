@@ -594,8 +594,11 @@ We have two groups of images:
 RULES:
 1. VISUAL DUPLICATES (CRITICAL):
    - Compare EVERY image in Group A against EVERY image in Group B.
-   - If an image in Group A depicts the same infographic, size chart, feature breakdown, or diagram as an image in Group B, they ARE VISUAL DUPLICATES (even if they have different resolutions, aspect ratios, crops, borders, or CDN links).
-   - In "duplicatePairs", list EVERY matching pair { "descIndex": <number>, "galIndex": <number> }.
+   - TWO IMAGES ARE VISUAL DUPLICATES ONLY IF THEY ARE THE EXACT SAME IMAGE (identical visual content, same layout, same tables).
+   - SIZE CHART HANDLING (ACCURATE & SMART):
+     * If an image in Group A is the EXACT SAME individual size chart as an image in Group B (e.g. both are ONLY the Jacket chart, or both are ONLY the Trouser chart), then YES, they ARE visual duplicates! List them in "duplicatePairs" so that image is translated only once and applied to both places.
+     * BUT if an image in Group A is a COMBINED chart (containing BOTH Jacket and Pants tables together in one image), while Group B has SEPARATE individual charts: THEY ARE NOT DUPLICATES! Do NOT pair a combined two-table chart with a single-table chart. The combined chart must be translated as its own image ("source": "desc") so neither table is lost!
+   - In "duplicatePairs", list ONLY exact matching pairs { "descIndex": <number>, "galIndex": <number> }.
 
 2. TEXT & INFOGRAPHIC SELECTION (DO NOT MISS ANY TEXT, TABLES, OR BANNERS):
    - Select EVERY unique image that has ANY visible printed or digital text, numbers, headings, or informational overlays that need translation into English.
@@ -612,17 +615,19 @@ RULES:
 
 3. MAPPING (TRANSLATE EACH UNIQUE IMAGE ONLY ONCE):
    - For every unique image that contains text/charts to translate:
-     * If the image is present in Gallery (or in both Gallery & Description), select "source": "gal", "index": <galIndex>, and set "pairedDescIndex" to the matching descIndex (or null if not in Description).
-     * If the image is ONLY present in Description (not in Gallery), select "source": "desc", "index": <descIndex>, and set "pairedGalIndex": null.
+     * If the image is present in Gallery (or in both Gallery & Description as an exact duplicate), select "source": "gal", "index": <galIndex>, and set "pairedDescIndex" to the matching descIndex (or null if not in Description).
+     * If the image is ONLY present in Description (not in Gallery, or a combined chart not in Gallery), select "source": "desc", "index": <descIndex>, and set "pairedGalIndex": null.
+     * Set "isSizeChart": true if this image is a sizing chart / measurement table, otherwise false.
 
 Return ONLY a valid JSON object in this exact format:
 {
   "duplicatePairs": [
-    { "descIndex": 0, "galIndex": 6 }
+    { "descIndex": 2, "galIndex": 6 }
   ],
   "uniqueImagesToTranslate": [
-    { "source": "gal", "index": 6, "pairedDescIndex": 0 },
-    { "source": "desc", "index": 5, "pairedGalIndex": null }
+    { "source": "desc", "index": 0, "pairedGalIndex": null, "isSizeChart": true },
+    { "source": "gal", "index": 9, "pairedDescIndex": null, "isSizeChart": true },
+    { "source": "gal", "index": 10, "pairedDescIndex": null, "isSizeChart": true }
   ]
 }`;
 

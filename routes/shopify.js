@@ -528,7 +528,17 @@ router.post('/import', async (req, res) => {
             });
         }
 
-        // Formulate images (append https: if start with //)
+        // Ensure all local /uploads/ images from the description are added to the images array so Shopify uploads them!
+        if (product.description) {
+            const descLocalUploads = [...new Set(Array.from(product.description.matchAll(/\/uploads\/[a-zA-Z0-9_.-]+/g)).map(m => m[0]))];
+            if (!Array.isArray(product.images)) product.images = [];
+            descLocalUploads.forEach(url => {
+                if (!product.images.includes(url)) {
+                    product.images.push(url);
+                }
+            });
+        }
+
         // Formulate images: support external URLs and local /uploads/ files (send as base64 attachment)
         const images = (product.images || []).map((imgUrl, idx) => {
             if (imgUrl.startsWith('/uploads/')) {
@@ -641,7 +651,8 @@ router.post('/import', async (req, res) => {
             const originalLocalUrl = (product.images || [])[cImg.position - 1];
             if (originalLocalUrl && originalLocalUrl.includes('/uploads/')) {
                 const baseName = path.basename(originalLocalUrl);
-                [originalLocalUrl, `/uploads/${baseName}`, baseName].forEach(pat => {
+                const patterns = [...new Set([originalLocalUrl, `/uploads/${baseName}`])];
+                patterns.forEach(pat => {
                     if (updatedBodyHtml.includes(pat)) {
                         updatedBodyHtml = updatedBodyHtml.split(pat).join(cImg.src);
                         hasLocalUploads = true;
@@ -686,7 +697,8 @@ router.post('/import', async (req, res) => {
 
                         if (cdnSrc) {
                             console.log(`[ShopifyImport] Successfully uploaded description image to Shopify CDN: ${cdnSrc}`);
-                            [localUrlPath, `/uploads/${baseFileName}`, baseFileName].forEach(pat => {
+                            const patterns = [...new Set([localUrlPath, `/uploads/${baseFileName}`])];
+                            patterns.forEach(pat => {
                                 if (updatedBodyHtml.includes(pat)) {
                                     updatedBodyHtml = updatedBodyHtml.split(pat).join(cdnSrc);
                                     hasLocalUploads = true;
@@ -1251,44 +1263,68 @@ router.post('/universal-import', videoUpload.array('files', 20), async (req, res
 
                 const allFrames = [];
 
-                // Process each media URL
-                for (let i = 0; i < urls.length; i++) {
-                    const singleUrl = urls[i];
-                    // Skip if it doesn't look like a media link
-                    const isSingleMedia = /facebook\.com\/ads\/library/i.test(singleUrl) ||
-                                         /instagram\.com/i.test(singleUrl) ||
-                                         /pinterest\.(com|co)/i.test(singleUrl) ||
-                                         /pin\.it/i.test(singleUrl) ||
-                                         /youtube\.com/i.test(singleUrl) ||
-                                         /youtu\.be/i.test(singleUrl) ||
-                                         /\.(mp4|mov|m4v|png|jpg|jpeg|webp)(\?|$)/i.test(singleUrl);
-                    if (!isSingleMedia) continue;
+                // Filter valid media URLs
+                const validMediaEntries = urls
+                    .map((singleUrl, idx) => ({ singleUrl, idx }))
+                    .filter(({ singleUrl }) => {
+                        return /facebook\.com\/ads\/library/i.test(singleUrl) ||
+                               /instagram\.com/i.test(singleUrl) ||
+                               /pinterest\.(com|co)/i.test(singleUrl) ||
+                               /pin\.it/i.test(singleUrl) ||
+                               /youtube\.com/i.test(singleUrl) ||
+                               /youtu\.be/i.test(singleUrl) ||
+                               /\.(mp4|mov|m4v|png|jpg|jpeg|webp)(\?|$)/i.test(singleUrl);
+                    });
 
-                    console.log(`[UniversalImport] Downloading target media URL (${i + 1}/${urls.length}): ${singleUrl}`);
+                console.log(`[UniversalImport] Downloading ${validMediaEntries.length} media URL(s) concurrently in parallel...`);
+
+                // Process all media URLs concurrently in parallel
+                const mediaDownloadResults = await Promise.all(validMediaEntries.map(async ({ singleUrl, idx }) => {
+                    const targetFilename = `dl-import-${Date.now()}-${idx}.mp4`;
                     try {
-                        const targetFilename = `dl-import-${Date.now()}-${i}.mp4`;
+                        console.log(`[UniversalImport] Parallel download starting (${idx + 1}/${urls.length}): ${singleUrl}`);
                         const downloadedPath = await videoProcessor.downloadVideo(singleUrl, targetFilename, fbAccessToken);
-                        tempMediaPaths.push(downloadedPath);
 
-                        // Check if downloaded file is an image or video
                         const isImg = /\.(png|jpg|jpeg|webp)$/i.test(downloadedPath);
                         if (isImg) {
                             const imgBase64 = fs.readFileSync(downloadedPath).toString('base64');
-                            allFrames.push({ base64: imgBase64, filePath: downloadedPath, sourceType: 'image' });
+                            return {
+                                success: true,
+                                downloadedPath,
+                                frames: [{ base64: imgBase64, filePath: downloadedPath, sourceType: 'image' }],
+                                videoFrames: [],
+                                preservedPath: null
+                            };
                         } else {
-                            console.log(`[UniversalImport] Extracting frames from downloaded video...`);
+                            console.log(`[UniversalImport] Extracting frames from downloaded video (${idx + 1}/${urls.length})...`);
                             const videoFrames = await videoProcessor.extractFrames(downloadedPath, 20);
-                            videoFrames.forEach(f => allFrames.push({ ...f, sourceType: 'video' }));
-                            allExtractedFrames.push(...videoFrames);
+                            const taggedFrames = videoFrames.map(f => ({ ...f, sourceType: 'video' }));
 
                             // Preserve video for metafield listing uploads
                             const safeName = `floating-${uuidv4()}.mp4`;
                             const preservedPath = path.join(uploadsDir, safeName);
                             fs.copyFileSync(downloadedPath, preservedPath);
-                            preservedVideoPaths.push(preservedPath);
+
+                            return {
+                                success: true,
+                                downloadedPath,
+                                frames: taggedFrames,
+                                videoFrames: videoFrames,
+                                preservedPath
+                            };
                         }
                     } catch (downloadErr) {
-                        console.error(`[UniversalImport] Failed to process media URL: ${singleUrl}`, downloadErr);
+                        console.error(`[UniversalImport] Failed to process media URL (${idx + 1}/${urls.length}): ${singleUrl}`, downloadErr.message);
+                        return { success: false, singleUrl, error: downloadErr.message };
+                    }
+                }));
+
+                for (const res of mediaDownloadResults) {
+                    if (res && res.success) {
+                        tempMediaPaths.push(res.downloadedPath);
+                        if (res.frames) allFrames.push(...res.frames);
+                        if (res.videoFrames && res.videoFrames.length) allExtractedFrames.push(...res.videoFrames);
+                        if (res.preservedPath) preservedVideoPaths.push(res.preservedPath);
                     }
                 }
 
@@ -2067,6 +2103,8 @@ function areSameImageUrls(url1, url2) {
 async function translateProductToEnglish(product, geminiApiKey, geminiModel, autoTranslateImages = true) {
     if (!geminiApiKey) return product;
 
+    let detectedLang = 'auto';
+
     // 1. Text Translation (Title, Description, Options, Variants)
     try {
         console.log(`[Translate] Starting translation to English for product: ${product.title}`);
@@ -2075,19 +2113,29 @@ async function translateProductToEnglish(product, geminiApiKey, geminiModel, aut
             name: opt.name,
             values: opt.values
         }));
+        // Extract media tags to prevent Gemini from dropping or scrambling them
+        let safeDescription = product.description || '';
+        const mediaTags = [];
+        safeDescription = safeDescription.replace(/<(img|iframe|video|source)\b[^>]*>/gi, (match) => {
+            const placeholder = `[MEDIA_TAG_${mediaTags.length}]`;
+            mediaTags.push(match);
+            return placeholder;
+        });
 
         const prompt = `You are a professional e-commerce translator. Translate the following product listing to English.
 
 IMPORTANT RULES:
 1. Translate all human-readable text (Title, Description HTML, Option Names, and Option Values) to English.
-2. In the Description HTML, preserve ALL HTML tags, styles, classes, and image URLs (<img> tags) EXACTLY as they are. ONLY translate the text content inside the HTML. Do not alter, translate, or remove tag names, attributes, or image src URLs.
-3. For Option Names, translate them to standard English equivalents (e.g., "Color" -> "Color", "Talla" -> "Size", "Taille" -> "Size", "Material" -> "Material", "Ancho" -> "Width", "Alto" -> "Height").
-4. Keep the JSON structure exactly as provided. Do not change keys.
+2. In the Description HTML, preserve ALL HTML tags, styles, and classes EXACTLY as they are. ONLY translate the text content inside the HTML.
+3. The HTML contains [MEDIA_TAG_X] placeholders representing images. Do not translate or modify these placeholders. Leave them exactly in their original positions within the HTML structure.
+4. For Option Names, translate them to standard English equivalents (e.g., "Color" -> "Color", "Talla" -> "Size", "Taille" -> "Size", "Material" -> "Material").
+5. Keep the JSON structure exactly as provided. Do not change keys.
+6. Detect the source language of the input and provide its 2-letter ISO code (e.g., "en", "de", "fr", "es", "it", "nl", "tr") in the "sourceLanguageCode" field. If the listing is already in English, return "en".
 
 Input JSON:
 ${JSON.stringify({
     title: product.title || '',
-    description: product.description || '',
+    description: safeDescription,
     options: simplifiedOptions
 }, null, 2)}
 
@@ -2095,6 +2143,7 @@ Return ONLY valid JSON in this exact shape:
 {
   "title": "Translated Title",
   "description": "Translated HTML Description",
+  "sourceLanguageCode": "de",
   "options": [
     { "name": "Translated Option Name", "values": ["Translated Value 1", "Translated Value 2", ...] }
   ]
@@ -2105,11 +2154,31 @@ Return ONLY valid JSON in this exact shape:
         if (jsonMatch) {
             const translated = JSON.parse(jsonMatch[0]);
 
+            if (translated.sourceLanguageCode) {
+                detectedLang = translated.sourceLanguageCode.toLowerCase();
+            }
+
             if (translated.title) {
                 product.title = translated.title;
             }
             if (translated.description) {
-                product.description = translated.description;
+                const textOnly = safeDescription.replace(/\[MEDIA_TAG_\d+\]/g, '').replace(/<[^>]+>/g, '').trim();
+                // Only replace description if there was actual human text to translate!
+                // If the description is purely images/media, keep the original HTML 100% intact so image order is never scrambled
+                if (textOnly.length > 0) {
+                    let restoredDescription = translated.description;
+                    mediaTags.forEach((tag, idx) => {
+                        const placeholder = `[MEDIA_TAG_${idx}]`;
+                        restoredDescription = restoredDescription.replace(placeholder, tag);
+                    });
+                    // In case Gemini dropped a placeholder, append any missing tags to the end to prevent data loss
+                    mediaTags.forEach((tag, idx) => {
+                        if (!restoredDescription.includes(tag)) {
+                            restoredDescription += `\n<p>${tag}</p>`;
+                        }
+                    });
+                    product.description = restoredDescription;
+                }
             }
 
             const translationMap = {};
@@ -2141,15 +2210,35 @@ Return ONLY valid JSON in this exact shape:
                     }
                 });
             }
-            console.log(`[Translate] Successfully translated text to: ${product.title}`);
+            console.log(`[Translate] Successfully processed text translation (Source Language detected: '${detectedLang}')`);
         }
     } catch (textErr) {
         console.error('[Translate] Text translation error:', textErr.message);
     }
 
-    // 2. High-Speed Google Translate Image Session (Single Tab with (X) Clear button)
+    // 2. High-Speed Google Translate Image Session (5 Parallel Tabs)
+    // ONLY run image translation if the listing is NOT English!
+    if (detectedLang === 'auto') {
+        const textToCheck = ((product.title || '') + ' ' + (product.description || '')).toLowerCase();
+        const nonEnglishIndicators = /\b(und|für|mit|der|die|das|nicht|sie|aus|oder|von|auf|et|pour|avec|dans|sur|para|con|por|una|uno|het|van|voor|een|bir|ve|ile|icin|için|beden|tablosu)\b|[äöüßéèêëàâôîïçñğşı]/i;
+        const englishIndicators = /\b(the|and|with|for|from|this|that|men|women|size|free|shipping|color|black|white|blue|cotton|leather)\b/i;
+        
+        if (!nonEnglishIndicators.test(textToCheck) && englishIndicators.test(textToCheck)) {
+            detectedLang = 'en';
+            console.log(`[Translate] Auto-detected English text from listing keywords. Setting detectedLang = 'en'.`);
+        }
+    }
+
+    const isEnglishListing = (detectedLang && (detectedLang === 'en' || detectedLang.startsWith('en-') || detectedLang === 'eng'));
+
+    if (isEnglishListing) {
+        console.log(`[Translate] Listing source language is already English (lang: '${detectedLang}'). Skipping image translation completely. Clean English photos preserved!`);
+        return product;
+    }
+
     if (autoTranslateImages !== false) {
         try {
+            console.log(`[Translate] Listing is in foreign language ('${detectedLang}'). Proceeding with image translation...`);
             // 1. Description images (Size charts, infographics, callouts)
             const descriptionImages = [];
             if (product.description && typeof product.description === 'string') {
@@ -2242,7 +2331,7 @@ Return ONLY valid JSON in this exact shape:
 
                             if (u && !targetImagesForGoogle.includes(u)) {
                                 targetImagesForGoogle.push(u);
-                                imageMetadataMap.set(u, { isDesc, isGal, pairedDescUrls, pairedGalUrls });
+                                imageMetadataMap.set(u, { isDesc, isGal, pairedDescUrls, pairedGalUrls, isSizeChart: !!item.isSizeChart });
                             }
                         });
 
@@ -2302,10 +2391,7 @@ Return ONLY valid JSON in this exact shape:
             }
 
             if (targetImagesForGoogle.length > 0) {
-                // Detect source store language
-                const detectedLang = 'auto';
-
-                console.log(`[Translate] Starting 5-tab parallel translation for ${targetImagesForGoogle.length} images with Google Translate...`);
+                console.log(`[Translate] Starting 5-tab parallel translation for ${targetImagesForGoogle.length} images with Google Translate (lang: ${detectedLang})...`);
                 const translationResults = await imageTranslator.translateMultipleImages(targetImagesForGoogle, detectedLang);
 
                 // Robust replacement helper that matches //, https:, and base URLs without query parameters
@@ -2318,6 +2404,10 @@ Return ONLY valid JSON in this exact shape:
                     const origBaseWithoutHttps = origWithoutHttps.split('?')[0];
 
                     let updated = targetStr;
+                    
+                    // Strip out srcset and data-srcset attributes to prevent the browser from bypassing our src replacement with an unreplaced size variant
+                    updated = updated.replace(/\b(?:srcset|data-srcset)=["'][^"']*["']/gi, '');
+
                     [origClean, origWithHttps, origWithoutHttps, origBase, origBaseWithoutHttps].forEach(pattern => {
                         if (pattern && pattern.length > 15) {
                             updated = updated.split(pattern).join(newUrl);
@@ -2348,22 +2438,35 @@ Return ONLY valid JSON in this exact shape:
                         });
                         const descTargetUrls = Array.from(descTargets);
 
-                        const isForDescription = (meta && meta.isDesc) || descriptionImages.some(dImg => areSameImageUrls(dImg, res.original));
+                        const isForDescription = (meta && meta.isDesc) || descriptionImages.some(dImg => areSameImageUrls(dImg, res.original)) || Array.from(descTargets).some(tUrl => descriptionImages.some(dImg => areSameImageUrls(dImg, tUrl)));
                         if (isForDescription && product.description && typeof product.description === 'string') {
+                            // 1. Cleanly replace matching <img> tags directly (updates src, data-src, and strips srcset)
+                            product.description = product.description.replace(/<img\b([^>]*)>/gi, (fullTag, attributes) => {
+                                const srcMatch = attributes.match(/\b(?:src|data-src|data-original)=["']([^"']+)["']/i);
+                                if (srcMatch && srcMatch[1]) {
+                                    const currentTagUrl = srcMatch[1].trim();
+                                    const isMatch = Array.from(descTargets).some(tUrl => areSameImageUrls(currentTagUrl, tUrl));
+                                    if (isMatch) {
+                                        let updatedTag = fullTag.replace(/\b(?:srcset|data-srcset)=["'][^"']*["']/gi, '');
+                                        if (/\bsrc=["'][^"']*["']/i.test(updatedTag)) {
+                                            updatedTag = updatedTag.replace(/\bsrc=["'][^"']*["']/i, `src="${res.translatedUrl}"`);
+                                        } else {
+                                            updatedTag = updatedTag.replace(/<img\b/i, `<img src="${res.translatedUrl}" `);
+                                        }
+                                        if (/\bdata-src=["'][^"']*["']/i.test(updatedTag)) {
+                                            updatedTag = updatedTag.replace(/\bdata-src=["'][^"']*["']/i, `data-src="${res.translatedUrl}"`);
+                                        }
+                                        return updatedTag;
+                                    }
+                                }
+                                return fullTag;
+                            });
+
+                            // 2. Also run URL string replacement as an additional guarantee
                             descTargetUrls.forEach(dUrl => {
                                 product.description = applyImageReplacement(product.description, dUrl, res.translatedUrl);
                             });
 
-                            // Also replace any matching <img src="..."> in the HTML directly
-                            const imgTagMatches = product.description.match(/<img\b[^>]*>/gi);
-                            if (imgTagMatches) {
-                                imgTagMatches.forEach(tag => {
-                                    const m = tag.match(/\b(?:src|data-src|data-original)=["']([^"']+)["']/i);
-                                    if (m && m[1] && descTargetUrls.some(dUrl => areSameImageUrls(m[1], dUrl))) {
-                                        product.description = product.description.split(m[1]).join(res.translatedUrl);
-                                    }
-                                });
-                            }
                             console.log(`[Translate] Replaced in Description at original place: ${res.original} -> ${res.translatedUrl}`);
                         }
 
@@ -2424,6 +2527,7 @@ Return ONLY valid JSON in this exact shape:
                         }
                     }
                 });
+
                 console.log(`[Translate] Successfully processed ${targetImagesForGoogle.length} images.`);
             } else {
                 console.log(`[Translate] No images have text overlays to translate. All original clean photos preserved.`);

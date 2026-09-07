@@ -571,54 +571,67 @@ router.post('/create', async (req, res) => {
             return res.status(400).json({ error: 'Every ad must have an uploaded media file.' });
         }
 
-        // Upload only media missing from the checkpoint. A failed upload can
+        // Upload media missing from the checkpoint in parallel. A failed upload can
         // therefore be retried without uploading successful media again.
-        const uploadedMedia = [];
-        for (let adIndex = 0; adIndex < creativeAds.length; adIndex++) {
-            const ad = creativeAds[adIndex];
+        console.log(`[MediaUpload] Processing ${creativeAds.length} creative media item(s) in parallel...`);
+        const mediaUploadPromises = creativeAds.map(async (ad, adIndex) => {
             const savedMedia = checkpoint.uploadedMedia.find(item =>
                 item.index === adIndex &&
                 item.media === ad.media &&
                 (item.imageHash || item.videoId)
             );
-            if (savedMedia) {
-                uploadedMedia.push({ 
-                    ...ad, 
-                    imageHash: savedMedia.imageHash || null, 
-                    videoId: savedMedia.videoId || null,
-                    videoThumbnailUrl: savedMedia.videoThumbnailUrl || null,
-                    thumbnailHash: savedMedia.thumbnailHash || null
-                });
-                continue;
+
+            // If image is already uploaded and has hash, reuse it immediately
+            if (savedMedia && savedMedia.imageHash) {
+                console.log(`[MediaUpload] Reusing cached image hash for "${ad.name}": ${savedMedia.imageHash}`);
+                return {
+                    ...ad,
+                    imageHash: savedMedia.imageHash,
+                    videoId: null,
+                    videoThumbnailUrl: null,
+                    thumbnailHash: null
+                };
             }
 
-            progress.failedStep = 'media upload';
-            progress.failedIndex = adIndex;
-            progress.requestParams = { name: ad.name, media: ad.media };
-
-            // Verify if the local file exists on disk (crucial for Render ephemeral storage restarts)
+            // Verify local file existence
             if (ad.media && !fs.existsSync(ad.media)) {
                 throw new Error(`The media file for "${ad.name}" was removed because the server restarted. Please re-download or re-upload the video/image.`);
             }
 
             let imageHash = null;
-            let videoId = null;
-            let videoThumbnailUrl = null;
-            let thumbnailHash = null;
+            let videoId = savedMedia?.videoId || null;
+            let videoThumbnailUrl = savedMedia?.videoThumbnailUrl || '';
+            let thumbnailHash = savedMedia?.thumbnailHash || null;
 
             const ext = path.extname(ad.media).toLowerCase();
             if (['.mp4', '.mov', '.avi', '.webm'].includes(ext)) {
-                const videoRes = await facebookService.uploadVideo(accountId, token, ad.media);
-                videoId = videoRes.id || null;
-                if (!videoId) throw new Error(`Facebook did not return a video ID for ${ad.name}.`);
-                
-                // Wait for the video to be processed by Meta
+                if (videoId) {
+                    console.log(`[MediaUpload] Reusing already uploaded video ID ${videoId} for "${ad.name}". Checking Meta readiness...`);
+                } else {
+                    progress.failedStep = 'media upload';
+                    progress.failedIndex = adIndex;
+                    progress.requestParams = { name: ad.name, media: ad.media };
+
+                    const videoRes = await facebookService.uploadVideo(accountId, token, ad.media);
+                    videoId = videoRes.id || null;
+                    if (!videoId) throw new Error(`Facebook did not return a video ID for ${ad.name}.`);
+
+                    // Immediately save videoId into checkpoint so any subsequent timeout or failure can resume without re-uploading
+                    checkpoint.uploadedMedia = checkpoint.uploadedMedia.filter(item => item.index !== adIndex);
+                    checkpoint.uploadedMedia.push({ index: adIndex, name: ad.name, media: ad.media, imageHash: null, videoId, videoThumbnailUrl: '', thumbnail: ad.thumbnail || null, thumbnailHash: null });
+                    saveRetryCheckpoint(draftId, req.body.campaign, checkpoint, progress);
+                }
+
+                // Wait for video to be processed and ready on Meta's servers
+                progress.failedStep = 'media upload';
+                progress.failedIndex = adIndex;
+                progress.requestParams = { name: ad.name, videoId };
                 await facebookService.waitForVideoReady(videoId, token);
-                
+
                 videoThumbnailUrl = '';
-                
+
                 // If a thumbnail file is provided, upload it to Meta
-                if (ad.thumbnail) {
+                if (ad.thumbnail && !thumbnailHash) {
                     try {
                         const thumbRes = await facebookService.uploadImage(accountId, token, ad.thumbnail);
                         const firstKey = Object.keys(thumbRes.images || {})[0];
@@ -628,16 +641,24 @@ router.post('/create', async (req, res) => {
                     }
                 }
             } else {
+                progress.failedStep = 'media upload';
+                progress.failedIndex = adIndex;
+                progress.requestParams = { name: ad.name, media: ad.media };
+
                 const imageRes = await facebookService.uploadImage(accountId, token, ad.media);
                 const firstKey = Object.keys(imageRes.images || {})[0];
                 imageHash = firstKey ? imageRes.images[firstKey].hash : null;
                 if (!imageHash) throw new Error(`Facebook did not return an image hash for ${ad.name}.`);
             }
+
             checkpoint.uploadedMedia = checkpoint.uploadedMedia.filter(item => item.index !== adIndex);
             checkpoint.uploadedMedia.push({ index: adIndex, name: ad.name, media: ad.media, imageHash, videoId, videoThumbnailUrl, thumbnail: ad.thumbnail || null, thumbnailHash });
             saveRetryCheckpoint(draftId, req.body.campaign, checkpoint, progress);
-            uploadedMedia.push({ ...ad, imageHash, videoId, videoThumbnailUrl, thumbnailHash });
-        }
+
+            return { ...ad, imageHash, videoId, videoThumbnailUrl, thumbnailHash };
+        });
+
+        const uploadedMedia = await Promise.all(mediaUploadPromises);
 
         const isCBO = campaign.budgetType === 'CBO';
         const campaignParams = {
@@ -1080,9 +1101,18 @@ router.post('/create', async (req, res) => {
             detail += "\n\n💡 Troubleshooting Hint: This error means the Facebook Page or Instagram account you selected is not linked/authorized to your Ad Account in Meta Business Manager. To fix this:\n1. Open Meta Business Manager Settings (business.facebook.com).\n2. Go to 'Accounts' > 'Pages' and select your page.\n3. Click 'Connected Assets' and make sure your Ad Account is listed there. If not, click 'Add Assets' and add it.\n4. Go to 'Instagram Accounts' and ensure your Instagram account is linked to both the Page and Ad Account.";
         }
 
+        if (providerDetails?.errorSubcode === 1885183) {
+            detail += "\n\n💡 Troubleshooting Hint: Your Meta App is in 'Development Mode'. Facebook prohibits creating public ad creatives with apps in development mode.\nTo fix this in 1 minute:\n1. Open developers.facebook.com and select your App ('Dashboard' ID: 1642031687256797).\n2. At the top navbar, toggle 'App Mode: Development' to 'Live'.\n3. Provide your Privacy Policy URL if prompted and save.\n4. Come back here and click 'Retry from failed step'!";
+        }
+
         if (providerDetails?.errorSubcode === 1443226) {
             detail += "\n\n💡 Troubleshooting Hint: This video ad requires a thumbnail. Please upload a custom thumbnail image for this video in step 3 (Ad Creative), or ensure that the video URL has a valid default preview image.";
         }
+
+        if (error.isStillProcessing || error.message.includes('Timeout: Video')) {
+            detail += "\n\n💡 Troubleshooting Hint: Meta's servers are still encoding/transcoding your video in the background. The video upload was already completed and saved on Meta. Please wait 15-30 seconds and click 'Retry from failed step' to finish publishing!";
+        }
+
         const failedRecord = {
             id: `retry-${draftId}`,
             draftId,
@@ -1091,7 +1121,7 @@ router.post('/create', async (req, res) => {
             name: req.body.campaign?.name || 'Unnamed campaign',
             createdAt: new Date().toISOString(),
             status: 'failed',
-            retryable: Boolean(checkpoint.campaignId || checkpoint.uploadedMedia.length),
+            retryable: Boolean(checkpoint.campaignId || checkpoint.uploadedMedia.length || error.isStillProcessing),
             failedStep: progress.failedStep,
             details: detail,
             checkpoint

@@ -101,10 +101,14 @@ async function handleResponse(response) {
     const data = await response.json();
     if (!response.ok) {
         const apiError = data.error || {};
-        const error = new Error(apiError.message || data.message || 'Unknown Facebook API Error');
+        const userMsg = apiError.error_user_msg || apiError.error_user_title;
+        const mainMsg = userMsg ? `${apiError.message || 'Facebook API Error'}: ${userMsg}` : (apiError.message || data.message || 'Unknown Facebook API Error');
+        const error = new Error(mainMsg);
         error.provider = 'facebook';
         error.code = apiError.code;
         error.errorSubcode = apiError.error_subcode;
+        error.errorUserTitle = apiError.error_user_title;
+        error.errorUserMsg = apiError.error_user_msg;
         error.type = apiError.type;
         error.fbtraceId = apiError.fbtrace_id;
         error.details = data;
@@ -263,7 +267,7 @@ const facebookService = {
                 const data = await res.json();
                 
                 if (res.status >= 400 || data.error) {
-                    throw new Error(data.error ? data.error.message : 'Failed to query video status');
+                    throw new Error(data.error ? (data.error.error_user_msg || data.error.message) : 'Failed to query video status');
                 }
 
                 const videoStatus = data.status?.video_status;
@@ -286,7 +290,10 @@ const facebookService = {
             await new Promise(r => setTimeout(r, pollIntervalMs));
         }
 
-        throw new Error('Timeout: Video took too long to process on Meta\'s servers.');
+        const timeoutErr = new Error('Timeout: Video is still being encoded on Meta\'s servers. Video upload was successful and saved. Please click "Retry from failed step" to proceed.');
+        timeoutErr.isStillProcessing = true;
+        timeoutErr.videoId = videoId;
+        throw timeoutErr;
     },
 
     async getPixels(accountId, token) {
