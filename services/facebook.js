@@ -137,6 +137,12 @@ const facebookService = {
         return handleResponse(response);
     },
 
+    async getCampaignAdSets(campaignId, token) {
+        const url = `${BASE_URL}/${campaignId}/adsets?fields=id,name,status&limit=100&access_token=${token}`;
+        const response = await fetch(url);
+        return handleResponse(response);
+    },
+
     async createAdSet(accountId, token, params) {
         const url = `${BASE_URL}/act_${accountId}/adsets?access_token=${token}`;
         const response = await fetch(url, {

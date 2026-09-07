@@ -16,6 +16,7 @@
         _retryState: null,
         _accountEnhancements: {},   // { [accountId]: { key: bool, ... } }
         _currentAccountId: null,    // track which account is active
+        _isSubmittingCampaign: false,
 
         // Colour/label metadata for each targeting type
         TYPE_META: {
@@ -2075,12 +2076,20 @@
 
         // ── Create campaign ───────────────────────────────────────────────
         createCampaign: async function() {
+            if (this._isSubmittingCampaign) {
+                console.warn('[CampaignWizard] Campaign creation already in progress. Ignoring duplicate trigger.');
+                return;
+            }
+            this._isSubmittingCampaign = true;
+
             const btn = document.getElementById('btn-create-campaign');
+            const retryBtn = document.getElementById('btn-retry-campaign');
             const statusDiv = document.getElementById('creation-status');
             const statusText = document.getElementById('creation-status-text');
             const errorDetails = document.getElementById('creation-error-details');
 
             if (btn) { btn.disabled = true; btn.textContent = '⏳ Creating...'; }
+            if (retryBtn) { retryBtn.disabled = true; retryBtn.textContent = '⏳ Retrying...'; }
             if (statusDiv) statusDiv.style.display = 'block';
             if (errorDetails) {
                 errorDetails.style.display = 'none';
@@ -2198,6 +2207,7 @@
                     if (retryBtn) retryBtn.addEventListener('click', () => this.createCampaign());
                 }
             } finally {
+                this._isSubmittingCampaign = false;
                 if (btn) { btn.disabled = false; btn.textContent = '🚀 Create Campaign'; }
             }
         },

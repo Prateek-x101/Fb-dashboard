@@ -499,17 +499,11 @@ router.post('/create', async (req, res) => {
             const incomingObjective = campaign.objective || 'OUTCOME_SALES';
             if ((checkpoint.pixel && checkpoint.pixel !== checkpoint._incomingPixel) || 
                 (checkpoint.objective && checkpoint.objective !== incomingObjective)) {
-                console.log(`[Retry] Pixel or Objective changed. Recreating adsets.`);
-                checkpoint.adsets = [];
-                checkpoint.creatives = [];
-                checkpoint.ads = [];
+                console.log(`[Retry] Pixel or Objective changed. Keeping campaign and updating adsets.`);
             }
 
             if (checkpoint.audiencesHash && checkpoint.audiencesHash !== checkpoint._incomingAudiencesHash) {
-                console.log(`[Retry] Audiences targeting changed. Recreating adsets.`);
-                checkpoint.adsets = [];
-                checkpoint.creatives = [];
-                checkpoint.ads = [];
+                console.log(`[Retry] Audiences targeting changed. Keeping campaign and synchronizing adsets.`);
             }
 
             if ((checkpoint.pageId && checkpoint.pageId !== checkpoint._incomingPageId) ||
@@ -772,10 +766,38 @@ router.post('/create', async (req, res) => {
             return audienceIds;
         };
 
-        // 2. Create all Ad Sets in parallel
+        // 2. Query Meta to check if ad sets already exist in this campaign to guarantee ZERO duplicate ad sets
+        let metaExistingAdSets = [];
+        if (campaignId) {
+            try {
+                const metaRes = await facebookService.getCampaignAdSets(campaignId, token);
+                metaExistingAdSets = metaRes.data || [];
+                if (metaExistingAdSets.length > 0) {
+                    console.log(`[AdSetDeduplication] Found ${metaExistingAdSets.length} existing ad set(s) on Meta for campaign ${campaignId}`);
+                }
+            } catch (err) {
+                console.warn(`[AdSetDeduplication] Could not inspect Meta ad sets:`, err.message);
+            }
+        }
+
+        // Create or reuse all Ad Sets
         const adsetPromises = (step2.audiences || []).map(async (audience, audienceIndex) => {
             const existingAdset = checkpoint.adsets.find(item => item.audienceIndex === audienceIndex);
             let adsetId = existingAdset?.id;
+
+            // If not in checkpoint, check if Meta already has this ad set
+            if (!adsetId && metaExistingAdSets.length > 0) {
+                const matchedMeta = metaExistingAdSets.find(m => m.name === audience.name) ||
+                    (metaExistingAdSets.length === (step2.audiences || []).length ? metaExistingAdSets[audienceIndex] : null);
+                if (matchedMeta && matchedMeta.id) {
+                    console.log(`[AdSetDeduplication] Reusing existing Meta ad set "${matchedMeta.name}" (${matchedMeta.id}) for audience ${audienceIndex}`);
+                    adsetId = matchedMeta.id;
+                    checkpoint.adsets = checkpoint.adsets.filter(item => item.audienceIndex !== audienceIndex);
+                    checkpoint.adsets.push({ audienceIndex, id: adsetId });
+                    saveRetryCheckpoint(draftId, campaign, checkpoint, progress);
+                    return { audienceIndex, adsetId };
+                }
+            }
 
             if (adsetId) {
                 return { audienceIndex, adsetId };
@@ -990,7 +1012,8 @@ router.post('/create', async (req, res) => {
 
             if (!adsetId) throw new Error(`Facebook did not return an ad set ID for ${audience.name}.`);
             
-            // Push to checkpoint and save status
+            // Push to checkpoint and save status (deduplicate audienceIndex)
+            checkpoint.adsets = checkpoint.adsets.filter(item => item.audienceIndex !== audienceIndex);
             checkpoint.adsets.push({ audienceIndex, id: adsetId });
             saveRetryCheckpoint(draftId, campaign, checkpoint, progress);
 
@@ -1005,8 +1028,8 @@ router.post('/create', async (req, res) => {
             if (!results.adsets.includes(r.adsetId)) results.adsets.push(r.adsetId);
         });
 
-        // 3. Create all Ad Creatives and Ads in parallel
-        const adPromises = [];
+        // 3. Create all Ad Creatives and Ads in controlled batches of 3 to prevent Meta rate limits
+        const adTasks = [];
         const enhancements = step3.enhancements || {};
 
         for (let audienceIndex = 0; audienceIndex < (step2.audiences || []).length; audienceIndex++) {
@@ -1017,7 +1040,7 @@ router.post('/create', async (req, res) => {
                 const ad = uploadedMedia[adIndex];
                 const creativeKey = `${audienceIndex}:${adIndex}`;
 
-                adPromises.push((async () => {
+                adTasks.push(async () => {
                     let creativeId = checkpoint.creatives.find(item => item.key === creativeKey)?.id;
                     let adId = checkpoint.ads.find(item => item.key === creativeKey)?.id;
                     
@@ -1076,6 +1099,7 @@ router.post('/create', async (req, res) => {
                         const creativeResponse = await facebookService.createAdCreative(accountId, token, creativeParams);
                         creativeId = creativeResponse.id;
                         if (!creativeId) throw new Error(`Facebook did not return a creative ID for ${ad.name}.`);
+                        checkpoint.creatives = checkpoint.creatives.filter(c => c.key !== creativeKey);
                         checkpoint.creatives.push({ key: creativeKey, id: creativeId });
                         saveRetryCheckpoint(draftId, campaign, checkpoint, progress);
                     }
@@ -1093,18 +1117,26 @@ router.post('/create', async (req, res) => {
                         const adResponse = await facebookService.createAd(accountId, token, adParams);
                         adId = adResponse.id;
                         if (!adId) throw new Error(`Facebook did not return an ad ID for ${ad.name}.`);
+                        checkpoint.ads = checkpoint.ads.filter(a => a.key !== creativeKey);
                         checkpoint.ads.push({ key: creativeKey, id: adId });
                         saveRetryCheckpoint(draftId, campaign, checkpoint, progress);
                     }
 
                     if (!results.ads.includes(adId)) results.ads.push(adId);
                     return adId;
-                })());
+                });
             }
         }
 
-        // Await all creative and ad creations concurrently
-        await Promise.all(adPromises);
+        // Run ad tasks in controlled batches of 3 with a short breather to prevent Meta Rate Limit (Code 4)
+        const batchSize = 3;
+        for (let i = 0; i < adTasks.length; i += batchSize) {
+            const batch = adTasks.slice(i, i + batchSize);
+            await Promise.all(batch.map(task => task()));
+            if (i + batchSize < adTasks.length) {
+                await new Promise(r => setTimeout(r, 350));
+            }
+        }
 
         if (!storage.recentCampaigns) storage.recentCampaigns = [];
         storage.recentCampaigns = storage.recentCampaigns.filter(item => item.draftId !== draftId);
