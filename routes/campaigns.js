@@ -638,6 +638,9 @@ router.post('/create', async (req, res) => {
                 if (savedMedia?.videoReady) {
                     console.log(`[MediaUpload] Video ${videoId} was already confirmed ready in checkpoint.`);
                 } else {
+                    if (adIndex > 0) {
+                        await new Promise(r => setTimeout(r, adIndex * 2500));
+                    }
                     progress.failedStep = 'media upload';
                     progress.failedIndex = adIndex;
                     progress.requestParams = { name: ad.name, videoId };
@@ -1143,6 +1146,10 @@ router.post('/create', async (req, res) => {
 
         if (providerDetails?.errorSubcode === 1443226) {
             detail += "\n\n💡 Troubleshooting Hint: This video ad requires a thumbnail. Please upload a custom thumbnail image for this video in step 3 (Ad Creative), or ensure that the video URL has a valid default preview image.";
+        }
+
+        if (providerDetails?.code === 4 || error.message.includes('request limit')) {
+            detail += "\n\n💡 Troubleshooting Hint: Meta's temporary API rate limit was reached because several ad requests were made in quick succession. Please wait 15-30 seconds for Meta's rate limiter bucket to refresh, then click 'Retry from failed step' to finish publishing!";
         }
 
         if (error.isStillProcessing || error.message.includes('Timeout: Video')) {

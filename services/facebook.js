@@ -256,7 +256,7 @@ const facebookService = {
         return { id: video_id };
     },
 
-    async waitForVideoReady(videoId, token, maxWaitMs = 120000, pollIntervalMs = 3000) {
+    async waitForVideoReady(videoId, token, maxWaitMs = 120000, pollIntervalMs = 7000) {
         const startTime = Date.now();
         console.log(`[FacebookService] Waiting for video ${videoId} to be ready on Meta's servers...`);
 
@@ -272,8 +272,16 @@ const facebookService = {
                 if (res.status >= 400 || data.error) {
                     const errMsg = data.error ? (data.error.error_user_msg || data.error.message) : `HTTP ${res.status}`;
                     const errCode = data.error?.code;
+
+                    // If Rate Limited (code 4, 17, 32, 613), DO NOT THROW! Wait and back off!
+                    if (errCode === 4 || errCode === 17 || errCode === 32 || errCode === 613 || errMsg.toLowerCase().includes('request limit')) {
+                        console.warn(`[FacebookService] Rate limit hit during polling (code ${errCode}). Backing off for 12 seconds...`);
+                        await new Promise(r => setTimeout(r, 12000));
+                        continue;
+                    }
+
                     // Fail immediately on fatal auth / permission / non-existent ID errors
-                    if (errCode === 190 || errCode === 100 || res.status === 401 || res.status === 403) {
+                    if (errCode === 190 || (errCode === 100 && !errMsg.toLowerCase().includes('request limit')) || res.status === 401) {
                         const fatalErr = new Error(`Meta API error: ${errMsg}`);
                         fatalErr.provider = 'facebook';
                         fatalErr.code = errCode;
