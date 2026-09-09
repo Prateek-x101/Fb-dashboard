@@ -522,12 +522,6 @@
 
                 const selectedAcc = window.APP.accounts.find(item => item.id === account);
                 const symbol = selectedAcc ? window.CampaignWizard.getCurrencySymbol(selectedAcc) : '₹';
-                const minBudget = symbol === '$' ? 5 : 400;
-
-                if (parseFloat(budgetAmount) < minBudget) {
-                    window.AppController.showToast(`Meta requires a minimum budget of ${symbol}${minBudget} per day.`, 'warning');
-                    return false;
-                }
 
                 if (!start) { window.AppController.showToast('Please set a start date', 'warning'); return false; }
                 if (!account) { window.AppController.showToast('Please select an ad account', 'warning'); return false; }
@@ -805,9 +799,9 @@
             const budgetInput = document.getElementById('budget-amount');
             if (budgetInput) {
                 if (symbol === '$') {
-                    budgetInput.value = '5';
+                    budgetInput.value = '4';
                 } else if (symbol === '₹') {
-                    budgetInput.value = '400';
+                    budgetInput.value = '350';
                 }
             }
 
@@ -2040,7 +2034,8 @@
             const set = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; };
             set('review-campaign-name', `Name: <strong>${step1.name || '—'}</strong>`);
             set('review-campaign-objective', `Objective: <strong>${step1.objective || '—'}</strong>`);
-            set('review-campaign-budget', `Budget: <strong>$${step1.budgetAmount || 0}/day (${step1.budgetType || 'CBO'})</strong>`);
+            const symbol = this.getCurrencySymbol(window.APP?.activeAccount) || '$';
+            set('review-campaign-budget', `Budget: <strong>${symbol}${step1.budgetAmount || 0}/day (${step1.budgetType || 'CBO'})</strong>`);
             set('review-adsets-count', `Ad Sets: <strong>${totalAdsets}</strong>`);
             set('review-variations-count', `Ads per Ad Set: <strong>${totalAds}</strong>`);
             const totalEl = document.getElementById('review-total-ads');
@@ -2148,6 +2143,10 @@
                 if (statusText) statusText.textContent = '✅ Campaign created successfully!';
                 window.AppController.showToast('Campaign created successfully! 🎉', 'success');
 
+                if (result.budgetAdjusted && result.budgetNotice) {
+                    window.AppController.showToast('⚡ ' + result.budgetNotice, 'info', 8000);
+                }
+
                 const resultBody = document.getElementById('modal-result-body');
                 const resultTitle = document.getElementById('modal-result-title');
                 if (resultTitle) resultTitle.textContent = '🎉 Campaign Created!';
@@ -2156,6 +2155,11 @@
                         <div style="text-align:center; padding:1rem;">
                             <p style="font-size:3rem; margin-bottom:1rem;">✅</p>
                             <h3>Campaign "${this.campaignData.step1.name}" created!</h3>
+                            ${result.budgetAdjusted ? `
+                                <div style="margin:0.75rem 0; background:rgba(0,180,216,0.12); border:1px solid var(--accent-cyan); border-radius:8px; padding:0.6rem 1rem; font-size:0.85rem; color:var(--accent-cyan); text-align:left;">
+                                    ⚡ <strong>Budget Notice:</strong> ${this.escapeHtml(result.budgetNotice)}
+                                </div>
+                            ` : ''}
                             <p class="mt-2" style="color:var(--text-secondary);">Campaign ID: ${result.results?.campaignId || 'Created'}</p>
                             <p style="color:var(--text-secondary);">Ad Sets: ${result.results?.adsets?.length || 0}</p>
                             <p style="color:var(--text-secondary);">Ads: ${result.results?.ads?.length || 'Created'}</p>
@@ -2420,7 +2424,7 @@
             const budgetInput = document.getElementById('budget-amount');
             if (budgetInput) {
                 const symbol = this.getCurrencySymbol(window.APP?.activeAccount);
-                budgetInput.value = symbol === '$' ? '5' : '400';
+                budgetInput.value = symbol === '$' ? '4' : '350';
             }
 
             // Clear scheduling

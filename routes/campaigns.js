@@ -22,6 +22,73 @@ function saveStorage(data) {
     fs.writeFileSync(storagePath, JSON.stringify(data, null, 2), 'utf8');
 }
 
+function isBudgetError(err) {
+    if (!err) return false;
+    const budgetSubcodes = [1815857, 1815124, 1815437, 1487844, 1815082, 1815087, 1815610, 1815340, 1815555, 1815858, 1815859, 1815422];
+    if (err.errorSubcode && budgetSubcodes.includes(Number(err.errorSubcode))) {
+        return true;
+    }
+    const fullText = `${err.message || ''} ${err.errorUserMsg || ''} ${err.errorUserTitle || ''} ${err.details?.error?.message || ''}`.toLowerCase();
+    const budgetPatterns = [
+        /budget.*too low/i,
+        /budget.*below.*minimum/i,
+        /budget.*must be at least/i,
+        /minimum.*daily budget/i,
+        /daily budget.*minimum/i,
+        /minimum budget/i,
+        /increase.*budget/i,
+        /budget.*too small/i,
+        /budget.*cannot be less than/i,
+        /daily budget.*less than/i,
+        /budget.*is lower than/i,
+        /daily_budget/i
+    ];
+    return budgetPatterns.some(pattern => pattern.test(fullText));
+}
+
+function extractMinBudget(err, currentBudget = 4, currency = 'USD') {
+    // 1. Check error_data for exact min_budget
+    const errorData = err.details?.error?.error_data;
+    if (errorData) {
+        const rawMin = errorData.min_budget || errorData.min_daily_budget || errorData.minimum_budget;
+        if (rawMin && !isNaN(Number(rawMin))) {
+            const val = Number(rawMin);
+            // Meta Graph API amounts are in cents/smallest currency unit
+            const fromCents = Math.ceil(val / 100);
+            if (fromCents > currentBudget) {
+                return fromCents;
+            }
+            if (val > currentBudget) {
+                return Math.ceil(val);
+            }
+        }
+    }
+
+    // 2. Parse from error messages (e.g. "at least $5.00", "minimum of ₹412", "must be at least 5")
+    const fullText = `${err.message || ''} ${err.errorUserMsg || ''} ${err.details?.error?.message || ''}`;
+    const regexes = [
+        /(?:at least|minimum(?: of)?|be at least|must be|increase.*to)\s*[$₹€£]?\s*([\d,]+(?:\.\d{1,2})?)/i,
+        /[$₹€£]\s*([\d,]+(?:\.\d{1,2})?)\s*(?:or more|minimum)/i,
+        /([\d,]+(?:\.\d{1,2})?)\s*(?:USD|INR|EUR|GBP)\s*(?:minimum|or more)/i,
+        /(?:at least|minimum(?: of)?)\s*([\d,]+(?:\.\d{1,2})?)/i
+    ];
+
+    for (const regex of regexes) {
+        const match = fullText.match(regex);
+        if (match && match[1]) {
+            const parsed = parseFloat(match[1].replace(/,/g, ''));
+            if (!isNaN(parsed) && parsed > currentBudget) {
+                return Math.ceil(parsed);
+            }
+        }
+    }
+
+    // 3. Fallback increment: bump by ₹50 for INR, or $1 for USD/others
+    const isINR = currency === 'INR' || currentBudget > 50;
+    const increment = isINR ? 50 : 1;
+    return Math.ceil(Number(currentBudget) + increment);
+}
+
 async function downloadUrlToTempFile(url) {
     const os = require('os');
     const response = await fetch(url);
@@ -470,6 +537,8 @@ router.post('/create', async (req, res) => {
         if (!accountRecord) return res.status(400).json({ error: 'Account not found. Please select a valid account.' });
 
         const accountId = accountRecord.accountId;
+        const accountCurrency = accountRecord.currency || (campaign.budgetAmount > 50 ? 'INR' : 'USD');
+        const currencySymbol = accountCurrency === 'INR' ? '₹' : '$';
         let token = accountRecord.accessToken || storage.settings?.facebookAccessToken;
         if (!token) return res.status(400).json({ error: 'Access token is required. Please set it in settings or select another account.' });
         const selectedPageId = step3.pageId || accountRecord.pageId || '';
@@ -711,12 +780,37 @@ router.post('/create', async (req, res) => {
         if (!campaignId) {
             progress.failedStep = 'campaign';
             progress.failedIndex = null;
-            progress.requestParams = campaignParams;
-            const campaignResponse = await facebookService.createCampaign(accountId, token, campaignParams);
-            campaignId = campaignResponse.id;
-            if (!campaignId) throw new Error('Facebook did not return a campaign ID.');
-            checkpoint.campaignId = campaignId;
-            saveRetryCheckpoint(draftId, campaign, checkpoint, progress);
+            
+            const maxBudgetRetries = 5;
+            let campaignCreated = false;
+            for (let attempt = 0; attempt < maxBudgetRetries && !campaignCreated; attempt++) {
+                if (isCBO) {
+                    campaignParams.daily_budget = Math.round(campaign.budgetAmount * 100); // cents
+                    campaignParams.bid_strategy = 'LOWEST_COST_WITHOUT_CAP';
+                }
+                progress.requestParams = campaignParams;
+
+                try {
+                    const campaignResponse = await facebookService.createCampaign(accountId, token, campaignParams);
+                    campaignId = campaignResponse.id;
+                    if (!campaignId) throw new Error('Facebook did not return a campaign ID.');
+                    checkpoint.campaignId = campaignId;
+                    saveRetryCheckpoint(draftId, campaign, checkpoint, progress);
+                    campaignCreated = true;
+                } catch (campaignErr) {
+                    if (isCBO && isBudgetError(campaignErr) && attempt < maxBudgetRetries - 1) {
+                        const newBudget = extractMinBudget(campaignErr, campaign.budgetAmount, accountCurrency);
+                        console.warn(`[BudgetAutoAdjust] CBO Campaign rejected budget ${campaign.budgetAmount}. Auto-adjusting to ${newBudget}...`);
+                        progress.budgetAdjusted = true;
+                        if (!progress.originalBudget) progress.originalBudget = campaign.budgetAmount;
+                        campaign.budgetAmount = newBudget;
+                        progress.adjustedBudget = newBudget;
+                        progress.budgetNotice = `Daily budget was automatically adjusted from ${currencySymbol}${progress.originalBudget} to ${currencySymbol}${newBudget} to meet Meta's minimum requirement.`;
+                        continue;
+                    }
+                    throw campaignErr;
+                }
+            }
         }
 
         const results = {
@@ -780,8 +874,10 @@ router.post('/create', async (req, res) => {
             }
         }
 
-        // Create or reuse all Ad Sets
-        const adsetPromises = (step2.audiences || []).map(async (audience, audienceIndex) => {
+        // Create or reuse all Ad Sets sequentially to handle budget auto-adjust gracefully
+        const adsetResults = [];
+        for (let audienceIndex = 0; audienceIndex < (step2.audiences || []).length; audienceIndex++) {
+            const audience = step2.audiences[audienceIndex];
             const existingAdset = checkpoint.adsets.find(item => item.audienceIndex === audienceIndex);
             let adsetId = existingAdset?.id;
 
@@ -795,12 +891,14 @@ router.post('/create', async (req, res) => {
                     checkpoint.adsets = checkpoint.adsets.filter(item => item.audienceIndex !== audienceIndex);
                     checkpoint.adsets.push({ audienceIndex, id: adsetId });
                     saveRetryCheckpoint(draftId, campaign, checkpoint, progress);
-                    return { audienceIndex, adsetId };
+                    adsetResults.push({ audienceIndex, adsetId });
+                    continue;
                 }
             }
 
             if (adsetId) {
-                return { audienceIndex, adsetId };
+                adsetResults.push({ audienceIndex, adsetId });
+                continue;
             }
 
             // Map resolved locations
@@ -957,56 +1055,79 @@ router.post('/create', async (req, res) => {
                 ...(destinationType && { destination_type: destinationType }),
                 start_time: campaign.scheduleStart ? parseIsoDate(campaign.scheduleStart) : undefined
             };
-            if (!isCBO) {
-                adsetParams.daily_budget = Math.round(campaign.budgetAmount * 100);
-                adsetParams.bid_strategy = 'LOWEST_COST_WITHOUT_CAP';
-            }
-            if (campaign.scheduleEnd) adsetParams.end_time = parseIsoDate(campaign.scheduleEnd);
-
-            try {
-                const adsetResponse = await facebookService.createAdSet(accountId, token, adsetParams);
-                adsetId = adsetResponse.id;
-            } catch (adsetErr) {
-                if (adsetErr.errorSubcode === 1870247) {
-                    const errorMsg = adsetErr.details?.error?.error_user_msg || '';
-                    const altMatch = errorMsg.match(/Relevant alternative options:\s*(\[.*\])/);
-                    if (altMatch) {
-                        try {
-                            const alternatives = JSON.parse(altMatch[1]);
-                            if (adsetParams.targeting.flexible_spec) {
-                                for (const spec of adsetParams.targeting.flexible_spec) {
-                                    if (spec.interests) {
-                                        for (const alt of alternatives) {
-                                            const idx = spec.interests.findIndex(i => i.id === alt.deprecated_interest_id);
-                                            if (idx !== -1) {
-                                                spec.interests[idx] = { id: alt.alternative_interest_id, name: alt.alternative_interest_name };
+            const maxBudgetRetries = 5;
+            let adsetCreated = false;
+            for (let attempt = 0; attempt < maxBudgetRetries && !adsetCreated; attempt++) {
+                if (!isCBO) {
+                    adsetParams.daily_budget = Math.round(campaign.budgetAmount * 100);
+                    adsetParams.bid_strategy = 'LOWEST_COST_WITHOUT_CAP';
+                }
+                try {
+                    const adsetResponse = await facebookService.createAdSet(accountId, token, adsetParams);
+                    adsetId = adsetResponse.id;
+                    adsetCreated = true;
+                } catch (adsetErr) {
+                    if (adsetErr.errorSubcode === 1870247) {
+                        const errorMsg = adsetErr.details?.error?.error_user_msg || '';
+                        const altMatch = errorMsg.match(/Relevant alternative options:\s*(\[.*\])/);
+                        if (altMatch) {
+                            try {
+                                const alternatives = JSON.parse(altMatch[1]);
+                                if (adsetParams.targeting.flexible_spec) {
+                                    for (const spec of adsetParams.targeting.flexible_spec) {
+                                        if (spec.interests) {
+                                            for (const alt of alternatives) {
+                                                const idx = spec.interests.findIndex(i => i.id === alt.deprecated_interest_id);
+                                                if (idx !== -1) {
+                                                    spec.interests[idx] = { id: alt.alternative_interest_id, name: alt.alternative_interest_name };
+                                                }
                                             }
                                         }
                                     }
                                 }
+                                progress.requestParams = adsetParams;
+                                const retryResponse = await facebookService.createAdSet(accountId, token, adsetParams);
+                                adsetId = retryResponse.id;
+                                adsetCreated = true;
+                            } catch (parseErr) {
+                                delete adsetParams.targeting.excluded_custom_audiences;
+                                delete adsetParams.targeting.custom_audiences;
+                                progress.requestParams = adsetParams;
+                                const retryResponse = await facebookService.createAdSet(accountId, token, adsetParams);
+                                adsetId = retryResponse.id;
+                                adsetCreated = true;
                             }
-                            progress.requestParams = adsetParams;
-                            const retryResponse = await facebookService.createAdSet(accountId, token, adsetParams);
-                            adsetId = retryResponse.id;
-                        } catch (parseErr) {
+                        } else {
                             delete adsetParams.targeting.excluded_custom_audiences;
                             delete adsetParams.targeting.custom_audiences;
                             progress.requestParams = adsetParams;
                             const retryResponse = await facebookService.createAdSet(accountId, token, adsetParams);
                             adsetId = retryResponse.id;
+                            adsetCreated = true;
                         }
+                    } else if (isBudgetError(adsetErr) && attempt < maxBudgetRetries - 1) {
+                        const newBudget = extractMinBudget(adsetErr, campaign.budgetAmount, accountCurrency);
+                        console.warn(`[BudgetAutoAdjust] Ad set "${audience.name}" rejected budget ${campaign.budgetAmount}. Auto-adjusting to ${newBudget}...`);
+                        progress.budgetAdjusted = true;
+                        if (!progress.originalBudget) progress.originalBudget = campaign.budgetAmount;
+                        campaign.budgetAmount = newBudget;
+                        progress.adjustedBudget = newBudget;
+                        progress.budgetNotice = `Daily budget was automatically adjusted from ${currencySymbol}${progress.originalBudget} to ${currencySymbol}${newBudget} to meet Meta's minimum requirement.`;
+                        if (isCBO && campaignId) {
+                            try {
+                                await facebookService.updateCampaign(campaignId, token, { daily_budget: Math.round(newBudget * 100) });
+                                console.log(`[BudgetAutoAdjust] Successfully updated CBO campaign ${campaignId} daily budget to ${newBudget}`);
+                            } catch (updateErr) {
+                                console.warn(`[BudgetAutoAdjust] Failed to update CBO campaign daily budget on Meta:`, updateErr.message);
+                            }
+                        }
+                        continue;
                     } else {
-                        delete adsetParams.targeting.excluded_custom_audiences;
-                        delete adsetParams.targeting.custom_audiences;
+                        progress.failedStep = 'ad set';
+                        progress.failedIndex = audienceIndex;
                         progress.requestParams = adsetParams;
-                        const retryResponse = await facebookService.createAdSet(accountId, token, adsetParams);
-                        adsetId = retryResponse.id;
+                        throw adsetErr;
                     }
-                } else {
-                    progress.failedStep = 'ad set';
-                    progress.failedIndex = audienceIndex;
-                    progress.requestParams = adsetParams;
-                    throw adsetErr;
                 }
             }
 
@@ -1017,11 +1138,9 @@ router.post('/create', async (req, res) => {
             checkpoint.adsets.push({ audienceIndex, id: adsetId });
             saveRetryCheckpoint(draftId, campaign, checkpoint, progress);
 
-            return { audienceIndex, adsetId };
-        });
+            adsetResults.push({ audienceIndex, adsetId });
+        }
 
-        // Resolve all adsets concurrently
-        const adsetResults = await Promise.all(adsetPromises);
         const adsetMap = new Map();
         adsetResults.forEach(r => {
             adsetMap.set(r.audienceIndex, r.adsetId);
@@ -1163,6 +1282,9 @@ router.post('/create', async (req, res) => {
             campaignId,
             accountId: campaign.accountId || null,
             name: campaign.name,
+            budgetAmount: campaign.budgetAmount,
+            budgetAdjusted: Boolean(progress.budgetAdjusted),
+            budgetNotice: progress.budgetNotice || null,
             createdAt: new Date().toISOString(),
             status: 'success',
             adSets: results.adsets.length,
@@ -1171,7 +1293,12 @@ router.post('/create', async (req, res) => {
         if (storage.recentCampaigns.length > 50) storage.recentCampaigns = storage.recentCampaigns.slice(0, 50);
         saveStorage(storage);
 
-        res.json({ success: true, results });
+        res.json({
+            success: true,
+            results,
+            budgetAdjusted: Boolean(progress.budgetAdjusted),
+            budgetNotice: progress.budgetNotice || ''
+        });
     } catch (error) {
         const storage = getStorage();
         const providerDetails = error.provider === 'facebook' ? {
