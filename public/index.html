@@ -709,6 +709,14 @@
                         <input type="password" class="form-control" placeholder="EAAB..." id="setting-fb-token">
                         <button class="password-toggle" type="button">👁️</button>
                     </div>
+                    <div class="form-group mt-2">
+                        <label style="font-size:0.8rem; color:var(--text-secondary);">Valid OAuth Redirect URI (Whitelist this in Meta Developer Console)</label>
+                        <div class="flex gap-2 align-center" style="display:flex; gap:8px; align-items:center;">
+                            <input type="text" class="form-control" id="setting-oauth-redirect-uri" readonly style="background:rgba(0,0,0,0.25); font-size:0.75rem; color:var(--accent-cyan);" value="">
+                            <button type="button" class="btn btn-secondary btn-sm" id="btn-copy-oauth-uri" style="white-space:nowrap; padding:4px 10px;">📋 Copy</button>
+                        </div>
+                        <p style="font-size:0.72rem; color:var(--text-secondary); margin-top:4px;">Add this to Meta Developers → App → Facebook Login → Settings → <strong>Valid OAuth Redirect URIs</strong>.</p>
+                    </div>
                 </div>
 
                 <div class="glass-card">

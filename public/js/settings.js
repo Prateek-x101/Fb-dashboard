@@ -119,6 +119,18 @@
                 btnTestGemini.addEventListener('click', () => this.testGemini());
             }
 
+            // Copy OAuth Redirect URI button
+            const btnCopyOauth = document.getElementById('btn-copy-oauth-uri');
+            if (btnCopyOauth) {
+                btnCopyOauth.addEventListener('click', () => {
+                    const uriInput = document.getElementById('setting-oauth-redirect-uri');
+                    if (uriInput && uriInput.value) {
+                        navigator.clipboard.writeText(uriInput.value);
+                        window.AppController.showToast('OAuth Redirect URI copied to clipboard! 📋', 'success');
+                    }
+                });
+            }
+
             // Login with Facebook button
             const btnLoginFb = document.getElementById('btn-login-facebook');
             if (btnLoginFb) {
@@ -368,6 +380,12 @@
                 // Load default size charts
                 this.sizeChartFiles = settings.defaultSizeCharts || [];
                 this.renderSizeChartsPreview();
+
+                // Populate OAuth Redirect URI display
+                const oauthInput = document.getElementById('setting-oauth-redirect-uri');
+                if (oauthInput) {
+                    oauthInput.value = `${window.location.origin}/api/accounts/auth/facebook/callback`;
+                }
             } catch (error) {
                 console.log("Settings not configured yet");
             }
