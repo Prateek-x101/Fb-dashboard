@@ -6,7 +6,7 @@ const rootDir = path.join(__dirname, '..');
 const isWindows = process.platform === 'win32';
 
 console.log('='.repeat(65));
-console.log('🚀 Starting Ad Pilot Dashboard & Secure Tunnel...');
+console.log('🚀 Starting Ad Pilot Dashboard & Permanent Tunnel...');
 console.log('='.repeat(65));
 
 // 1. Start Server
@@ -45,11 +45,10 @@ function handleTunnelOutput(data) {
     const text = data.toString();
     process.stdout.write(text);
 
-    const match = text.match(/https:\/\/[a-zA-Z0-9-.]+\.(?:trycloudflare\.com|ngrok-free\.app|ngrok\.app|loca\.lt)/);
+    const match = text.match(/https:\/\/[a-zA-Z0-9-.]+\.(?:ngrok-free\.dev|ngrok-free\.app|ngrok\.app|ngrok\.io)/);
     if (match && !browserOpened) {
         const tunnelUrl = match[0];
-        // Wait 1.5s for DNS/routes to settle then open
-        setTimeout(() => openBrowser(tunnelUrl), 1500);
+        setTimeout(() => openBrowser(tunnelUrl), 1000);
     }
 }
 
