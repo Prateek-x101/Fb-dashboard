@@ -338,6 +338,23 @@ router.post('/test-connection', async (req, res) => {
     }
 });
 
+function getOAuthRedirectUri(req) {
+    const storage = getStorage();
+    const ngrokDomain = process.env.NGROK_DOMAIN || storage.settings?.ngrokDomain;
+    const host = req.get('host') || '';
+    
+    // If request originated from localhost but permanent tunnel is active, use permanent HTTPS tunnel for Meta
+    if ((host.includes('localhost') || host.includes('127.0.0.1')) && ngrokDomain) {
+        return `https://${ngrokDomain}/api/accounts/auth/facebook/callback`;
+    }
+
+    let protocol = req.protocol;
+    if (!host.includes('localhost') && !host.includes('127.0.0.1')) {
+        protocol = 'https';
+    }
+    return `${protocol}://${host}/api/accounts/auth/facebook/callback`;
+}
+
 // OAuth routes for Facebook login redirect flow
 router.get('/auth/facebook', (req, res) => {
     try {
@@ -362,12 +379,7 @@ router.get('/auth/facebook', (req, res) => {
             `);
         }
         
-        let protocol = req.protocol;
-        const host = req.get('host') || '';
-        if (!host.includes('localhost') && !host.includes('127.0.0.1')) {
-            protocol = 'https';
-        }
-        const redirectUri = `${protocol}://${host}/api/accounts/auth/facebook/callback`;
+        const redirectUri = getOAuthRedirectUri(req);
         const authUrl = `https://www.facebook.com/v25.0/dialog/oauth?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=ads_management,ads_read,pages_read_engagement,pages_show_list,instagram_basic,business_management,pages_manage_posts,pages_messaging,instagram_manage_messages,pages_manage_engagement,instagram_manage_comments,instagram_content_publish`;
         res.redirect(authUrl);
     } catch (error) {
@@ -433,12 +445,7 @@ router.get('/auth/facebook/callback', async (req, res) => {
             `);
         }
         
-        let protocol = req.protocol;
-        const host = req.get('host') || '';
-        if (!host.includes('localhost') && !host.includes('127.0.0.1')) {
-            protocol = 'https';
-        }
-        const redirectUri = `${protocol}://${host}/api/accounts/auth/facebook/callback`;
+        const redirectUri = getOAuthRedirectUri(req);
         
         // Exchange code for token with request deduplication to prevent double request failure
         if (!oauthCache.has(code)) {

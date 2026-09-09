@@ -48,7 +48,12 @@ function handleTunnelOutput(data) {
     const match = text.match(/https:\/\/[a-zA-Z0-9-.]+\.(?:ngrok-free\.dev|ngrok-free\.app|ngrok\.app|ngrok\.io)/);
     if (match && !browserOpened) {
         const tunnelUrl = match[0];
-        setTimeout(() => openBrowser(tunnelUrl), 1000);
+        console.log('\n' + '='.repeat(65));
+        console.log(`💡 Localhost mode active: Opening http://localhost:5000`);
+        console.log(`   This uses 0 MB of Ngrok data for all video previews & ad creation!`);
+        console.log(`   Permanent Ngrok tunnel (${tunnelUrl}) is ready for Meta OAuth.`);
+        console.log('='.repeat(65) + '\n');
+        setTimeout(() => openBrowser('http://localhost:5000'), 1000);
     }
 }
 

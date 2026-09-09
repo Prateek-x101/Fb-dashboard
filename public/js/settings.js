@@ -24,8 +24,8 @@
 
         bindPostMessageListener: function() {
             window.addEventListener('message', async (event) => {
-                // Support both exact matching and safe postMessage communication
-                if (event.origin !== window.location.origin && event.origin !== 'null' && event.origin !== '') return;
+                const isTunnel = event.origin && (event.origin.includes('ngrok') || event.origin.includes('trycloudflare'));
+                if (event.origin !== window.location.origin && event.origin !== 'null' && event.origin !== '' && !isTunnel) return;
                 
                 const data = event.data;
                 if (data && data.type === 'fb_auth_success' && data.token) {
