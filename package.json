@@ -7,6 +7,7 @@
     "start": "node server.js",
     "dev": "node server.js",
     "tunnel": "node scripts/tunnel.js",
+    "start:all": "node scripts/start-all.js",
     "postinstall": "node scripts/setup-yt-dlp.js"
   },
   "dependencies": {

@@ -19,11 +19,23 @@ function findCloudflared() {
     return 'cloudflared';
 }
 
+function getTunnelToken() {
+    if (process.env.CLOUDFLARE_TUNNEL_TOKEN) return process.env.CLOUDFLARE_TUNNEL_TOKEN;
+    try {
+        const storagePath = path.join(__dirname, '..', 'config', 'storage.local.json');
+        if (fs.existsSync(storagePath)) {
+            const data = JSON.parse(fs.readFileSync(storagePath, 'utf8'));
+            if (data.settings?.cloudflareTunnelToken) return data.settings.cloudflareTunnelToken;
+        }
+    } catch(e){}
+    return null;
+}
+
 const bin = findCloudflared();
-const token = process.env.CLOUDFLARE_TUNNEL_TOKEN;
+const token = getTunnelToken();
 const args = token ? ['tunnel', 'run', '--token', token] : ['tunnel', '--url', `http://localhost:${PORT}`];
 
-console.log(`[Tunnel] Starting Cloudflare Tunnel on port ${PORT}...`);
+console.log(`[Tunnel] Starting Cloudflare Tunnel on port ${PORT}${token ? ' (Permanent Named Tunnel)' : ' (Quick Tunnel)'}...`);
 const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
 
 let capturedUrl = '';
