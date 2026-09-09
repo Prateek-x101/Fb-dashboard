@@ -1096,8 +1096,25 @@ router.post('/create', async (req, res) => {
                         progress.failedStep = 'creative';
                         progress.failedIndex = { audienceIndex, adIndex };
                         progress.requestParams = creativeParams;
-                        const creativeResponse = await facebookService.createAdCreative(accountId, token, creativeParams);
-                        creativeId = creativeResponse.id;
+                        let creativeResponse;
+                        for (let attempt = 1; attempt <= 3; attempt++) {
+                            try {
+                                creativeResponse = await facebookService.createAdCreative(accountId, token, creativeParams);
+                                break;
+                            } catch (cErr) {
+                                const isVideoEncoding = cErr.errorSubcode === 1363030 || 
+                                    cErr.errorSubcode === 1363024 || 
+                                    cErr.message?.toLowerCase().includes('being processed') ||
+                                    cErr.message?.toLowerCase().includes('video processing');
+                                if (isVideoEncoding && attempt < 3) {
+                                    console.warn(`[Campaigns] Video still processing during creative creation for ${ad.name}. Waiting 15s before retry (attempt ${attempt}/3)...`);
+                                    await new Promise(r => setTimeout(r, 15000));
+                                    continue;
+                                }
+                                throw cErr;
+                            }
+                        }
+                        creativeId = creativeResponse?.id;
                         if (!creativeId) throw new Error(`Facebook did not return a creative ID for ${ad.name}.`);
                         checkpoint.creatives = checkpoint.creatives.filter(c => c.key !== creativeKey);
                         checkpoint.creatives.push({ key: creativeKey, id: creativeId });
