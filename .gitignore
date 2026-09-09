@@ -5,3 +5,5 @@ uploads/*
 screenshots/*
 bin/yt-dlp
 bin/yt-dlp.exe
+.env
+config/active-tunnel.json

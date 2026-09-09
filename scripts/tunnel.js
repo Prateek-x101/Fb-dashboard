@@ -42,6 +42,8 @@ async function startNgrok(authtoken, domain) {
         console.log('📋 Meta Redirect URI:   ' + url + '/api/accounts/auth/facebook/callback');
         console.log('=======================================================\n');
         saveActiveTunnel(url);
+        // Keep event loop alive indefinitely
+        setInterval(() => {}, 1000 * 60 * 60);
     } catch (err) {
         console.error('[Tunnel] Ngrok connection failed:', err.message);
         console.log('[Tunnel] Falling back to Cloudflare tunnel...');
