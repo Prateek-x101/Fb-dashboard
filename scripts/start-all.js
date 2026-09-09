@@ -45,7 +45,7 @@ function handleTunnelOutput(data) {
     const text = data.toString();
     process.stdout.write(text);
 
-    const match = text.match(/https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/);
+    const match = text.match(/https:\/\/[a-zA-Z0-9-.]+\.(?:trycloudflare\.com|ngrok-free\.app|ngrok\.app|loca\.lt)/);
     if (match && !browserOpened) {
         const tunnelUrl = match[0];
         // Wait 1.5s for DNS/routes to settle then open
