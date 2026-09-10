@@ -4,80 +4,196 @@ const path = require('path');
 const fetch = require('node-fetch');
 const { v4: uuidv4 } = require('uuid');
 
-/**
- * Cleanly download or resolve an image to a real OS file on disk
- */
+// ─── Helper: Download/resolve image to local temp file ───
 async function getLocalImageFile(input, uploadsDir) {
     if (typeof input === 'string') {
-        let cleanInput = input.trim();
-        if (cleanInput.startsWith('//')) cleanInput = 'https:' + cleanInput;
+        let url = input.trim();
+        if (url.startsWith('//')) url = 'https:' + url;
 
-        // Local upload path
-        if (cleanInput.startsWith('/uploads/') || cleanInput.startsWith('uploads/')) {
-            const relPath = cleanInput.replace(/^\/?uploads\//, '');
+        // Already a local upload
+        if (url.startsWith('/uploads/') || url.startsWith('uploads/')) {
+            const relPath = url.replace(/^\/?uploads\//, '');
             const localFile = path.join(uploadsDir, relPath);
-            if (fs.existsSync(localFile)) {
-                return { localPath: localFile, isTemp: false };
-            }
+            if (fs.existsSync(localFile)) return { localPath: localFile, isTemp: false };
         }
 
-        if (fs.existsSync(cleanInput) && !cleanInput.startsWith('http')) {
-            return { localPath: cleanInput, isTemp: false };
+        // Existing local file
+        if (fs.existsSync(url) && !url.startsWith('http')) {
+            return { localPath: url, isTemp: false };
         }
 
-        // Remote URL (Shopify CDN, etc.)
-        if (cleanInput.startsWith('http://') || cleanInput.startsWith('https://')) {
-            const resp = await fetch(cleanInput, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
-                },
+        // Remote URL → download to temp file
+        if (url.startsWith('http://') || url.startsWith('https://')) {
+            const resp = await fetch(url, {
+                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36' },
                 timeout: 25000
             });
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 
-            const arrayBuffer = await resp.arrayBuffer();
-            const buffer = Buffer.from(arrayBuffer);
+            const buffer = Buffer.from(await resp.arrayBuffer());
             const contentType = resp.headers.get('content-type') || '';
             let ext = 'jpg';
-            if (contentType.includes('png') || cleanInput.includes('.png')) ext = 'png';
-            else if (contentType.includes('webp') || cleanInput.includes('.webp')) ext = 'webp';
-            else if (contentType.includes('gif') || cleanInput.includes('.gif')) ext = 'gif';
+            if (contentType.includes('png') || url.includes('.png')) ext = 'png';
+            else if (contentType.includes('webp') || url.includes('.webp')) ext = 'webp';
+            else if (contentType.includes('gif') || url.includes('.gif')) ext = 'gif';
 
-            const tempName = `temp-${Date.now()}-${uuidv4().substring(0, 8)}.${ext}`;
-            const tempFile = path.join(uploadsDir, tempName);
+            const tempFile = path.join(uploadsDir, `temp-${Date.now()}-${uuidv4().substring(0, 8)}.${ext}`);
             fs.writeFileSync(tempFile, buffer);
-            return { localPath: tempFile, isTemp: true, ext };
+            return { localPath: tempFile, isTemp: true };
         }
     }
-
     throw new Error('Unsupported image input');
 }
 
-/**
- * Parallel Google Translate Engine using the Proven Real-OS-File Upload Pipeline:
- * - 3 Dedicated Parallel Tabs (Optimal speed and rock-solid Google stability)
- * - Real image file upload via uploadFile(localPath) on input[accept*="image"]
- * - 2s Warm-up delay + 2s Canvas settle delay
- * - Direct in-memory RAM extraction on download click
- * - 100% Tested and Verified
- */
-async function translateMultipleImages(imageList, sourceLang = 'auto') {
-    if (!Array.isArray(imageList) || imageList.length === 0) {
-        return [];
+// ─── Helper: Wait ms ───
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// ─── Helper: Click "Clear image" button and wait for fresh upload input ───
+async function clearAndReset(page, sourceLang) {
+    // Try exact "Clear image" button first
+    const cleared = await page.evaluate(() => {
+        const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
+        const clearBtn = btns.find(b => {
+            const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+            return aria === 'clear image' || aria === 'clear source image';
+        });
+        if (clearBtn) { clearBtn.click(); return true; }
+        return false;
+    }).catch(() => false);
+
+    if (cleared) {
+        try {
+            await page.waitForSelector('input[accept*="image"]', { timeout: 3000 });
+            return;
+        } catch {}
     }
+
+    // Fallback: fast navigation reset
+    await page.goto(`https://translate.google.com/?hl=en&sl=${sourceLang}&tl=en&op=images`, {
+        waitUntil: 'domcontentloaded',
+        timeout: 15000
+    });
+    await page.waitForSelector('input[accept*="image"]', { timeout: 10000 });
+}
+
+// ─── Helper: Upload image and poll for translation result ───
+async function uploadAndWaitForTranslation(page, localPath, tabId, imageIdx, totalImages) {
+    // Upload file on the image input
+    const input = await page.waitForSelector('input[accept*="image"]', { timeout: 5000 });
+    await sleep(200);
+    await input.uploadFile(localPath);
+
+    // Dispatch events to trigger Google Translate processing
+    await page.evaluate(() => {
+        const fileInput = document.querySelector('input[accept*="image"]');
+        if (fileInput) {
+            fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+            fileInput.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+    }).catch(() => {});
+
+    console.log(`[Tab ${tabId}] Uploaded image [${imageIdx + 1}/${totalImages}], waiting for translation...`);
+
+    // Poll for result: max 50 polls × 500ms = 25 seconds
+    for (let poll = 0; poll < 50; poll++) {
+        await sleep(500);
+
+        // Check for error toast (after poll 1 to give time for processing)
+        if (poll >= 1) {
+            const hasError = await page.evaluate(() => {
+                const text = (document.body.innerText || '').toLowerCase();
+                return text.includes("can't detect text") ||
+                       text.includes("cant detect text") ||
+                       text.includes("can't translate") ||
+                       text.includes("cant translate") ||
+                       text.includes("could not detect text") ||
+                       text.includes("language may not be supported") ||
+                       text.includes("couldn't translate") ||
+                       text.includes("text kann nicht erkannt werden");
+            }).catch(() => false);
+
+            if (hasError) {
+                console.log(`[Tab ${tabId}] Image [${imageIdx + 1}] Can't detect text — preserving original.`);
+                return { status: 'no_text' };
+            }
+        }
+
+        // Check for translated result (after poll 2 to let canvas render)
+        if (poll >= 2) {
+            const result = await page.evaluate(() => {
+                const bodyText = document.body.innerText || '';
+                const isTranslating = bodyText.includes('Translating') || bodyText.includes('translating');
+                if (isTranslating) return null;
+
+                // Check download button
+                const hasDl = Array.from(document.querySelectorAll('button, a, [role="button"]')).some(b => {
+                    const a = (b.getAttribute('aria-label') || '').toLowerCase();
+                    const t = (b.innerText || '').toLowerCase();
+                    const tip = (b.getAttribute('data-tooltip') || '').toLowerCase();
+                    return a.includes('download') || t.includes('download') || tip.includes('download') ||
+                           a.includes('herunterladen') || t.includes('herunterladen');
+                });
+
+                // Check rendered blob image
+                const hasBlob = Array.from(document.querySelectorAll('img[src^="blob:"]'))
+                    .some(img => img.naturalWidth > 50 && img.naturalHeight > 50);
+
+                return (hasDl || hasBlob) ? { ready: true } : null;
+            }).catch(() => null);
+
+            if (result) {
+                return { status: 'translated' };
+            }
+        }
+    }
+
+    console.log(`[Tab ${tabId}] Image [${imageIdx + 1}] Polling timed out (25s).`);
+    return { status: 'timeout' };
+}
+
+// ─── Helper: Extract translated image blob from page ───
+async function extractTranslatedBlob(page) {
+    await sleep(600); // Let canvas fully settle
+
+    const base64Data = await page.evaluate(async () => {
+        const imgs = Array.from(document.querySelectorAll('img[src^="blob:"]'));
+        const target = imgs.find(img => img.naturalWidth > 50 && img.naturalHeight > 50) || imgs[imgs.length - 1];
+        if (!target) return null;
+
+        try {
+            const resp = await fetch(target.src);
+            const blob = await resp.blob();
+            return new Promise(resolve => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result);
+                reader.onerror = () => resolve(null);
+                reader.readAsDataURL(blob);
+            });
+        } catch {
+            return null;
+        }
+    });
+
+    return base64Data;
+}
+
+// ─── Main: Parallel 5-Tab Google Translate Image Translator ───
+async function translateMultipleImages(imageList, sourceLang = 'auto') {
+    if (!Array.isArray(imageList) || imageList.length === 0) return [];
 
     const uploadsDir = path.join(__dirname, '..', 'uploads');
     if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
-    const isLinux = process.platform === 'linux';
-    const chromePath = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-
-    // Dedicated High-Speed Parallel Tabs Pipeline with Instant Clear-Button Reuse (Up to 5 parallel tabs)
     const NUM_WORKERS = Math.min(5, imageList.length);
-    console.log(`[GoogleTranslate] Launching ${NUM_WORKERS} parallel tabs for ${imageList.length} images...`);
+    const totalImages = imageList.length;
+    console.log(`[GoogleTranslate] Launching ${NUM_WORKERS} parallel tabs for ${totalImages} images...`);
 
-    let browser = null;
+    // ── Launch Chrome ──
+    let browser;
     try {
+        const isLinux = process.platform === 'linux';
+        const chromePath = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+
         if (isLinux) {
             const chromium = require('@sparticuz/chromium');
             browser = await puppeteer.launch({
@@ -90,7 +206,7 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
         } else {
             browser = await puppeteer.launch({
                 executablePath: fs.existsSync(chromePath) ? chromePath : undefined,
-                headless: false, // Visible real Chrome
+                headless: false,
                 defaultViewport: null,
                 ignoreDefaultArgs: ['--enable-automation'],
                 args: [
@@ -108,263 +224,115 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                 ]
             });
         }
-    } catch (launchErr) {
-        console.error('[GoogleTranslate] Failed to launch Chrome:', launchErr.message);
+    } catch (err) {
+        console.error('[GoogleTranslate] Failed to launch Chrome:', err.message);
         return imageList.map(img => ({ original: img, translated: false }));
     }
 
-    const queue = imageList.map((img, idx) => ({ img, originalIdx: idx }));
-    const allResults = new Array(imageList.length);
-
-    // Initialize worker tabs
-    const initialPages = await browser.pages();
+    // ── Create worker tabs ──
+    const existingPages = await browser.pages();
     const workers = [];
     for (let i = 0; i < NUM_WORKERS; i++) {
-        const page = i < initialPages.length ? initialPages[i] : await browser.newPage();
-        workers.push({ id: i + 1, page, isFirstImage: true });
+        const page = i < existingPages.length ? existingPages[i] : await browser.newPage();
+        workers.push({ id: i + 1, page });
+    }
+    // Close surplus tabs
+    for (let i = NUM_WORKERS; i < existingPages.length; i++) {
+        existingPages[i].close().catch(() => {});
     }
 
-    // Close any surplus tabs
-    for (let i = NUM_WORKERS; i < initialPages.length; i++) {
-        try { await initialPages[i].close(); } catch (e) {}
-    }
-
-    // Parallel warm-up of all worker tabs
+    // ── Warm up all tabs in parallel ──
     console.log(`[GoogleTranslate] Warming up ${NUM_WORKERS} worker tabs in parallel...`);
-    const initStart = Date.now();
-    await Promise.all(workers.map(async (worker) => {
+    const warmStart = Date.now();
+    await Promise.all(workers.map(async (w) => {
         try {
-            await worker.page.bringToFront().catch(() => {});
-            await worker.page.goto(`https://translate.google.com/?hl=en&sl=${sourceLang}&tl=en&op=images`, {
+            await w.page.goto(`https://translate.google.com/?hl=en&sl=${sourceLang}&tl=en&op=images`, {
                 waitUntil: 'domcontentloaded',
                 timeout: 30000
             });
-            await worker.page.waitForSelector('input[accept*="image"]', { timeout: 20000 });
-            await worker.page.mouse.click(10, 10).catch(() => {});
-            console.log(`[GoogleTranslate] Worker tab ${worker.id} warm and ready in Images mode.`);
-        } catch (warmErr) {
-            console.warn(`[GoogleTranslate] Worker tab ${worker.id} warm-up failed: ${warmErr.message}. Will retry on first use.`);
+            await w.page.waitForSelector('input[accept*="image"]', { timeout: 20000 });
+            console.log(`[GoogleTranslate] Worker tab ${w.id} warm and ready.`);
+        } catch (err) {
+            console.warn(`[GoogleTranslate] Worker tab ${w.id} warm-up failed: ${err.message}`);
         }
     }));
-    console.log(`[GoogleTranslate] All ${NUM_WORKERS} worker tabs ready in ${((Date.now() - initStart) / 1000).toFixed(1)}s.`);
+    console.log(`[GoogleTranslate] All ${NUM_WORKERS} worker tabs ready in ${((Date.now() - warmStart) / 1000).toFixed(1)}s.`);
 
-    async function processQueue(worker) {
+    // ── Shared queue & results ──
+    const queue = imageList.map((img, idx) => ({ img, idx }));
+    const results = new Array(totalImages);
+
+    // ── Worker loop ──
+    async function workerLoop(worker) {
         while (queue.length > 0) {
             const item = queue.shift();
             if (!item) break;
 
-            const { img: imgInput, originalIdx } = item;
+            const { img: imgInput, idx } = item;
             const imgStart = Date.now();
-            console.log(`[Tab ${worker.id}] Processing image [${originalIdx + 1}/${imageList.length}]: ${imgInput}`);
+            console.log(`[Tab ${worker.id}] Processing image [${idx + 1}/${totalImages}]: ${imgInput}`);
 
             let localInfo = null;
             try {
+                // Download image to local file
                 localInfo = await getLocalImageFile(imgInput, uploadsDir);
                 const ext = (path.extname(localInfo.localPath) || '').toLowerCase();
 
-                if (ext === '.gif' || ext === '.svg' || ext === '.mp4') {
-                    console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] is ${ext} - preserving original.`);
-                    allResults[originalIdx] = { original: imgInput, translated: false };
+                // Skip non-translatable formats
+                if (['.gif', '.svg', '.mp4'].includes(ext)) {
+                    console.log(`[Tab ${worker.id}] Image [${idx + 1}] is ${ext} — skipping.`);
+                    results[idx] = { original: imgInput, translated: false };
                     continue;
                 }
 
-                let hasTranslation = false;
-                for (let attempt = 1; attempt <= 2; attempt++) {
-                    if (attempt > 1) {
-                        console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] Retrying upload (attempt ${attempt}/2) after tab reset...`);
-                        await new Promise(r => setTimeout(r, 1000));
-                    }
+                // Upload & wait for translation
+                const pollResult = await uploadAndWaitForTranslation(worker.page, localInfo.localPath, worker.id, idx, totalImages);
 
-                    await worker.page.bringToFront().catch(() => {});
-
-                    if (!worker.isFirstImage) {
-                        // Dismiss any error toast/dialog ("Got it") if visible
-                        await worker.page.evaluate(() => {
-                            const btns = Array.from(document.querySelectorAll('button'));
-                            const gotIt = btns.find(b => (b.innerText || '').trim().toLowerCase() === 'got it');
-                            if (gotIt) gotIt.click();
-                        }).catch(() => {});
-
-                        // Clear previous image instantly without page reload
-                        const cleared = await worker.page.evaluate(() => {
-                            const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
-                            const clearBtn = btns.find(b => {
-                                const a = (b.getAttribute('aria-label') || '').toLowerCase();
-                                const t = (b.innerText || '').toLowerCase();
-                                return a.includes('clear image') || t.includes('clear image') || a === 'clear image';
-                            });
-                            if (clearBtn) {
-                                clearBtn.click();
-                                return true;
-                            }
-                            return false;
-                        });
-
-                        if (!cleared) {
-                            await worker.page.evaluate(() => {
-                                const btns = Array.from(document.querySelectorAll('button'));
-                                const b = btns.find(x => (x.innerText || '').trim() === 'Images' || (x.getAttribute('aria-label') || '').includes('Image translation'));
-                                if (b) b.click();
-                            }).catch(() => {});
-                        }
-                        await new Promise(r => setTimeout(r, 500));
-                        try {
-                            await worker.page.waitForSelector('input[accept*="image"]', { timeout: 3000 });
-                        } catch {
-                            // Fast navigation fallback if clear didn't restore the input
-                            console.log(`[Tab ${worker.id}] Clear didn't restore input. Fast-navigating to reset...`);
-                            await worker.page.goto(`https://translate.google.com/?hl=en&sl=${sourceLang}&tl=en&op=images`, {
-                                waitUntil: 'domcontentloaded',
-                                timeout: 10000
-                            });
-                            await worker.page.waitForSelector('input[accept*="image"]', { timeout: 8000 });
-                        }
-                    }
-                    worker.isFirstImage = false;
-
-                    // Step 3: Upload strictly on input[accept*="image"]
-                    const input = await worker.page.waitForSelector('input[accept*="image"]', { timeout: 5000 });
-                    await new Promise(r => setTimeout(r, 300));
-                    await input.uploadFile(localInfo.localPath);
-                    await worker.page.evaluate(() => {
-                        const fileInput = document.querySelector('input[accept*="image"]');
-                        if (fileInput) {
-                            fileInput.dispatchEvent(new Event('change', { bubbles: true }));
-                            fileInput.dispatchEvent(new Event('input', { bubbles: true }));
-                        }
-                    }).catch(() => {});
-                    console.log(`[Tab ${worker.id}] Uploaded image [${originalIdx + 1}] (attempt ${attempt}/2), waiting for translation...`);
-
-                    // Step 4: Wait for translation
-                    let errorDetected = false;
-                    for (let poll = 0; poll < 50; poll++) {
-                        await new Promise(r => setTimeout(r, 500));
-
-                        // Cycle tab focus so Chromium compositor paints WebGL canvas
-                        if (poll % 2 === 0) {
-                            await worker.page.bringToFront().catch(() => {});
-                        }
-
-                        const status = await worker.page.evaluate(() => {
-                            const bodyText = document.body.innerText || '';
-                            const isTranslating = bodyText.includes('Translating') || bodyText.includes('translating');
-                            
-                            // Check download button across aria-labels, text, tooltips, and icons
-                            const dlBtn = Array.from(document.querySelectorAll('button, a, [role="button"]')).find(b => {
-                                const a = (b.getAttribute('aria-label') || '').toLowerCase();
-                                const t = (b.innerText || '').toLowerCase();
-                                const tip = (b.getAttribute('data-tooltip') || '').toLowerCase();
-                                return a.includes('download') || t.includes('download') || tip.includes('download') ||
-                                       a.includes('herunterladen') || t.includes('herunterladen') ||
-                                       b.querySelector('[data-icon*="download"], i.material-icons');
-                            });
-
-                            // Also directly check if translated blob image is rendered
-                            const blobImgs = Array.from(document.querySelectorAll('img[src^="blob:"]'));
-                            const renderedBlob = blobImgs.find(img => img.naturalWidth > 50 && img.naturalHeight > 50);
-
-                            return { 
-                                isTranslating, 
-                                hasDl: !!dlBtn,
-                                hasBlob: !!renderedBlob
-                            };
-                        });
-
-                        if (!status.isTranslating && (status.hasDl || status.hasBlob) && poll >= 2) {
-                            hasTranslation = true;
-                            console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] Translation ready (hasDl: ${status.hasDl}, hasBlob: ${status.hasBlob}) on poll ${poll}`);
-                            break;
-                        }
-
-                        if (poll >= 1) {
-                            const errCheck = await worker.page.evaluate(() => {
-                                const text = (document.body.innerText || '').toLowerCase();
-                                return text.includes("can't detect text") ||
-                                       text.includes("cant detect text") ||
-                                       text.includes("can't translate") ||
-                                       text.includes("cant translate") ||
-                                       text.includes("could not detect text") ||
-                                       text.includes("language may not be supported") ||
-                                       text.includes("couldn't translate") ||
-                                       text.includes("text kann nicht erkannt werden");
-                            });
-                            if (errCheck) {
-                                errorDetected = true;
-                                console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] Detected error toast: "Can't detect text / translate".`);
-                                break;
-                            }
-                        }
-
-                        if (poll === 49 && !hasTranslation) {
-                            console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] Polling timed out (no download button or blob).`);
-                        }
-                    }
-
-                    if (hasTranslation) {
-                        break; // Translation succeeded!
-                    }
-
-                    if (errorDetected) {
-                        if (attempt === 1) {
-                            console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] Translation error on attempt 1. Will clear and re-upload after 1s delay...`);
-                        } else {
-                            console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] Translation error persisted on retry (attempt 2). Preserving original image.`);
-                            break;
-                        }
-                    } else {
-                        break;
-                    }
-                }
-
-                if (hasTranslation) {
-                    await new Promise(r => setTimeout(r, 600));
-
-                    // Direct high-fidelity extraction from Google Translate's rendered blob in memory
-                    const base64Data = await worker.page.evaluate(async () => {
-                        const imgs = Array.from(document.querySelectorAll('img[src^="blob:"]'));
-                        const visibleImg = imgs.find(img => img.naturalWidth > 50 && img.naturalHeight > 50) || imgs[imgs.length - 1];
-                        if (!visibleImg) return null;
-
-                        try {
-                            const resp = await fetch(visibleImg.src);
-                            const blob = await resp.blob();
-                            return new Promise((resolve) => {
-                                const reader = new FileReader();
-                                reader.onloadend = () => resolve(reader.result);
-                                reader.onerror = () => resolve(null);
-                                reader.readAsDataURL(blob);
-                            });
-                        } catch (e) {
-                            return null;
-                        }
-                    });
-
-                    const filename = `translated-${Date.now()}-${uuidv4().substring(0, 8)}.png`;
-                    const targetFile = path.join(uploadsDir, filename);
+                if (pollResult.status === 'translated') {
+                    // Extract the translated blob
+                    const base64Data = await extractTranslatedBlob(worker.page);
 
                     if (base64Data) {
+                        const filename = `translated-${Date.now()}-${uuidv4().substring(0, 8)}.png`;
+                        const targetFile = path.join(uploadsDir, filename);
                         const rawB64 = base64Data.replace(/^data:image\/\w+;base64,/, '');
                         fs.writeFileSync(targetFile, Buffer.from(rawB64, 'base64'));
 
                         const publicPath = `/uploads/${filename}`;
-                        console.log(`[Tab ${worker.id}] >> SUCCESS (RAM EXTRACTED): Image [${originalIdx + 1}] translated in ${((Date.now() - imgStart) / 1000).toFixed(1)}s -> ${publicPath} (${fs.statSync(targetFile).size} bytes)`);
+                        const elapsed = ((Date.now() - imgStart) / 1000).toFixed(1);
+                        const fileSize = fs.statSync(targetFile).size;
+                        console.log(`[Tab ${worker.id}] ✅ Image [${idx + 1}] translated in ${elapsed}s → ${publicPath} (${fileSize} bytes)`);
 
-                        allResults[originalIdx] = {
-                            original: imgInput,
-                            translated: true,
-                            translatedUrl: publicPath
-                        };
+                        results[idx] = { original: imgInput, translated: true, translatedUrl: publicPath };
                     } else {
-                        console.warn(`[Tab ${worker.id}] Could not extract blob for image [${originalIdx + 1}]`);
-                        allResults[originalIdx] = { original: imgInput, translated: false };
+                        console.warn(`[Tab ${worker.id}] Image [${idx + 1}] blob extraction failed — preserving original.`);
+                        results[idx] = { original: imgInput, translated: false };
                     }
                 } else {
-                    allResults[originalIdx] = { original: imgInput, translated: false };
+                    // no_text or timeout — preserve original
+                    results[idx] = { original: imgInput, translated: false };
                 }
+
+                // Clear image for next upload
+                await clearAndReset(worker.page, sourceLang);
+
+                // 1.5 second cooldown before next image
+                await sleep(1500);
+
             } catch (err) {
-                console.error(`[Tab ${worker.id}] Error on image [${originalIdx + 1}]:`, err.stack || err.message);
-                allResults[originalIdx] = { original: imgInput, translated: false };
+                console.error(`[Tab ${worker.id}] Error on image [${idx + 1}]:`, err.message);
+                results[idx] = { original: imgInput, translated: false };
+
+                // Try to recover the tab for next image
+                try {
+                    await worker.page.goto(`https://translate.google.com/?hl=en&sl=${sourceLang}&tl=en&op=images`, {
+                        waitUntil: 'domcontentloaded',
+                        timeout: 15000
+                    });
+                    await worker.page.waitForSelector('input[accept*="image"]', { timeout: 10000 });
+                } catch {}
             } finally {
+                // Clean up temp files
                 if (localInfo && localInfo.isTemp && fs.existsSync(localInfo.localPath)) {
                     try { fs.unlinkSync(localInfo.localPath); } catch {}
                 }
@@ -372,18 +340,17 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
         }
     }
 
-    const startTime = Date.now();
-    await Promise.all(workers.map(w => processQueue(w)));
+    // ── Run all workers in parallel ──
+    const processStart = Date.now();
+    await Promise.all(workers.map(w => workerLoop(w)));
 
-    try {
-        await browser.close();
-    } catch {}
+    // ── Cleanup ──
+    try { await browser.close(); } catch {}
 
-    const totalSeconds = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.log(`[GoogleTranslate] All ${imageList.length} images finished in ${totalSeconds}s across ${NUM_WORKERS} parallel tabs!`);
-    return allResults.filter(Boolean);
+    const totalTime = ((Date.now() - processStart) / 1000).toFixed(1);
+    console.log(`[GoogleTranslate] All ${totalImages} images finished in ${totalTime}s across ${NUM_WORKERS} parallel tabs!`);
+
+    return results.filter(Boolean);
 }
 
-module.exports = {
-    translateMultipleImages
-};
+module.exports = { translateMultipleImages };
