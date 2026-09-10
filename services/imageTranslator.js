@@ -71,9 +71,10 @@ async function clearAndReset(page, sourceLang) {
     }
 
     // Fallback: fast navigation reset
+    await page.bringToFront().catch(() => {});
     await page.goto(`https://translate.google.com/?hl=en&sl=${sourceLang}&tl=en&op=images`, {
-        waitUntil: 'domcontentloaded',
-        timeout: 15000
+        waitUntil: 'networkidle2',
+        timeout: 20000
     });
     await page.waitForSelector('input[accept*="image"]', { timeout: 10000 });
 }
@@ -90,8 +91,9 @@ async function uploadAndWaitForTranslation(page, localPath, tabId, imageIdx, tot
     } catch {
         // Input missing — reload page and retry
         console.log(`[Tab ${tabId}] Upload input missing, reloading page...`);
+        await page.bringToFront();
         await page.goto(`https://translate.google.com/?hl=en&sl=auto&tl=en&op=images`, {
-            waitUntil: 'domcontentloaded', timeout: 15000
+            waitUntil: 'networkidle2', timeout: 20000
         });
         input = await page.waitForSelector('input[accept*="image"]', { timeout: 10000 });
     }
@@ -271,27 +273,41 @@ async function translateMultipleImages(imageList, sourceLang = 'auto', options =
         existingPages[i].close().catch(() => {});
     }
 
-    // ── Warm up all tabs in parallel ──
-    console.log(`[GoogleTranslate] Warming up ${NUM_WORKERS} worker tabs in parallel...`);
+    // ── Warm up tabs sequentially with bringToFront (required for WebGL rendering) ──
+    console.log(`[GoogleTranslate] Warming up ${NUM_WORKERS} worker tabs sequentially (bringToFront required)...`);
     const warmStart = Date.now();
-    await Promise.all(workers.map(async (w) => {
-        try {
-            await w.page.goto(`https://translate.google.com/?hl=en&sl=${sourceLang}&tl=en&op=images`, {
-                waitUntil: 'domcontentloaded',
-                timeout: 30000
-            });
-            await w.page.waitForSelector('input[accept*="image"]', { timeout: 20000 });
-            console.log(`[GoogleTranslate] Worker tab ${w.id} warm and ready.`);
-            if (jobId) {
-                progressTracker.log(jobId, `⚡ Worker tab ${w.id}/${NUM_WORKERS} warm & ready on Google Translate`, {
-                    step: 'translating_warmup',
-                    progress: 32 + (w.id / NUM_WORKERS) * 6
+    for (const w of workers) {
+        const MAX_WARMUP_RETRIES = 3;
+        let warmed = false;
+        for (let attempt = 1; attempt <= MAX_WARMUP_RETRIES; attempt++) {
+            try {
+                await w.page.bringToFront();
+                await w.page.goto(`https://translate.google.com/?hl=en&sl=${sourceLang}&tl=en&op=images`, {
+                    waitUntil: 'networkidle2',
+                    timeout: 30000
                 });
+                await w.page.waitForSelector('input[accept*="image"]', { timeout: 15000 });
+                console.log(`[GoogleTranslate] Worker tab ${w.id} warm and ready.`);
+                if (jobId) {
+                    progressTracker.log(jobId, `⚡ Worker tab ${w.id}/${NUM_WORKERS} warm & ready on Google Translate`, {
+                        step: 'translating_warmup',
+                        progress: 32 + (w.id / NUM_WORKERS) * 6
+                    });
+                }
+                warmed = true;
+                break;
+            } catch (err) {
+                console.warn(`[GoogleTranslate] Worker tab ${w.id} warm-up attempt ${attempt}/${MAX_WARMUP_RETRIES} failed: ${err.message}`);
+                if (attempt < MAX_WARMUP_RETRIES) {
+                    await sleep(2000); // Wait before retry
+                }
             }
-        } catch (err) {
-            console.warn(`[GoogleTranslate] Worker tab ${w.id} warm-up failed: ${err.message}`);
         }
-    }));
+        if (!warmed) {
+            console.warn(`[GoogleTranslate] Worker tab ${w.id} failed all ${MAX_WARMUP_RETRIES} warm-up attempts. Will retry on first image.`);
+            w.needsRecovery = true;
+        }
+    }
     const warmElapsed = ((Date.now() - warmStart) / 1000).toFixed(1);
     console.log(`[GoogleTranslate] All ${NUM_WORKERS} worker tabs ready in ${warmElapsed}s.`);
 
@@ -323,6 +339,25 @@ async function translateMultipleImages(imageList, sourceLang = 'auto', options =
 
     // ── Worker loop ──
     async function workerLoop(worker) {
+        // Recover tab if warm-up failed
+        if (worker.needsRecovery) {
+            try {
+                await worker.page.bringToFront();
+                await worker.page.goto(`https://translate.google.com/?hl=en&sl=${sourceLang}&tl=en&op=images`, {
+                    waitUntil: 'networkidle2',
+                    timeout: 30000
+                });
+                await worker.page.waitForSelector('input[accept*="image"]', { timeout: 15000 });
+                console.log(`[GoogleTranslate] Worker tab ${worker.id} recovered successfully.`);
+                worker.needsRecovery = false;
+            } catch (err) {
+                console.error(`[GoogleTranslate] Worker tab ${worker.id} recovery failed: ${err.message}. Skipping this worker.`);
+                // Put all remaining items from this worker back to queue... no, just bail.
+                // Other workers will pick up remaining items from the shared queue.
+                return;
+            }
+        }
+
         while (queue.length > 0) {
             const item = queue.shift();
             if (!item) break;
@@ -453,9 +488,10 @@ async function translateMultipleImages(imageList, sourceLang = 'auto', options =
 
                 // Try to recover the tab for next image
                 try {
+                    await worker.page.bringToFront();
                     await worker.page.goto(`https://translate.google.com/?hl=en&sl=${sourceLang}&tl=en&op=images`, {
-                        waitUntil: 'domcontentloaded',
-                        timeout: 15000
+                        waitUntil: 'networkidle2',
+                        timeout: 20000
                     });
                     await worker.page.waitForSelector('input[accept*="image"]', { timeout: 10000 });
                 } catch {}
