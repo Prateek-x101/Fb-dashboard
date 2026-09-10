@@ -78,6 +78,9 @@ async function clearAndReset(page, sourceLang) {
 
 // ─── Helper: Upload image and poll for translation result ───
 async function uploadAndWaitForTranslation(page, localPath, tabId, imageIdx, totalImages) {
+    // Bring tab to front for WebGL canvas rendering
+    await page.bringToFront().catch(() => {});
+
     // Upload file on the image input
     const input = await page.waitForSelector('input[accept*="image"]', { timeout: 5000 });
     await sleep(200);
@@ -97,6 +100,11 @@ async function uploadAndWaitForTranslation(page, localPath, tabId, imageIdx, tot
     // Poll for result: max 50 polls × 500ms = 25 seconds
     for (let poll = 0; poll < 50; poll++) {
         await sleep(500);
+
+        // Cycle tab focus every 2 polls so Chromium compositor paints WebGL canvas
+        if (poll % 2 === 0) {
+            await page.bringToFront().catch(() => {});
+        }
 
         // Check for error toast (after poll 1 to give time for processing)
         if (poll >= 1) {
