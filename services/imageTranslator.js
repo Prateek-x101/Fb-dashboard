@@ -133,24 +133,18 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
     console.log(`[GoogleTranslate] Warming up ${NUM_WORKERS} worker tabs in parallel...`);
     const initStart = Date.now();
     await Promise.all(workers.map(async (worker) => {
-        await worker.page.bringToFront().catch(() => {});
-        await worker.page.goto(`https://translate.google.com/?hl=en&sl=${sourceLang}&tl=en`, {
-            waitUntil: 'networkidle2',
-            timeout: 35000
-        });
-
-        // Switch to Images mode
-        await worker.page.evaluate(() => {
-            const btns = Array.from(document.querySelectorAll('button'));
-            const b = btns.find(x => (x.innerText || '').trim() === 'Images' || (x.getAttribute('aria-label') || '').includes('Image translation'));
-            if (b) b.click();
-        });
-
-        await worker.page.waitForFunction(() => window.location.href.includes('op=images'), { timeout: 10000 }).catch(() => {});
-        await worker.page.waitForSelector('input[accept*="image"]', { timeout: 25000 });
-        await worker.page.mouse.click(10, 10).catch(() => {});
-        await new Promise(r => setTimeout(r, 1000));
-        console.log(`[GoogleTranslate] Worker tab ${worker.id} warm and ready in Images mode.`);
+        try {
+            await worker.page.bringToFront().catch(() => {});
+            await worker.page.goto(`https://translate.google.com/?hl=en&sl=${sourceLang}&tl=en&op=images`, {
+                waitUntil: 'domcontentloaded',
+                timeout: 30000
+            });
+            await worker.page.waitForSelector('input[accept*="image"]', { timeout: 20000 });
+            await worker.page.mouse.click(10, 10).catch(() => {});
+            console.log(`[GoogleTranslate] Worker tab ${worker.id} warm and ready in Images mode.`);
+        } catch (warmErr) {
+            console.warn(`[GoogleTranslate] Worker tab ${worker.id} warm-up failed: ${warmErr.message}. Will retry on first use.`);
+        }
     }));
     console.log(`[GoogleTranslate] All ${NUM_WORKERS} worker tabs ready in ${((Date.now() - initStart) / 1000).toFixed(1)}s.`);
 
