@@ -134,25 +134,68 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
     const initStart = Date.now();
     await Promise.all(workers.map(async (worker) => {
         await worker.page.bringToFront().catch(() => {});
-        await worker.page.goto(`https://translate.google.com/?hl=en&sl=${sourceLang}&tl=en`, {
-            waitUntil: 'networkidle2',
-            timeout: 35000
+        await worker.page.goto(`https://translate.google.com/?hl=en&sl=${sourceLang}&tl=en&op=images`, {
+            waitUntil: 'domcontentloaded',
+            timeout: 30000
         });
-
-        // Switch to Images mode
-        await worker.page.evaluate(() => {
-            const btns = Array.from(document.querySelectorAll('button'));
-            const b = btns.find(x => (x.innerText || '').trim() === 'Images' || (x.getAttribute('aria-label') || '').includes('Image translation'));
-            if (b) b.click();
-        });
-
-        await worker.page.waitForFunction(() => window.location.href.includes('op=images'), { timeout: 10000 }).catch(() => {});
-        await worker.page.waitForSelector('input[accept*="image"]', { timeout: 25000 });
+        await worker.page.waitForSelector('input[accept*="image"], input[type="file"]', { timeout: 20000 });
         await worker.page.mouse.click(10, 10).catch(() => {});
-        await new Promise(r => setTimeout(r, 1000));
         console.log(`[GoogleTranslate] Worker tab ${worker.id} warm and ready in Images mode.`);
     }));
     console.log(`[GoogleTranslate] All ${NUM_WORKERS} worker tabs ready in ${((Date.now() - initStart) / 1000).toFixed(1)}s.`);
+
+    async function ensureWorkerTabReady(worker) {
+        // 1. If file input is already in DOM and ready, return immediately (0ms)
+        const alreadyReady = await worker.page.evaluate(() => {
+            const input = document.querySelector('input[accept*="image"], input[type="file"]');
+            return !!input;
+        }).catch(() => false);
+
+        if (alreadyReady) {
+            return;
+        }
+
+        // 2. Dismiss any error toast/dialog ("Got it", "Dismiss", etc.)
+        await worker.page.evaluate(() => {
+            const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
+            const dismissBtn = btns.find(b => {
+                const t = (b.innerText || '').trim().toLowerCase();
+                return t === 'got it' || t === 'dismiss' || t === 'close' || t === 'ok';
+            });
+            if (dismissBtn) dismissBtn.click();
+        }).catch(() => {});
+
+        // 3. Click Clear button
+        const clickedClear = await worker.page.evaluate(() => {
+            const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
+            const clearBtn = btns.find(b => {
+                const a = (b.getAttribute('aria-label') || '').toLowerCase();
+                const t = (b.innerText || '').toLowerCase();
+                return a.includes('clear') || t.includes('clear') || a.includes('close') || a.includes('delete') || a.includes('remove');
+            });
+            if (clearBtn) {
+                clearBtn.click();
+                return true;
+            }
+            return false;
+        }).catch(() => false);
+
+        // 4. If clear button was clicked, wait up to 1.5s for input to appear
+        if (clickedClear) {
+            try {
+                await worker.page.waitForSelector('input[accept*="image"], input[type="file"]', { timeout: 1500 });
+                return;
+            } catch {}
+        }
+
+        // 5. Fast navigation fallback: guarantees fresh dropzone in ~1-2s without hanging 15s
+        console.log(`[Tab ${worker.id}] Clear button timed out/missing. Fast-navigating to reset dropzone...`);
+        await worker.page.goto(`https://translate.google.com/?hl=en&sl=${sourceLang}&tl=en&op=images`, {
+            waitUntil: 'domcontentloaded',
+            timeout: 10000
+        });
+        await worker.page.waitForSelector('input[accept*="image"], input[type="file"]', { timeout: 8000 });
+    }
 
     async function processQueue(worker) {
         while (queue.length > 0) {
@@ -175,188 +218,174 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                 }
 
                 let hasTranslation = false;
-                for (let attempt = 1; attempt <= 2; attempt++) {
-                    if (attempt > 1) {
-                        console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] Retrying upload (attempt ${attempt}/2) after 1s delay...`);
-                        await new Promise(r => setTimeout(r, 1000));
-                    }
+                for (let attempt = 1; attempt <= 2 && !hasTranslation; attempt++) {
+                    try {
+                        if (attempt > 1) {
+                            console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] Retrying upload (attempt ${attempt}/2) after tab reset...`);
+                            await new Promise(r => setTimeout(r, 500));
+                        }
 
-                    await worker.page.bringToFront().catch(() => {});
+                        await worker.page.bringToFront().catch(() => {});
 
-                    if (!worker.isFirstImage) {
-                        // Dismiss any error toast/dialog ("Got it") if visible
+                        // Ensure tab is clean and input is ready (0ms if already ready, ~1.5s if cleared, or fast-nav reset)
+                        await ensureWorkerTabReady(worker);
+
+                        // Upload strictly on input[accept*="image"]
+                        const input = await worker.page.waitForSelector('input[accept*="image"], input[type="file"]', { timeout: 8000 });
+                        await new Promise(r => setTimeout(r, 200));
+                        await input.uploadFile(localInfo.localPath);
                         await worker.page.evaluate(() => {
-                            const btns = Array.from(document.querySelectorAll('button'));
-                            const gotIt = btns.find(b => (b.innerText || '').trim().toLowerCase() === 'got it');
-                            if (gotIt) gotIt.click();
-                        }).catch(() => {});
-
-                        // Clear previous image instantly without page reload
-                        const cleared = await worker.page.evaluate(() => {
-                            const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
-                            const clearBtn = btns.find(b => {
-                                const a = (b.getAttribute('aria-label') || '').toLowerCase();
-                                const t = (b.innerText || '').toLowerCase();
-                                return a.includes('clear image') || t.includes('clear image') || a === 'clear image';
-                            });
-                            if (clearBtn) {
-                                clearBtn.click();
-                                return true;
+                            const fileInput = document.querySelector('input[accept*="image"], input[type="file"]');
+                            if (fileInput) {
+                                fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+                                fileInput.dispatchEvent(new Event('input', { bubbles: true }));
                             }
-                            return false;
-                        });
+                        }).catch(() => {});
+                        console.log(`[Tab ${worker.id}] Uploaded image [${originalIdx + 1}] (attempt ${attempt}/2), waiting for translation...`);
 
-                        if (!cleared) {
-                            await worker.page.evaluate(() => {
-                                const btns = Array.from(document.querySelectorAll('button'));
-                                const b = btns.find(x => (x.innerText || '').trim() === 'Images' || (x.getAttribute('aria-label') || '').includes('Image translation'));
-                                if (b) b.click();
-                            }).catch(() => {});
-                        }
-                        await new Promise(r => setTimeout(r, 500));
-                        await worker.page.waitForSelector('input[accept*="image"]', { timeout: 15000 });
-                    }
-                    worker.isFirstImage = false;
+                        // Wait for translation
+                        let errorDetected = false;
+                        for (let poll = 0; poll < 50; poll++) {
+                            await new Promise(r => setTimeout(r, 500));
 
-                    // Step 3: Upload strictly on input[accept*="image"]
-                    const input = await worker.page.waitForSelector('input[accept*="image"]', { timeout: 15000 });
-                    await new Promise(r => setTimeout(r, 300));
-                    await input.uploadFile(localInfo.localPath);
-                    await worker.page.evaluate(() => {
-                        const fileInput = document.querySelector('input[accept*="image"]');
-                        if (fileInput) {
-                            fileInput.dispatchEvent(new Event('change', { bubbles: true }));
-                            fileInput.dispatchEvent(new Event('input', { bubbles: true }));
-                        }
-                    }).catch(() => {});
-                    console.log(`[Tab ${worker.id}] Uploaded image [${originalIdx + 1}] (attempt ${attempt}/2), waiting for translation...`);
+                            // Cycle tab focus so Chromium compositor paints WebGL canvas
+                            if (poll % 2 === 0) {
+                                await worker.page.bringToFront().catch(() => {});
+                            }
 
-                    // Step 4: Wait for translation
-                    let errorDetected = false;
-                    for (let poll = 0; poll < 50; poll++) {
-                        await new Promise(r => setTimeout(r, 500));
+                            const status = await worker.page.evaluate(() => {
+                                const bodyText = document.body.innerText || '';
+                                const isTranslating = bodyText.includes('Translating') || bodyText.includes('translating');
+                                
+                                // Check download button across aria-labels, text, tooltips, and icons
+                                const dlBtn = Array.from(document.querySelectorAll('button, a, [role="button"]')).find(b => {
+                                    const a = (b.getAttribute('aria-label') || '').toLowerCase();
+                                    const t = (b.innerText || '').toLowerCase();
+                                    const tip = (b.getAttribute('data-tooltip') || '').toLowerCase();
+                                    return a.includes('download') || t.includes('download') || tip.includes('download') ||
+                                           a.includes('herunterladen') || t.includes('herunterladen') ||
+                                           b.querySelector('[data-icon*="download"], i.material-icons');
+                                });
 
-                        // Cycle tab focus so Chromium compositor paints WebGL canvas
-                        if (poll % 2 === 0) {
-                            await worker.page.bringToFront().catch(() => {});
-                        }
+                                // Also directly check if translated blob image is rendered
+                                const blobImgs = Array.from(document.querySelectorAll('img[src^="blob:"]'));
+                                const renderedBlob = blobImgs.find(img => img.naturalWidth > 50 && img.naturalHeight > 50);
 
-                        const status = await worker.page.evaluate(() => {
-                            const bodyText = document.body.innerText || '';
-                            const isTranslating = bodyText.includes('Translating') || bodyText.includes('translating');
-                            
-                            // Check download button across aria-labels, text, tooltips, and icons
-                            const dlBtn = Array.from(document.querySelectorAll('button, a, [role="button"]')).find(b => {
-                                const a = (b.getAttribute('aria-label') || '').toLowerCase();
-                                const t = (b.innerText || '').toLowerCase();
-                                const tip = (b.getAttribute('data-tooltip') || '').toLowerCase();
-                                return a.includes('download') || t.includes('download') || tip.includes('download') ||
-                                       a.includes('herunterladen') || t.includes('herunterladen') ||
-                                       b.querySelector('[data-icon*="download"], i.material-icons');
-                            });
+                                return { 
+                                    isTranslating, 
+                                    hasDl: !!dlBtn, 
+                                    hasBlob: !!renderedBlob 
+                                };
+                            }).catch(() => ({ isTranslating: true, hasDl: false, hasBlob: false }));
 
-                            // Also directly check if translated blob image is rendered
-                            const blobImgs = Array.from(document.querySelectorAll('img[src^="blob:"]'));
-                            const renderedBlob = blobImgs.find(img => img.naturalWidth > 50 && img.naturalHeight > 50);
-
-                            return { 
-                                isTranslating, 
-                                hasDl: !!dlBtn,
-                                hasBlob: !!renderedBlob
-                            };
-                        });
-
-                        if (!status.isTranslating && (status.hasDl || status.hasBlob) && poll >= 2) {
-                            hasTranslation = true;
-                            console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] Translation ready (hasDl: ${status.hasDl}, hasBlob: ${status.hasBlob}) on poll ${poll}`);
-                            break;
-                        }
-
-                        if (poll >= 1) {
-                            const errCheck = await worker.page.evaluate(() => {
-                                const text = (document.body.innerText || '').toLowerCase();
-                                return text.includes("can't detect text") ||
-                                       text.includes("cant detect text") ||
-                                       text.includes("can't translate") ||
-                                       text.includes("cant translate") ||
-                                       text.includes("could not detect text") ||
-                                       text.includes("language may not be supported") ||
-                                       text.includes("couldn't translate") ||
-                                       text.includes("text kann nicht erkannt werden");
-                            });
-                            if (errCheck) {
-                                errorDetected = true;
-                                console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] Detected error toast: "Can't detect text / translate".`);
+                            if (!status.isTranslating && (status.hasDl || status.hasBlob) && poll >= 2) {
+                                hasTranslation = true;
+                                console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] Translation ready (hasDl: ${status.hasDl}, hasBlob: ${status.hasBlob}) on poll ${poll}`);
                                 break;
                             }
+
+                            if (poll >= 1) {
+                                const errCheck = await worker.page.evaluate(() => {
+                                    const text = (document.body.innerText || '').toLowerCase();
+                                    return text.includes("can't detect text") ||
+                                           text.includes("cant detect text") ||
+                                           text.includes("can't translate") ||
+                                           text.includes("cant translate") ||
+                                           text.includes("could not detect text") ||
+                                           text.includes("language may not be supported") ||
+                                           text.includes("couldn't translate") ||
+                                           text.includes("text kann nicht erkannt werden");
+                                }).catch(() => false);
+
+                                if (errCheck) {
+                                    errorDetected = true;
+                                    console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] Detected error toast: "Can't detect text / translate".`);
+                                    break;
+                                }
+                            }
+
+                            if (poll === 49 && !hasTranslation) {
+                                console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] Polling timed out (no download button or blob).`);
+                            }
                         }
 
-                        if (poll === 49 && !hasTranslation) {
-                            console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] Polling timed out (no download button or blob).`);
+                        if (hasTranslation) {
+                            await new Promise(r => setTimeout(r, 600));
+
+                            // Direct high-fidelity extraction from Google Translate's rendered blob in memory
+                            const base64Data = await worker.page.evaluate(async () => {
+                                const imgs = Array.from(document.querySelectorAll('img[src^="blob:"]'));
+                                const visibleImg = imgs.find(img => img.naturalWidth > 50 && img.naturalHeight > 50) || imgs[imgs.length - 1];
+                                if (!visibleImg) return null;
+
+                                try {
+                                    const resp = await fetch(visibleImg.src);
+                                    const blob = await resp.blob();
+                                    return new Promise((resolve) => {
+                                        const reader = new FileReader();
+                                        reader.onloadend = () => resolve(reader.result);
+                                        reader.onerror = () => resolve(null);
+                                        reader.readAsDataURL(blob);
+                                    });
+                                } catch (e) {
+                                    return null;
+                                }
+                            });
+
+                            const filename = `translated-${Date.now()}-${uuidv4().substring(0, 8)}.png`;
+                            const targetFile = path.join(uploadsDir, filename);
+
+                            if (base64Data) {
+                                const rawB64 = base64Data.replace(/^data:image\/\w+;base64,/, '');
+                                fs.writeFileSync(targetFile, Buffer.from(rawB64, 'base64'));
+
+                                const publicPath = `/uploads/${filename}`;
+                                console.log(`[Tab ${worker.id}] >> SUCCESS (RAM EXTRACTED): Image [${originalIdx + 1}] translated in ${((Date.now() - imgStart) / 1000).toFixed(1)}s -> ${publicPath} (${fs.statSync(targetFile).size} bytes)`);
+
+                                allResults[originalIdx] = {
+                                    original: imgInput,
+                                    translated: true,
+                                    translatedUrl: publicPath
+                                };
+
+                                // Immediate proactive clear for the next queue item
+                                await worker.page.evaluate(() => {
+                                    const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
+                                    const clearBtn = btns.find(b => {
+                                        const a = (b.getAttribute('aria-label') || '').toLowerCase();
+                                        const t = (b.innerText || '').toLowerCase();
+                                        return a.includes('clear') || t.includes('clear');
+                                    });
+                                    if (clearBtn) clearBtn.click();
+                                }).catch(() => {});
+
+                                break; // Succeeded!
+                            } else {
+                                console.warn(`[Tab ${worker.id}] Could not extract blob for image [${originalIdx + 1}]`);
+                            }
                         }
-                    }
 
-                    if (hasTranslation) {
-                        break; // Translation succeeded!
-                    }
-
-                    if (errorDetected) {
-                        if (attempt === 1) {
-                            console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] Translation error on attempt 1. Will clear and re-upload after 1s delay...`);
-                        } else {
-                            console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] Translation error persisted on retry (attempt 2). Preserving original image.`);
+                        if (errorDetected) {
+                            console.log(`[Tab ${worker.id}] Image [${originalIdx + 1}] Translation error detected. Preserving original.`);
                             break;
                         }
-                    } else {
-                        break;
+
+                    } catch (attemptErr) {
+                        console.warn(`[Tab ${worker.id}] Attempt ${attempt}/2 failed on image [${originalIdx + 1}]: ${attemptErr.message}`);
+                        if (attempt < 2) {
+                            // Reset tab directly via navigation before attempt 2
+                            await worker.page.goto(`https://translate.google.com/?hl=en&sl=${sourceLang}&tl=en&op=images`, {
+                                waitUntil: 'domcontentloaded',
+                                timeout: 10000
+                            }).catch(() => {});
+                        }
                     }
                 }
 
-                if (hasTranslation) {
-                    await new Promise(r => setTimeout(r, 600));
-
-                    // Direct high-fidelity extraction from Google Translate's rendered blob in memory
-                    const base64Data = await worker.page.evaluate(async () => {
-                        const imgs = Array.from(document.querySelectorAll('img[src^="blob:"]'));
-                        const visibleImg = imgs.find(img => img.naturalWidth > 50 && img.naturalHeight > 50) || imgs[imgs.length - 1];
-                        if (!visibleImg) return null;
-
-                        try {
-                            const resp = await fetch(visibleImg.src);
-                            const blob = await resp.blob();
-                            return new Promise((resolve) => {
-                                const reader = new FileReader();
-                                reader.onloadend = () => resolve(reader.result);
-                                reader.onerror = () => resolve(null);
-                                reader.readAsDataURL(blob);
-                            });
-                        } catch (e) {
-                            return null;
-                        }
-                    });
-
-                    const filename = `translated-${Date.now()}-${uuidv4().substring(0, 8)}.png`;
-                    const targetFile = path.join(uploadsDir, filename);
-
-                    if (base64Data) {
-                        const rawB64 = base64Data.replace(/^data:image\/\w+;base64,/, '');
-                        fs.writeFileSync(targetFile, Buffer.from(rawB64, 'base64'));
-
-                        const publicPath = `/uploads/${filename}`;
-                        console.log(`[Tab ${worker.id}] >> SUCCESS (RAM EXTRACTED): Image [${originalIdx + 1}] translated in ${((Date.now() - imgStart) / 1000).toFixed(1)}s -> ${publicPath} (${fs.statSync(targetFile).size} bytes)`);
-
-                        allResults[originalIdx] = {
-                            original: imgInput,
-                            translated: true,
-                            translatedUrl: publicPath
-                        };
-                    } else {
-                        console.warn(`[Tab ${worker.id}] Could not extract blob for image [${originalIdx + 1}]`);
-                        allResults[originalIdx] = { original: imgInput, translated: false };
-                    }
-                } else {
+                if (!hasTranslation && !allResults[originalIdx]) {
                     allResults[originalIdx] = { original: imgInput, translated: false };
                 }
+
             } catch (err) {
                 console.error(`[Tab ${worker.id}] Error on image [${originalIdx + 1}]:`, err.stack || err.message);
                 allResults[originalIdx] = { original: imgInput, translated: false };
