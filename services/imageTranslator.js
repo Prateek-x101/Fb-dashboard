@@ -81,8 +81,18 @@ async function uploadAndWaitForTranslation(page, localPath, tabId, imageIdx, tot
     // Bring tab to front for WebGL canvas rendering
     await page.bringToFront().catch(() => {});
 
-    // Upload file on the image input
-    const input = await page.waitForSelector('input[accept*="image"]', { timeout: 5000 });
+    // Upload file on the image input (with retry if input missing)
+    let input;
+    try {
+        input = await page.waitForSelector('input[accept*="image"]', { timeout: 5000 });
+    } catch {
+        // Input missing — reload page and retry
+        console.log(`[Tab ${tabId}] Upload input missing, reloading page...`);
+        await page.goto(`https://translate.google.com/?hl=en&sl=auto&tl=en&op=images`, {
+            waitUntil: 'domcontentloaded', timeout: 15000
+        });
+        input = await page.waitForSelector('input[accept*="image"]', { timeout: 10000 });
+    }
     await sleep(200);
     await input.uploadFile(localPath);
 

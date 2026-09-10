@@ -552,35 +552,39 @@ Return ONLY a valid JSON object in this exact format:
         if (!apiKey) return null;
 
         try {
+            const totalImages = descriptionImages.length + galleryImages.length;
+            // Use smaller thumbnails for large image sets to keep payload under Gemini limits
+            const thumbWidth = totalImages > 20 ? 200 : 400;
             console.log(`[Gemini Vision] Comparing ${descriptionImages.length} Description images and ${galleryImages.length} Gallery images for visual duplicates and text overlays...`);
 
-            // Fetch crisp 400px thumbnails for high-accuracy OCR & deduplication
-            const descParts = await Promise.all(descriptionImages.map(async (u, i) => {
-                try {
-                    let fetchUrl = u.trim();
-                    if (fetchUrl.startsWith('//')) fetchUrl = 'https:' + fetchUrl;
-                    if (fetchUrl.includes('cdn.shopify.com')) fetchUrl = fetchUrl.includes('?') ? `${fetchUrl}&width=400` : `${fetchUrl}?width=400`;
-                    const resp = await fetch(fetchUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 10000 });
-                    if (!resp.ok) return null;
-                    const buf = Buffer.from(await resp.arrayBuffer());
-                    return { type: 'desc', idx: i, url: u, inline_data: { mime_type: 'image/jpeg', data: buf.toString('base64') } };
-                } catch { return null; }
-            }));
+            // Batched parallel fetch helper — fetches images in groups of 10 to prevent connection overload
+            const FETCH_BATCH = 10;
+            async function batchFetchImages(images, type) {
+                const results = [];
+                for (let b = 0; b < images.length; b += FETCH_BATCH) {
+                    const batch = images.slice(b, b + FETCH_BATCH);
+                    const batchResults = await Promise.all(batch.map(async (u, batchIdx) => {
+                        const i = b + batchIdx;
+                        try {
+                            let fetchUrl = u.trim();
+                            if (fetchUrl.startsWith('//')) fetchUrl = 'https:' + fetchUrl;
+                            if (fetchUrl.includes('cdn.shopify.com')) fetchUrl = fetchUrl.includes('?') ? `${fetchUrl}&width=${thumbWidth}` : `${fetchUrl}?width=${thumbWidth}`;
+                            const resp = await fetch(fetchUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 10000 });
+                            if (!resp.ok) return null;
+                            const buf = Buffer.from(await resp.arrayBuffer());
+                            return { type, idx: i, url: u, inline_data: { mime_type: 'image/jpeg', data: buf.toString('base64') } };
+                        } catch { return null; }
+                    }));
+                    results.push(...batchResults);
+                }
+                return results.filter(Boolean);
+            }
 
-            const galParts = await Promise.all(galleryImages.map(async (u, i) => {
-                try {
-                    let fetchUrl = u.trim();
-                    if (fetchUrl.startsWith('//')) fetchUrl = 'https:' + fetchUrl;
-                    if (fetchUrl.includes('cdn.shopify.com')) fetchUrl = fetchUrl.includes('?') ? `${fetchUrl}&width=400` : `${fetchUrl}?width=400`;
-                    const resp = await fetch(fetchUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 10000 });
-                    if (!resp.ok) return null;
-                    const buf = Buffer.from(await resp.arrayBuffer());
-                    return { type: 'gal', idx: i, url: u, inline_data: { mime_type: 'image/jpeg', data: buf.toString('base64') } };
-                } catch { return null; }
-            }));
-
-            const validDesc = descParts.filter(Boolean);
-            const validGal = galParts.filter(Boolean);
+            // Fetch description and gallery images in parallel batches
+            const [validDesc, validGal] = await Promise.all([
+                batchFetchImages(descriptionImages, 'desc'),
+                batchFetchImages(galleryImages, 'gal')
+            ]);
 
             if (validDesc.length === 0 && validGal.length === 0) return null;
 
@@ -640,6 +644,7 @@ Return ONLY a valid JSON object in this exact format:
             }];
 
             const visionUrl = `${VISION_BASE_URL}/models/${normalizeModel(model)}:generateContent?key=${apiKey}`;
+            const apiTimeout = totalImages > 30 ? 120000 : 60000; // 2 min for large sets, 1 min for small
             const response = await fetch(visionUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -650,7 +655,7 @@ Return ONLY a valid JSON object in this exact format:
                         response_mime_type: 'application/json'
                     }
                 }),
-                timeout: 60000
+                timeout: apiTimeout
             });
             const data = await response.json();
             const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
