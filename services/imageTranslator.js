@@ -212,27 +212,11 @@ async function extractTranslatedBlob(page) {
     return base64Data;
 }
 
-// ─── Main: Parallel 5-Tab Google Translate Image Translator ───
-async function translateMultipleImages(imageList, sourceLang = 'auto', options = {}) {
-    if (!Array.isArray(imageList) || imageList.length === 0) return [];
+// ─── Pre-warm: Launch Chrome + warm up tabs (call in parallel with Gemini Vision) ───
+async function warmUpBrowser(numTabs = 5, sourceLang = 'auto') {
+    const startTime = Date.now();
+    console.log(`[GoogleTranslate] Pre-warming browser with ${numTabs} tabs (lang: ${sourceLang})...`);
 
-    const jobId = options.jobId || null;
-    const uploadsDir = path.join(__dirname, '..', 'uploads');
-    if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-
-    const NUM_WORKERS = Math.min(5, imageList.length);
-    const totalImages = imageList.length;
-    console.log(`[GoogleTranslate] Launching ${NUM_WORKERS} parallel tabs for ${totalImages} images...`);
-
-    if (jobId) {
-        progressTracker.log(jobId, `🌐 Launching ${NUM_WORKERS} parallel Chrome tabs for ${totalImages} images...`, {
-            step: 'translating_warmup',
-            progress: 32,
-            stats: { totalImages, completedImages: 0, translatedImages: 0, failedImages: 0, failedList: [] }
-        });
-    }
-
-    // ── Launch Chrome ──
     let browser;
     try {
         const isLinux = process.platform === 'linux';
@@ -269,28 +253,22 @@ async function translateMultipleImages(imageList, sourceLang = 'auto', options =
             });
         }
     } catch (err) {
-        console.error('[GoogleTranslate] Failed to launch Chrome:', err.message);
-        if (jobId) progressTracker.log(jobId, `❌ Chrome launch failed: ${err.message}`, { type: 'error' });
-        return imageList.map(img => ({ original: img, translated: false }));
+        console.error('[GoogleTranslate] Pre-warm: Failed to launch Chrome:', err.message);
+        return null;
     }
 
-    // ── Create worker tabs ──
+    // Create worker tabs
     const existingPages = await browser.pages();
     const workers = [];
-    for (let i = 0; i < NUM_WORKERS; i++) {
+    for (let i = 0; i < numTabs; i++) {
         const page = i < existingPages.length ? existingPages[i] : await browser.newPage();
         workers.push({ id: i + 1, page });
     }
-    // Close surplus tabs
-    for (let i = NUM_WORKERS; i < existingPages.length; i++) {
+    for (let i = numTabs; i < existingPages.length; i++) {
         existingPages[i].close().catch(() => {});
     }
 
-    // ── Warm up: parallel navigation + sequential bringToFront activation ──
-    console.log(`[GoogleTranslate] Warming up ${NUM_WORKERS} worker tabs (parallel load + sequential activate)...`);
-    const warmStart = Date.now();
-
-    // Step 1: Navigate ALL tabs in parallel (fast — no bringToFront needed for goto)
+    // Parallel navigation + sequential activation
     await Promise.all(workers.map(async (w) => {
         try {
             await w.page.goto(`https://translate.google.com/?hl=en&sl=${sourceLang}&tl=en&op=images`, {
@@ -299,48 +277,81 @@ async function translateMultipleImages(imageList, sourceLang = 'auto', options =
             });
             w.loaded = true;
         } catch (err) {
-            console.warn(`[GoogleTranslate] Worker tab ${w.id} navigation failed: ${err.message}`);
+            console.warn(`[GoogleTranslate] Pre-warm tab ${w.id} navigation failed: ${err.message}`);
             w.loaded = false;
         }
     }));
 
-    // Step 2: Quick sequential bringToFront cycle to activate each tab's rendering
     for (const w of workers) {
-        if (!w.loaded) {
-            w.needsRecovery = true;
-            continue;
-        }
+        if (!w.loaded) { w.needsRecovery = true; continue; }
         try {
             await w.page.bringToFront();
-            await sleep(300); // Brief pause to let renderer kick in
+            await sleep(300);
             await w.page.waitForSelector('input[accept*="image"]', { timeout: 8000 });
-            console.log(`[GoogleTranslate] Worker tab ${w.id} warm and ready.`);
-            if (jobId) {
-                progressTracker.log(jobId, `⚡ Worker tab ${w.id}/${NUM_WORKERS} warm & ready on Google Translate`, {
-                    step: 'translating_warmup',
-                    progress: 32 + (w.id / NUM_WORKERS) * 6
-                });
-            }
-        } catch (err) {
-            console.warn(`[GoogleTranslate] Worker tab ${w.id} activation failed: ${err.message}. Will retry.`);
-            // One retry with full reload
+            console.log(`[GoogleTranslate] Pre-warm tab ${w.id} ready.`);
+        } catch {
             try {
                 await w.page.bringToFront();
                 await w.page.goto(`https://translate.google.com/?hl=en&sl=${sourceLang}&tl=en&op=images`, {
-                    waitUntil: 'domcontentloaded',
-                    timeout: 20000
+                    waitUntil: 'domcontentloaded', timeout: 20000
                 });
                 await sleep(500);
                 await w.page.waitForSelector('input[accept*="image"]', { timeout: 8000 });
-                console.log(`[GoogleTranslate] Worker tab ${w.id} warm and ready (retry).`);
+                console.log(`[GoogleTranslate] Pre-warm tab ${w.id} ready (retry).`);
             } catch {
-                console.warn(`[GoogleTranslate] Worker tab ${w.id} failed warm-up. Will recover on first image.`);
+                console.warn(`[GoogleTranslate] Pre-warm tab ${w.id} failed. Will recover on first image.`);
                 w.needsRecovery = true;
             }
         }
     }
-    const warmElapsed = ((Date.now() - warmStart) / 1000).toFixed(1);
-    console.log(`[GoogleTranslate] All ${NUM_WORKERS} worker tabs ready in ${warmElapsed}s.`);
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`[GoogleTranslate] Pre-warm completed in ${elapsed}s. ${workers.filter(w => !w.needsRecovery).length}/${numTabs} tabs ready.`);
+    return { browser, workers };
+}
+
+// ─── Main: Parallel 5-Tab Google Translate Image Translator ───
+async function translateMultipleImages(imageList, sourceLang = 'auto', options = {}) {
+    if (!Array.isArray(imageList) || imageList.length === 0) return [];
+
+    const jobId = options.jobId || null;
+    const uploadsDir = path.join(__dirname, '..', 'uploads');
+    if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+
+    const NUM_WORKERS = Math.min(5, imageList.length);
+    const totalImages = imageList.length;
+    console.log(`[GoogleTranslate] Launching ${NUM_WORKERS} parallel tabs for ${totalImages} images...`);
+
+    if (jobId) {
+        progressTracker.log(jobId, `🌐 ${options.preWarmedBrowser ? 'Pre-warmed' : 'Launching'} ${NUM_WORKERS} Chrome tabs for ${totalImages} images...`, {
+            step: 'translating_warmup',
+            progress: 32,
+            stats: { totalImages, completedImages: 0, translatedImages: 0, failedImages: 0, failedList: [] }
+        });
+    }
+
+    // ── Use pre-warmed browser OR launch fresh ──
+    let browser, workers;
+    if (options.preWarmedBrowser) {
+        console.log(`[GoogleTranslate] Using pre-warmed browser (0s warmup overhead!)`);
+        browser = options.preWarmedBrowser.browser;
+        workers = options.preWarmedBrowser.workers;
+        // Adjust worker count if fewer tabs available
+        if (workers.length < NUM_WORKERS) {
+            console.warn(`[GoogleTranslate] Pre-warmed has ${workers.length} tabs, need ${NUM_WORKERS}. Using available.`);
+        }
+    } else {
+        // Cold start: launch + warm up (fallback if pre-warm wasn't used)
+        console.log(`[GoogleTranslate] No pre-warmed browser, launching fresh...`);
+        const warmResult = await warmUpBrowser(NUM_WORKERS, sourceLang);
+        if (!warmResult) {
+            console.error('[GoogleTranslate] Failed to launch Chrome.');
+            if (jobId) progressTracker.log(jobId, `❌ Chrome launch failed`, { type: 'error' });
+            return imageList.map(img => ({ original: img, translated: false }));
+        }
+        browser = warmResult.browser;
+        workers = warmResult.workers;
+    }
 
     // ── Shared queue, statistics & ETA tracking ──
     const queue = imageList.map((img, idx) => ({ img, idx }));
@@ -560,4 +571,4 @@ async function translateMultipleImages(imageList, sourceLang = 'auto', options =
     return results.filter(Boolean);
 }
 
-module.exports = { translateMultipleImages };
+module.exports = { translateMultipleImages, warmUpBrowser };

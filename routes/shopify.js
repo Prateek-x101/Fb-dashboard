@@ -2378,12 +2378,19 @@ Return ONLY valid JSON in this exact shape:
                 try {
                     console.log(`[Translate] Running Gemini Vision to compare ${descriptionImages.length} Description & ${galleryImages.length} Gallery images for visual duplicates & text overlays...`);
                     if (jobId) {
-                        progressTracker.log(jobId, `🤖 Gemini Vision ko ${descriptionImages.length + galleryImages.length} images (${descriptionImages.length} Desc + ${galleryImages.length} Gal) analysis & deduplication ke liye bheji...`, {
+                        progressTracker.log(jobId, `🤖 Gemini Vision + 🌐 Chrome tabs parallel start ho rahe hain (${descriptionImages.length + galleryImages.length} images)...`, {
                             step: 'gemini_vision', progress: 20, type: 'gemini'
                         });
                     }
 
-                    const visualAnalysis = await geminiService.analyzeAndDeduplicateListingImages(geminiApiKey, geminiModel, descriptionImages, galleryImages);
+                    // 🚀 PARALLEL: Gemini Vision + Chrome warm-up run simultaneously!
+                    const browserWarmPromise = imageTranslator.warmUpBrowser(5, detectedLang);
+                    const geminiPromise = geminiService.analyzeAndDeduplicateListingImages(geminiApiKey, geminiModel, descriptionImages, galleryImages);
+
+                    const [preWarmedBrowser, visualAnalysis] = await Promise.all([browserWarmPromise, geminiPromise]);
+
+                    // Store pre-warmed browser for later use
+                    options._preWarmedBrowser = preWarmedBrowser;
                     if (visualAnalysis && Array.isArray(visualAnalysis.uniqueImagesToTranslate) && visualAnalysis.uniqueImagesToTranslate.length > 0) {
                         const galToDescUrls = new Map();
                         const descToGalUrls = new Map();
@@ -2506,7 +2513,12 @@ Return ONLY valid JSON in this exact shape:
 
             if (targetImagesForGoogle.length > 0) {
                 console.log(`[Translate] Starting 5-tab parallel translation for ${targetImagesForGoogle.length} images with Google Translate (lang: ${detectedLang})...`);
-                const translationResults = await imageTranslator.translateMultipleImages(targetImagesForGoogle, detectedLang, { jobId });
+                const translateOptions = { jobId };
+                if (options._preWarmedBrowser) {
+                    translateOptions.preWarmedBrowser = options._preWarmedBrowser;
+                    options._preWarmedBrowser = null; // Handed off, don't cleanup later
+                }
+                const translationResults = await imageTranslator.translateMultipleImages(targetImagesForGoogle, detectedLang, translateOptions);
 
                 if (jobId) {
                     progressTracker.log(jobId, '🖼️ Translated images description aur gallery me align ho rahi hain...', {
@@ -2654,6 +2666,13 @@ Return ONLY valid JSON in this exact shape:
             }
         } catch (imgLoopErr) {
             console.error('[Translate] Image translation session error:', imgLoopErr.message);
+        } finally {
+            // Cleanup: if preWarmedBrowser was created but not consumed (e.g. 0 images needed translation, or error occurred)
+            if (options._preWarmedBrowser && options._preWarmedBrowser.browser) {
+                console.log(`[Translate] Cleaning up unused pre-warmed browser...`);
+                options._preWarmedBrowser.browser.close().catch(() => {});
+                options._preWarmedBrowser = null;
+            }
         }
     }
 
