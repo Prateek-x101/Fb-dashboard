@@ -824,78 +824,123 @@
                 previewContainer.style.display = 'none';
                 processing.style.display = 'block';
 
+                // Generate unique jobId for live progress streaming
+                const jobId = 'import_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+
                 const formData = new FormData();
                 formData.append('storeId', storeId);
+                formData.append('jobId', jobId);
                 if (url) formData.append('url', url);
                 
                 if (files.length > 0) {
-                    procMsg.textContent = `Uploading ${files.length} file(s) to server...`;
                     files.forEach(f => formData.append('files', f));
-                } else {
-                    procMsg.textContent = 'Launching scraper...';
                 }
 
-                // --- Progress Toast with RAM Monitoring (like video processor) ---
-                const isUrlImport = !!url && !files.length;
+                // --- Real-Time Progress Polling & Terminal Controller ---
+                let importSeconds = 0;
+                let importRamText = '';
+                let lastRenderedLogCount = 0;
 
-                if (isUrlImport) {
-                    // Determine log steps based on URL type (accurately detect all Shopify product links)
-                    const isShopifyUrl = /\/products\/[a-zA-Z0-9-_]+/i.test(url) && !url.includes('amazon.') && !url.includes('alibaba.');
-                    const logSteps = isShopifyUrl ? [
-                        { time: 0, text: "Connecting to Shopify store... 🏪" },
-                        { time: 2, text: "Fetching product metadata & options... 📦" },
-                        { time: 5, text: "Translating product text & size charts with AI... 🌐" },
-                        { time: 10, text: "Processing images & variant combinations... 🖼️" },
-                        { time: 16, text: "Generating clean Shopify listing preview... ✨" },
-                        { time: 25, text: "Finalizing product data... ⏳" }
-                    ] : [
-                        { time: 0, text: "Launching headless browser... 🌐" },
-                        { time: 2, text: "Loading product page... 📄" },
-                        { time: 5, text: "Waiting for page render & JS hydration... ⚡" },
-                        { time: 8, text: "Extracting images from DOM... 🖼️" },
-                        { time: 11, text: "Detecting color/size variant links... 🔍" },
-                        { time: 14, text: "Crawling sibling variant pages... 🧲" },
-                        { time: 18, text: "Sending data to Gemini AI for analysis... 🤖" },
-                        { time: 22, text: "AI generating title, tags, variants, description... ✍️" },
-                        { time: 28, text: "Matching collections & finalizing... 🎯" },
-                        { time: 35, text: "Almost done... hold on... ⏳" }
-                    ];
+                // Reset UI elements
+                const logBox = document.getElementById('vtl-live-log-box');
+                const progressBar = document.getElementById('vtl-progress-bar-fill');
+                const timerElapsed = document.getElementById('vtl-timer-elapsed');
+                const timerEta = document.getElementById('vtl-timer-eta');
+                const ramStatus = document.getElementById('vtl-ram-status');
+                const statTotal = document.getElementById('vtl-stat-total');
+                const statTranslated = document.getElementById('vtl-stat-translated');
+                const statFailed = document.getElementById('vtl-stat-failed');
 
-                    procMsg.textContent = logSteps[0].text;
-                    importToast = window.AppController.showToast(
-                        `🛍️ Import: ${logSteps[0].text}`, 'info', null
-                    );
+                if (logBox) logBox.innerHTML = '<div style="color:#64748b;">[Starting import session...]</div>';
+                if (progressBar) progressBar.style.width = '5%';
+                if (timerElapsed) timerElapsed.textContent = '⏱️ 0.0s';
+                if (timerEta) timerEta.textContent = '⏳ Est: Calculating...';
+                if (statTotal) statTotal.textContent = '0';
+                if (statTranslated) statTranslated.textContent = '0';
+                if (statFailed) statFailed.textContent = '0';
 
-                    // RAM polling every 1s
-                    importRamInterval = setInterval(async () => {
-                        try {
-                            const ramData = await window.API.getRamStatus();
-                            if (ramData && typeof ramData.free === 'number') {
-                                const freeGB = (ramData.free / 1024).toFixed(1);
-                                importRamText = ` | 🧠 Free RAM: ${freeGB} GB`;
-                            }
-                        } catch {}
-                    }, 1000);
+                procMsg.textContent = 'Connecting to server...';
+                importToast = window.AppController.showToast('🛍️ Import: Connecting to server...', 'info', null);
 
-                    // Progress step updates every 500ms
-                    importProgressInterval = setInterval(() => {
-                        importSeconds += 0.5;
-                        let currentStepText = logSteps[0].text;
-                        for (const step of logSteps) {
-                            if (importSeconds >= step.time) {
-                                currentStepText = step.text;
-                            }
+                // Helper to format logs with color-coded badges
+                const formatLogLine = (l) => {
+                    let color = '#94a3b8';
+                    let badge = '';
+                    if (l.type === 'success') {
+                        color = '#34d399';
+                        badge = '<span style="color:#10b981; font-weight:600;">[OK]</span> ';
+                    } else if (l.type === 'warn') {
+                        color = '#fbbf24';
+                        badge = '<span style="color:#f59e0b; font-weight:600;">[WARN]</span> ';
+                    } else if (l.type === 'gemini') {
+                        color = '#38bdf8';
+                        badge = '<span style="color:#0ea5e9; font-weight:600;">[AI]</span> ';
+                    } else if (l.type === 'error') {
+                        color = '#f87171';
+                        badge = '<span style="color:#ef4444; font-weight:600;">[FAIL]</span> ';
+                    }
+                    return `<div style="margin-bottom:3px; color:${color};"><span style="color:#64748b; font-size:0.7rem;">[${l.time}]</span> ${badge}${l.text}</div>`;
+                };
+
+                // RAM polling every 1.5s
+                importRamInterval = setInterval(async () => {
+                    try {
+                        const ramData = await window.API.getRamStatus();
+                        if (ramData && typeof ramData.free === 'number') {
+                            const freeGB = (ramData.free / 1024).toFixed(1);
+                            importRamText = `🧠 RAM: ${freeGB} GB`;
+                            if (ramStatus) ramStatus.textContent = importRamText;
                         }
-                        if (procMsg) {
-                            procMsg.innerHTML = `${currentStepText} <br/><span style="font-size:0.75rem; color:#a78bfa; opacity:0.85;">${importRamText} (⏱️ ${importSeconds.toFixed(1)}s)</span>`;
+                    } catch {}
+                }, 1500);
+
+                // Live Job Progress Polling every 350ms
+                importProgressInterval = setInterval(async () => {
+                    importSeconds += 0.35;
+                    if (timerElapsed) timerElapsed.textContent = `⏱️ ${importSeconds.toFixed(1)}s`;
+
+                    try {
+                        const res = await fetch(`/api/shopify/import-progress?jobId=${jobId}`);
+                        if (!res.ok) return;
+                        const job = await res.json();
+                        if (!job) return;
+
+                        if (job.message && procMsg) {
+                            procMsg.textContent = job.message;
                         }
-                        if (importToast) {
+
+                        if (typeof job.progress === 'number' && progressBar) {
+                            progressBar.style.width = `${Math.max(5, job.progress)}%`;
+                        }
+
+                        if (job.etaSeconds !== undefined && job.etaSeconds !== null && timerEta) {
+                            timerEta.textContent = job.etaSeconds > 0 ? `⏳ Est: ~${job.etaSeconds}s left` : '⏳ Finalizing...';
+                        }
+
+                        if (job.stats) {
+                            if (statTotal && job.stats.totalImages !== undefined) statTotal.textContent = job.stats.totalImages;
+                            if (statTranslated && job.stats.translatedImages !== undefined) statTranslated.textContent = job.stats.translatedImages;
+                            if (statFailed && job.stats.failedImages !== undefined) statFailed.textContent = job.stats.failedImages;
+                        }
+
+                        // Stream new logs to terminal box
+                        if (Array.isArray(job.logs) && job.logs.length > lastRenderedLogCount && logBox) {
+                            const newLogs = job.logs.slice(lastRenderedLogCount);
+                            newLogs.forEach(l => {
+                                logBox.insertAdjacentHTML('beforeend', formatLogLine(l));
+                            });
+                            lastRenderedLogCount = job.logs.length;
+                            logBox.scrollTop = logBox.scrollHeight;
+                        }
+
+                        if (importToast && job.message) {
+                            const etaText = job.etaSeconds > 0 ? ` (⏱️ ~${job.etaSeconds}s)` : '';
                             importToast.update(
-                                `🛍️ Import: ${currentStepText} <br/><small style="opacity:0.75; font-size:11px;">⏱️ ${importSeconds.toFixed(1)}s${importRamText}</small>`
+                                `🛍️ Import: ${job.message} <br/><small style="opacity:0.75; font-size:11px;">⏱️ ${importSeconds.toFixed(1)}s${etaText} ${importRamText ? '| ' + importRamText : ''}</small>`
                             );
                         }
-                    }, 500);
-                }
+                    } catch {}
+                }, 350);
 
                 const response = await fetch('/api/shopify/universal-import', {
                     method: 'POST',
@@ -904,23 +949,28 @@
 
                 const data = await response.json();
 
-                // Cleanup progress toast
+                // Cleanup progress toast & polling
                 if (importProgressInterval) clearInterval(importProgressInterval);
                 if (importRamInterval) clearInterval(importRamInterval);
 
                 if (!response.ok) {
                     if (importToast) {
-                        importToast.update(`❌ Import failed: ${data.error || 'Unknown error'} <br/><small style="opacity:0.75; font-size:11px;">After ${importSeconds.toFixed(1)}s${importRamText}</small>`, 'error');
+                        importToast.update(`❌ Import failed: ${data.error || 'Unknown error'} <br/><small style="opacity:0.75; font-size:11px;">After ${importSeconds.toFixed(1)}s</small>`, 'error');
                         setTimeout(() => importToast.dismiss(), 5000);
                     }
                     throw new Error(data.error || data.details || 'Failed to process import');
                 }
 
+                if (progressBar) progressBar.style.width = '100%';
+                if (timerEta) timerEta.textContent = '✅ Completed';
+
                 if (importToast) {
-                    importToast.update(`✅ Import complete! Product listing generated. <br/><small style="opacity:0.75; font-size:11px;">Completed in ${importSeconds.toFixed(1)}s${importRamText}</small>`, 'success');
+                    importToast.update(`✅ Import complete! Product listing generated. <br/><small style="opacity:0.75; font-size:11px;">Completed in ${importSeconds.toFixed(1)}s ${importRamText}</small>`, 'success');
                     setTimeout(() => importToast.dismiss(), 3000);
                 }
 
+                // Short delay to let user see 100% completion
+                await new Promise(r => setTimeout(r, 600));
                 processing.style.display = 'none';
 
                 this.scrapedProduct = data.product;
@@ -1285,7 +1335,56 @@
             try {
                 btnImport.disabled = true;
                 btnImport.textContent = '🚀 Auto-Importing Listings...';
-                window.AppController.showToast('Uploading images and generating variants on Shopify... 🛍️', 'info');
+
+                // Real-time publishing console elements
+                const publishConsole = document.getElementById('shopify-publish-processing');
+                const publishMsg = document.getElementById('shopify-publish-status-msg');
+                const publishTimer = document.getElementById('shopify-publish-timer');
+                const publishBar = document.getElementById('shopify-publish-progress-bar-fill');
+                const publishLogBox = document.getElementById('shopify-publish-live-log-box');
+
+                if (publishConsole) publishConsole.style.display = 'block';
+                if (publishMsg) publishMsg.textContent = 'Creating product listing on Shopify...';
+                if (publishBar) publishBar.style.width = '10%';
+                if (publishTimer) publishTimer.textContent = '⏱️ 0.0s';
+                if (publishLogBox) publishLogBox.innerHTML = '<div style="color:#64748b;">[Starting Shopify product creation...]</div>';
+
+                const publishJobId = 'publish_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+                let pubElapsed = 0;
+                let pubLogCount = 0;
+
+                const pubPollInterval = setInterval(async () => {
+                    pubElapsed += 0.3;
+                    if (publishTimer) publishTimer.textContent = `⏱️ ${pubElapsed.toFixed(1)}s`;
+
+                    try {
+                        const r = await fetch(`/api/shopify/import-progress?jobId=${publishJobId}`);
+                        if (!r.ok) return;
+                        const j = await r.json();
+                        if (!j) return;
+
+                        if (j.message && publishMsg) publishMsg.textContent = j.message;
+                        if (typeof j.progress === 'number' && publishBar) {
+                            publishBar.style.width = `${Math.max(10, j.progress)}%`;
+                        }
+
+                        if (Array.isArray(j.logs) && j.logs.length > pubLogCount && publishLogBox) {
+                            const newLogs = j.logs.slice(pubLogCount);
+                            newLogs.forEach(l => {
+                                let c = '#94a3b8';
+                                let b = '';
+                                if (l.type === 'success') { c = '#34d399'; b = '<span style="color:#10b981;">[OK]</span> '; }
+                                else if (l.type === 'warn') { c = '#fbbf24'; b = '<span style="color:#f59e0b;">[WARN]</span> '; }
+                                else if (l.type === 'error') { c = '#f87171'; b = '<span style="color:#ef4444;">[FAIL]</span> '; }
+                                publishLogBox.insertAdjacentHTML('beforeend', `<div style="margin-bottom:2px; color:${c};"><span style="color:#64748b; font-size:0.7rem;">[${l.time}]</span> ${b}${l.text}</div>`);
+                            });
+                            pubLogCount = j.logs.length;
+                            publishLogBox.scrollTop = publishLogBox.scrollHeight;
+                        }
+                    } catch {}
+                }, 300);
+
+                window.AppController.showToast('Creating product and linking variants on Shopify... 🛍️', 'info');
 
                 // Collect manual image assignments
                 const imageAssignments = {};
@@ -1308,8 +1407,15 @@
                     comparePrice: comparePrice || null,
                     collectionIds,
                     floatingVideos: this.floatingVideos,
-                    imageAssignments
+                    imageAssignments,
+                    jobId: publishJobId
                 });
+
+                clearInterval(pubPollInterval);
+                if (publishBar) publishBar.style.width = '100%';
+                if (publishMsg) publishMsg.textContent = '✅ Listing Published Successfully!';
+                await new Promise(r => setTimeout(r, 400));
+                if (publishConsole) publishConsole.style.display = 'none';
 
                 window.AppController.showToast(`Successfully imported: "${result.title}" to Shopify! 🎉`, 'success');
 

@@ -4,6 +4,8 @@ const path = require('path');
 const fetch = require('node-fetch');
 const { v4: uuidv4 } = require('uuid');
 
+const progressTracker = require('./progressTracker');
+
 // ─── Helper: Download/resolve image to local temp file ───
 async function getLocalImageFile(input, uploadsDir) {
     if (typeof input === 'string') {
@@ -196,15 +198,24 @@ async function extractTranslatedBlob(page) {
 }
 
 // ─── Main: Parallel 5-Tab Google Translate Image Translator ───
-async function translateMultipleImages(imageList, sourceLang = 'auto') {
+async function translateMultipleImages(imageList, sourceLang = 'auto', options = {}) {
     if (!Array.isArray(imageList) || imageList.length === 0) return [];
 
+    const jobId = options.jobId || null;
     const uploadsDir = path.join(__dirname, '..', 'uploads');
     if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
     const NUM_WORKERS = Math.min(5, imageList.length);
     const totalImages = imageList.length;
     console.log(`[GoogleTranslate] Launching ${NUM_WORKERS} parallel tabs for ${totalImages} images...`);
+
+    if (jobId) {
+        progressTracker.log(jobId, `🌐 Launching ${NUM_WORKERS} parallel Chrome tabs for ${totalImages} images...`, {
+            step: 'translating_warmup',
+            progress: 32,
+            stats: { totalImages, completedImages: 0, translatedImages: 0, failedImages: 0, failedList: [] }
+        });
+    }
 
     // ── Launch Chrome ──
     let browser;
@@ -244,6 +255,7 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
         }
     } catch (err) {
         console.error('[GoogleTranslate] Failed to launch Chrome:', err.message);
+        if (jobId) progressTracker.log(jobId, `❌ Chrome launch failed: ${err.message}`, { type: 'error' });
         return imageList.map(img => ({ original: img, translated: false }));
     }
 
@@ -270,15 +282,44 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
             });
             await w.page.waitForSelector('input[accept*="image"]', { timeout: 20000 });
             console.log(`[GoogleTranslate] Worker tab ${w.id} warm and ready.`);
+            if (jobId) {
+                progressTracker.log(jobId, `⚡ Worker tab ${w.id}/${NUM_WORKERS} warm & ready on Google Translate`, {
+                    step: 'translating_warmup',
+                    progress: 32 + (w.id / NUM_WORKERS) * 6
+                });
+            }
         } catch (err) {
             console.warn(`[GoogleTranslate] Worker tab ${w.id} warm-up failed: ${err.message}`);
         }
     }));
-    console.log(`[GoogleTranslate] All ${NUM_WORKERS} worker tabs ready in ${((Date.now() - warmStart) / 1000).toFixed(1)}s.`);
+    const warmElapsed = ((Date.now() - warmStart) / 1000).toFixed(1);
+    console.log(`[GoogleTranslate] All ${NUM_WORKERS} worker tabs ready in ${warmElapsed}s.`);
 
-    // ── Shared queue & results ──
+    // ── Shared queue, statistics & ETA tracking ──
     const queue = imageList.map((img, idx) => ({ img, idx }));
     const results = new Array(totalImages);
+    let completedCount = 0;
+    let translatedCount = 0;
+    let failedCount = 0;
+    const failedList = [];
+    const completedDurations = [];
+
+    const getEstimatedRemainingSeconds = () => {
+        const remaining = totalImages - completedCount;
+        if (remaining <= 0) return 0;
+        const avg = completedDurations.length ? (completedDurations.reduce((a, b) => a + b, 0) / completedDurations.length) : 8.5;
+        return Math.max(1, Math.round((remaining * avg) / NUM_WORKERS));
+    };
+
+    if (jobId) {
+        const initialEta = Math.round((totalImages * 8.5) / NUM_WORKERS);
+        progressTracker.log(jobId, `🚀 Starting parallel translation for ${totalImages} images (⏱️ Est. ~${initialEta}s)...`, {
+            step: 'translating',
+            progress: 38,
+            etaSeconds: initialEta,
+            stats: { totalImages, completedImages: 0, translatedImages: 0, failedImages: 0, failedList }
+        });
+    }
 
     // ── Worker loop ──
     async function workerLoop(worker) {
@@ -288,7 +329,17 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
 
             const { img: imgInput, idx } = item;
             const imgStart = Date.now();
+            const currentEta = getEstimatedRemainingSeconds();
             console.log(`[Tab ${worker.id}] Processing image [${idx + 1}/${totalImages}]: ${imgInput}`);
+
+            if (jobId) {
+                progressTracker.log(jobId, `[Tab ${worker.id}] Processing image [${idx + 1}/${totalImages}]... (⏱️ ~${currentEta}s remaining)`, {
+                    step: 'translating',
+                    etaSeconds: currentEta,
+                    progress: Math.round(38 + (completedCount / totalImages) * 45),
+                    stats: { totalImages, completedImages: completedCount, translatedImages: translatedCount, failedImages: failedCount, failedList }
+                });
+            }
 
             let localInfo = null;
             try {
@@ -300,6 +351,7 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                 if (['.gif', '.svg', '.mp4'].includes(ext)) {
                     console.log(`[Tab ${worker.id}] Image [${idx + 1}] is ${ext} — skipping.`);
                     results[idx] = { original: imgInput, translated: false };
+                    completedCount++;
                     continue;
                 }
 
@@ -317,18 +369,62 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
                         fs.writeFileSync(targetFile, Buffer.from(rawB64, 'base64'));
 
                         const publicPath = `/uploads/${filename}`;
-                        const elapsed = ((Date.now() - imgStart) / 1000).toFixed(1);
+                        const elapsedNum = (Date.now() - imgStart) / 1000;
+                        const elapsed = elapsedNum.toFixed(1);
+                        completedDurations.push(elapsedNum);
                         const fileSize = fs.statSync(targetFile).size;
                         console.log(`[Tab ${worker.id}] ✅ Image [${idx + 1}] translated in ${elapsed}s → ${publicPath} (${fileSize} bytes)`);
 
                         results[idx] = { original: imgInput, translated: true, translatedUrl: publicPath };
+                        translatedCount++;
+                        completedCount++;
+
+                        if (jobId) {
+                            const newEta = getEstimatedRemainingSeconds();
+                            progressTracker.log(jobId, `✅ [Tab ${worker.id}] Image [${idx + 1}/${totalImages}] translated in ${elapsed}s (${(fileSize / 1024).toFixed(0)} KB)`, {
+                                type: 'success',
+                                step: 'translating',
+                                etaSeconds: newEta,
+                                progress: Math.round(38 + (completedCount / totalImages) * 45),
+                                stats: { totalImages, completedImages: completedCount, translatedImages: translatedCount, failedImages: failedCount, failedList }
+                            });
+                        }
                     } else {
                         console.warn(`[Tab ${worker.id}] Image [${idx + 1}] blob extraction failed — preserving original.`);
                         results[idx] = { original: imgInput, translated: false };
+                        failedCount++;
+                        completedCount++;
+                        failedList.push({ index: idx + 1, url: imgInput, reason: 'Blob extraction failed' });
+
+                        if (jobId) {
+                            const newEta = getEstimatedRemainingSeconds();
+                            progressTracker.log(jobId, `⚠️ [Tab ${worker.id}] Image [${idx + 1}/${totalImages}] extraction failed — original preserved`, {
+                                type: 'warn',
+                                step: 'translating',
+                                etaSeconds: newEta,
+                                progress: Math.round(38 + (completedCount / totalImages) * 45),
+                                stats: { totalImages, completedImages: completedCount, translatedImages: translatedCount, failedImages: failedCount, failedList }
+                            });
+                        }
                     }
                 } else {
                     // no_text or timeout — preserve original
                     results[idx] = { original: imgInput, translated: false };
+                    failedCount++;
+                    completedCount++;
+                    const reason = pollResult.status === 'no_text' ? 'No text detected' : 'Translation timed out';
+                    failedList.push({ index: idx + 1, url: imgInput, reason });
+
+                    if (jobId) {
+                        const newEta = getEstimatedRemainingSeconds();
+                        progressTracker.log(jobId, `⚠️ [Tab ${worker.id}] Image [${idx + 1}/${totalImages}] ${reason.toLowerCase()} — original preserved`, {
+                            type: 'warn',
+                            step: 'translating',
+                            etaSeconds: newEta,
+                            progress: Math.round(38 + (completedCount / totalImages) * 45),
+                            stats: { totalImages, completedImages: completedCount, translatedImages: translatedCount, failedImages: failedCount, failedList }
+                        });
+                    }
                 }
 
                 // Clear image for next upload
@@ -340,6 +436,20 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
             } catch (err) {
                 console.error(`[Tab ${worker.id}] Error on image [${idx + 1}]:`, err.message);
                 results[idx] = { original: imgInput, translated: false };
+                failedCount++;
+                completedCount++;
+                failedList.push({ index: idx + 1, url: imgInput, reason: err.message });
+
+                if (jobId) {
+                    const newEta = getEstimatedRemainingSeconds();
+                    progressTracker.log(jobId, `⚠️ [Tab ${worker.id}] Image [${idx + 1}/${totalImages}] error: ${err.message} — original preserved`, {
+                        type: 'warn',
+                        step: 'translating',
+                        etaSeconds: newEta,
+                        progress: Math.round(38 + (completedCount / totalImages) * 45),
+                        stats: { totalImages, completedImages: completedCount, translatedImages: translatedCount, failedImages: failedCount, failedList }
+                    });
+                }
 
                 // Try to recover the tab for next image
                 try {
@@ -367,6 +477,16 @@ async function translateMultipleImages(imageList, sourceLang = 'auto') {
 
     const totalTime = ((Date.now() - processStart) / 1000).toFixed(1);
     console.log(`[GoogleTranslate] All ${totalImages} images finished in ${totalTime}s across ${NUM_WORKERS} parallel tabs!`);
+
+    if (jobId) {
+        progressTracker.log(jobId, `🎉 All ${totalImages} images processed in ${totalTime}s (${translatedCount} translated, ${failedCount} preserved)`, {
+            type: 'success',
+            step: 'translating_done',
+            progress: 85,
+            etaSeconds: 3,
+            stats: { totalImages, completedImages: totalImages, translatedImages: translatedCount, failedImages: failedCount, failedList }
+        });
+    }
 
     return results.filter(Boolean);
 }

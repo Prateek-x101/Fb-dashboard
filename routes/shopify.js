@@ -8,6 +8,18 @@ const geminiService = require('../services/gemini');
 const fetch = require('node-fetch');
 const { getStorage, saveStorage } = require('../services/storage');
 const imageTranslator = require('../services/imageTranslator');
+const progressTracker = require('../services/progressTracker');
+
+// Endpoint: Live Import & Publishing Progress Polling
+router.get('/import-progress', (req, res) => {
+    const jobId = req.query.jobId;
+    if (!jobId) return res.status(400).json({ error: 'jobId is required' });
+    const job = progressTracker.getJob(jobId);
+    if (!job) {
+        return res.json({ id: jobId, step: 'waiting', message: 'Initializing task...', progress: 0, logs: [], done: false });
+    }
+    res.json(job);
+});
 
 // Multer for video uploads in this route
 const videoUpload = multer({
@@ -420,9 +432,15 @@ Based on the details, identify which collections match this product. Return ONLY
 // 5. Import Product to user's Shopify store
 router.post('/import', async (req, res) => {
     try {
-        const { storeId, product, skuPrefix, price, comparePrice, collectionIds, floatingVideos, imageAssignments } = req.body;
+        const { storeId, product, skuPrefix, price, comparePrice, collectionIds, floatingVideos, imageAssignments, jobId } = req.body;
         if (!storeId || !product || !skuPrefix) {
             return res.status(400).json({ error: 'Missing required parameters for Shopify import.' });
+        }
+
+        if (jobId) {
+            progressTracker.log(jobId, `🚀 Starting Shopify product import for "${product.title}"...`, {
+                step: 'publish_init', progress: 5
+            });
         }
 
         // Get Shopify Store credentials
@@ -661,73 +679,89 @@ router.post('/import', async (req, res) => {
             }
         });
 
-        // Upload any remaining description-only /uploads/ images directly to Shopify CDN!
+        // Upload any remaining description-only /uploads/ images directly to Shopify CDN in parallel!
         // This ensures description images are never broken on the live store, while keeping them out of the gallery carousel.
         const uploadsDir = path.join(__dirname, '..', 'uploads');
         const remainingLocalMatches = updatedBodyHtml.match(/\/uploads\/[^\s"'<>]+\.(?:png|jpg|jpeg|webp|gif)/gi) || [];
         const uniqueLocalUploads = [...new Set(remainingLocalMatches)];
 
-        for (const localUrlPath of uniqueLocalUploads) {
-            const baseFileName = path.basename(localUrlPath);
-            const diskPath = path.join(uploadsDir, baseFileName);
-            if (fs.existsSync(diskPath)) {
-                try {
-                    console.log(`[ShopifyImport] Uploading description-only translated image to Shopify CDN: ${baseFileName}...`);
-                    const imgBuffer = fs.readFileSync(diskPath);
-                    const base64Data = imgBuffer.toString('base64');
-                    
-                    const uploadResp = await fetch(`https://${store.shopUrl}/admin/api/2024-04/products/${createdProductId}/images.json`, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'X-Shopify-Access-Token': store.accessToken
-                        },
-                        body: JSON.stringify({
-                            image: {
-                                attachment: base64Data,
-                                filename: baseFileName
-                            }
-                        })
-                    });
-
-                    if (uploadResp.ok) {
-                        const uploadData = await uploadResp.json();
-                        const cdnSrc = uploadData.image && uploadData.image.src;
-                        const tempImgId = uploadData.image && uploadData.image.id;
-
-                        if (cdnSrc) {
-                            console.log(`[ShopifyImport] Successfully uploaded description image to Shopify CDN: ${cdnSrc}`);
-                            const patterns = [...new Set([localUrlPath, `/uploads/${baseFileName}`])];
-                            patterns.forEach(pat => {
-                                if (updatedBodyHtml.includes(pat)) {
-                                    updatedBodyHtml = updatedBodyHtml.split(pat).join(cdnSrc);
-                                    hasLocalUploads = true;
-                                }
-                            });
-
-                            // Remove from product gallery carousel so description images stay exclusively in description!
-                            if (tempImgId) {
-                                try {
-                                    await fetch(`https://${store.shopUrl}/admin/api/2024-04/products/${createdProductId}/images/${tempImgId}.json`, {
-                                        method: 'DELETE',
-                                        headers: {
-                                            'X-Shopify-Access-Token': store.accessToken
-                                        }
-                                    });
-                                    console.log(`[ShopifyImport] Description image safely removed from product gallery (id: ${tempImgId})`);
-                                } catch (delErr) {
-                                    console.warn(`[ShopifyImport] Non-critical: error cleaning gallery image:`, delErr.message);
-                                }
-                            }
-                        }
-                    } else {
-                        const errText = await uploadResp.text();
-                        console.warn(`[ShopifyImport] Failed to upload description image ${baseFileName} to Shopify CDN:`, errText);
-                    }
-                } catch (readErr) {
-                    console.warn(`[ShopifyImport] Error reading/uploading local file ${diskPath}:`, readErr.message);
-                }
+        if (uniqueLocalUploads.length > 0) {
+            console.log(`[ShopifyImport] Uploading ${uniqueLocalUploads.length} description-only image(s) to Shopify CDN in parallel...`);
+            if (jobId) {
+                progressTracker.log(jobId, `🖼️ Uploading ${uniqueLocalUploads.length} description image(s) to Shopify CDN in parallel...`, {
+                    step: 'desc_cdn', progress: 45
+                });
             }
+
+            await Promise.all(uniqueLocalUploads.map(async (localUrlPath, upIdx) => {
+                const baseFileName = path.basename(localUrlPath);
+                const diskPath = path.join(uploadsDir, baseFileName);
+                if (fs.existsSync(diskPath)) {
+                    try {
+                        const imgBuffer = fs.readFileSync(diskPath);
+                        const base64Data = imgBuffer.toString('base64');
+                        
+                        const uploadResp = await fetch(`https://${store.shopUrl}/admin/api/2024-04/products/${createdProductId}/images.json`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'X-Shopify-Access-Token': store.accessToken
+                            },
+                            body: JSON.stringify({
+                                image: {
+                                    attachment: base64Data,
+                                    filename: baseFileName
+                                }
+                            })
+                        });
+
+                        if (uploadResp.ok) {
+                            const uploadData = await uploadResp.json();
+                            const cdnSrc = uploadData.image && uploadData.image.src;
+                            const tempImgId = uploadData.image && uploadData.image.id;
+
+                            if (cdnSrc) {
+                                console.log(`[ShopifyImport] Successfully uploaded description image to Shopify CDN: ${cdnSrc}`);
+                                const patterns = [...new Set([localUrlPath, `/uploads/${baseFileName}`])];
+                                patterns.forEach(pat => {
+                                    if (updatedBodyHtml.includes(pat)) {
+                                        updatedBodyHtml = updatedBodyHtml.split(pat).join(cdnSrc);
+                                        hasLocalUploads = true;
+                                    }
+                                });
+
+                                if (jobId) {
+                                    progressTracker.log(jobId, `✅ Description image [${upIdx + 1}/${uniqueLocalUploads.length}] uploaded to CDN`, {
+                                        type: 'success',
+                                        step: 'desc_cdn',
+                                        progress: 45 + Math.round(((upIdx + 1) / uniqueLocalUploads.length) * 12)
+                                    });
+                                }
+
+                                // Remove from product gallery carousel so description images stay exclusively in description!
+                                if (tempImgId) {
+                                    try {
+                                        await fetch(`https://${store.shopUrl}/admin/api/2024-04/products/${createdProductId}/images/${tempImgId}.json`, {
+                                            method: 'DELETE',
+                                            headers: {
+                                                'X-Shopify-Access-Token': store.accessToken
+                                            }
+                                        });
+                                        console.log(`[ShopifyImport] Description image safely removed from product gallery (id: ${tempImgId})`);
+                                    } catch (delErr) {
+                                        console.warn(`[ShopifyImport] Non-critical: error cleaning gallery image:`, delErr.message);
+                                    }
+                                }
+                            }
+                        } else {
+                            const errText = await uploadResp.text();
+                            console.warn(`[ShopifyImport] Failed to upload description image ${baseFileName} to Shopify CDN:`, errText);
+                        }
+                    } catch (readErr) {
+                        console.warn(`[ShopifyImport] Error reading/uploading local file ${diskPath}:`, readErr.message);
+                    }
+                }
+            }));
         }
 
         if (hasLocalUploads) {
@@ -747,12 +781,17 @@ router.post('/import', async (req, res) => {
                     })
                 });
                 console.log(`[ShopifyImport] Successfully updated body_html with Shopify CDN images!`);
+                if (jobId) {
+                    progressTracker.log(jobId, `🔗 Description HTML live Shopify CDN image links ke sath update ho gayi`, {
+                        step: 'desc_updated', progress: 58
+                    });
+                }
             } catch (descUpdateErr) {
                 console.warn('[ShopifyImport] Could not update body_html with CDN images:', descUpdateErr.message);
             }
         }
 
-        // Associate variants with images based on assignments
+        // Associate variants with images based on assignments (PARALLEL CONCURRENCY)
         if (imageAssignments && Object.keys(imageAssignments).length > 0) {
             const createdImages = createdProduct.images || [];
             const createdVariants = createdProduct.variants || [];
@@ -783,7 +822,7 @@ router.post('/import', async (req, res) => {
                     const targetValue = imageAssignments[matchedKey];
                     const targetNorm = normalizeVal(targetValue);
 
-                    // Find matching variants that contain this option value (normalised to strip emojis, spacing, case differences)
+                    // Find matching variants that contain this option value
                     const matchingVariants = createdVariants.filter(v => 
                         normalizeVal(v.option1) === targetNorm || 
                         normalizeVal(v.option2) === targetNorm || 
@@ -793,6 +832,7 @@ router.post('/import', async (req, res) => {
                     for (const mv of matchingVariants) {
                         variantImageUpdates.push({
                             variantId: mv.id,
+                            variantTitle: mv.title || mv.option1,
                             imageId: createdImg.id
                         });
                     }
@@ -800,34 +840,62 @@ router.post('/import', async (req, res) => {
             }
 
             if (variantImageUpdates.length > 0) {
-                console.log(`Linking ${variantImageUpdates.length} variant images in Shopify sequentially to avoid rate limits...`);
-                // Update variant image linking sequentially with a 250ms delay to prevent 429 rate limits
-                for (const update of variantImageUpdates) {
-                    const variantUrl = `https://${store.shopUrl}/admin/api/2024-04/variants/${update.variantId}.json`;
-                    try {
-                        const vRes = await fetch(variantUrl, {
-                            method: 'PUT',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'X-Shopify-Access-Token': store.accessToken
-                            },
-                            body: JSON.stringify({
-                                variant: {
-                                    id: update.variantId,
-                                    image_id: update.imageId
+                console.log(`Linking ${variantImageUpdates.length} variant images in Shopify (parallel chunks of 5)...`);
+                if (jobId) {
+                    progressTracker.log(jobId, `⚡ Linking ${variantImageUpdates.length} variant images in Shopify in parallel batches...`, {
+                        step: 'variant_linking', progress: 60,
+                        stats: { variantsTotal: variantImageUpdates.length, variantsLinked: 0 }
+                    });
+                }
+
+                // Process in parallel chunks of 5
+                const BATCH_SIZE = 5;
+                let linkedCount = 0;
+                for (let i = 0; i < variantImageUpdates.length; i += BATCH_SIZE) {
+                    const chunk = variantImageUpdates.slice(i, i + BATCH_SIZE);
+                    await Promise.all(chunk.map(async (update) => {
+                        const variantUrl = `https://${store.shopUrl}/admin/api/2024-04/variants/${update.variantId}.json`;
+                        try {
+                            const vRes = await fetch(variantUrl, {
+                                method: 'PUT',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'X-Shopify-Access-Token': store.accessToken
+                                },
+                                body: JSON.stringify({
+                                    variant: {
+                                        id: update.variantId,
+                                        image_id: update.imageId
+                                    }
+                                })
+                            });
+                            if (vRes.ok) {
+                                linkedCount++;
+                                console.log(`[ShopifyImport] Successfully linked variant ${update.variantId} (${update.variantTitle}) to image ${update.imageId}`);
+                                if (jobId) {
+                                    progressTracker.log(jobId, `⚡ Linked variant [${linkedCount}/${variantImageUpdates.length}] (${update.variantTitle}) to image`, {
+                                        step: 'variant_linking',
+                                        progress: 60 + Math.round((linkedCount / variantImageUpdates.length) * 30),
+                                        stats: { variantsTotal: variantImageUpdates.length, variantsLinked: linkedCount }
+                                    });
                                 }
-                            })
-                        });
-                        if (!vRes.ok) {
-                            console.warn(`[ShopifyImport] Failed to link variant ${update.variantId} to image ${update.imageId}: ${vRes.status} ${vRes.statusText}`);
-                        } else {
-                            console.log(`[ShopifyImport] Successfully linked variant ${update.variantId} to image ${update.imageId}`);
+                            } else {
+                                console.warn(`[ShopifyImport] Failed to link variant ${update.variantId}: ${vRes.status} ${vRes.statusText}`);
+                            }
+                        } catch (err) {
+                            console.warn(`[ShopifyImport] Error linking variant ${update.variantId}:`, err.message);
                         }
-                        // 250ms spacing to stay safe under Shopify's 2 req/sec REST bucket leak rate
-                        await new Promise(r => setTimeout(r, 250));
-                    } catch (err) {
-                        console.warn(`[ShopifyImport] Error linking variant ${update.variantId}:`, err.message);
+                    }));
+                    // Small 60ms breather between batches to respect burst rate limits
+                    if (i + BATCH_SIZE < variantImageUpdates.length) {
+                        await new Promise(r => setTimeout(r, 60));
                     }
+                }
+
+                if (jobId) {
+                    progressTracker.log(jobId, `✅ All ${linkedCount} variant images successfully linked in Shopify!`, {
+                        type: 'success', step: 'variants_done', progress: 90
+                    });
                 }
             }
         }
@@ -835,6 +903,11 @@ router.post('/import', async (req, res) => {
         // Link product to selected collections in parallel
         if (Array.isArray(collectionIds) && collectionIds.length > 0) {
             console.log(`Linking product to ${collectionIds.length} collections in parallel...`);
+            if (jobId) {
+                progressTracker.log(jobId, `📁 Associating product with ${collectionIds.length} collections in parallel...`, {
+                    step: 'collections', progress: 92
+                });
+            }
             const collectPromises = collectionIds.map(async (collId) => {
                 const collectUrl = `https://${store.shopUrl}/admin/api/2024-04/collects.json`;
                 const r = await fetch(collectUrl, {
@@ -858,8 +931,16 @@ router.post('/import', async (req, res) => {
         }
 
         const productUrl = `https://${actualDomain}/products/${createdProduct.handle}`;
+
+        if (jobId) {
+            progressTracker.finishJob(jobId, `🎉 Product successfully imported and published to Shopify! URL: ${productUrl}`);
+        }
+
         res.json({ success: true, productId: createdProductId, title: createdProduct.title, productUrl, warning: videoUploadError });
     } catch (error) {
+        if (req.body && req.body.jobId) {
+            progressTracker.failJob(req.body.jobId, error.message);
+        }
         res.status(500).json({ error: 'Failed to import product to Shopify', details: error.message });
     }
 });
@@ -1073,7 +1154,12 @@ router.post('/universal-import', videoUpload.array('files', 20), async (req, res
     try {
         const url = req.body.url ? req.body.url.trim() : null;
         const storeId = req.body.storeId;
+        const jobId = req.body.jobId || req.query.jobId || ('job_' + Date.now());
         const files = req.files || [];
+
+        progressTracker.log(jobId, '🚀 Initializing Shopify import session...', {
+            step: 'init', progress: 3
+        });
 
         if (!storeId) {
             return res.status(400).json({ error: 'Shopify Store selection is required.' });
@@ -1443,6 +1529,9 @@ router.post('/universal-import', videoUpload.array('files', 20), async (req, res
             const isShopifyUrl = /\/products\/[a-zA-Z0-9-_]+/i.test(url) && !url.includes('amazon.') && !url.includes('alibaba.');
             if (isShopifyUrl) {
                 console.log(`[UniversalImport] Scraping Shopify direct JSON metadata...`);
+                progressTracker.log(jobId, '📥 Scraping Shopify direct JSON metadata (.js)...', {
+                    step: 'scraping', progress: 8
+                });
                 const parsedUrl = new URL(url);
                 parsedUrl.search = '';
                 const jsUrl = parsedUrl.origin + parsedUrl.pathname + '.js';
@@ -1454,7 +1543,7 @@ router.post('/universal-import', videoUpload.array('files', 20), async (req, res
                 const product = await scrapeRes.json();
 
                 if (geminiApiKey) {
-                    await translateProductToEnglish(product, geminiApiKey, geminiModel, true);
+                    await translateProductToEnglish(product, geminiApiKey, geminiModel, true, { jobId });
                 }
 
                 // Format options and images
@@ -1520,6 +1609,8 @@ router.post('/universal-import', videoUpload.array('files', 20), async (req, res
                     options: options
                 };
                 autoAppendSizeCharts(previewProductObj, storage);
+
+                progressTracker.finishJob(jobId, '✅ Product listing preview ready!');
 
                 return res.json({
                     success: true,
@@ -1630,6 +1721,7 @@ router.post('/universal-import', videoUpload.array('files', 20), async (req, res
 
     } catch (error) {
         console.error('[UniversalImport] Failure:', error.message);
+        progressTracker.failJob(jobId, error.message);
         res.status(500).json({ error: 'Failed to process universal import request.', details: error.message });
     } finally {
         const videoProcessor = require('../services/videoProcessor');
@@ -2100,14 +2192,20 @@ function areSameImageUrls(url1, url2) {
     return false;
 }
 
-async function translateProductToEnglish(product, geminiApiKey, geminiModel, autoTranslateImages = true) {
+async function translateProductToEnglish(product, geminiApiKey, geminiModel, autoTranslateImages = true, options = {}) {
     if (!geminiApiKey) return product;
 
+    const jobId = options.jobId || null;
     let detectedLang = 'auto';
 
     // 1. Text Translation (Title, Description, Options, Variants)
     try {
         console.log(`[Translate] Starting translation to English for product: ${product.title}`);
+        if (jobId) {
+            progressTracker.log(jobId, `✍️ Gemini AI product text, title & variants translate kar raha hai...`, {
+                step: 'text_translate', progress: 12
+            });
+        }
         
         const simplifiedOptions = (product.options || []).map(opt => ({
             name: opt.name,
@@ -2279,6 +2377,12 @@ Return ONLY valid JSON in this exact shape:
             if (geminiApiKey) {
                 try {
                     console.log(`[Translate] Running Gemini Vision to compare ${descriptionImages.length} Description & ${galleryImages.length} Gallery images for visual duplicates & text overlays...`);
+                    if (jobId) {
+                        progressTracker.log(jobId, `🤖 Gemini Vision ko ${descriptionImages.length + galleryImages.length} images (${descriptionImages.length} Desc + ${galleryImages.length} Gal) analysis & deduplication ke liye bheji...`, {
+                            step: 'gemini_vision', progress: 20, type: 'gemini'
+                        });
+                    }
+
                     const visualAnalysis = await geminiService.analyzeAndDeduplicateListingImages(geminiApiKey, geminiModel, descriptionImages, galleryImages);
                     if (visualAnalysis && Array.isArray(visualAnalysis.uniqueImagesToTranslate) && visualAnalysis.uniqueImagesToTranslate.length > 0) {
                         const galToDescUrls = new Map();
@@ -2336,7 +2440,6 @@ Return ONLY valid JSON in this exact shape:
                         });
 
                         // Safety net: ensure every non-gif description image is covered!
-                        // If Gemini missed an "About Us" or unique description image, auto-include it so it's 100% translated!
                         descriptionImages.forEach((dImg, dIdx) => {
                             if (!dImg || dImg.includes('.gif') || dImg.includes('.svg') || dImg.includes('.mp4')) return;
 
@@ -2356,11 +2459,22 @@ Return ONLY valid JSON in this exact shape:
 
                         if (targetImagesForGoogle.length > 0) {
                             aiVisualDeduplicated = true;
-                            console.log(`[Translate] Gemini Vision deduplicated images: ${targetImagesForGoogle.length} unique images to translate (saved ${descriptionImages.length + galleryImages.length - targetImagesForGoogle.length} duplicate translations).`);
+                            const savedCount = descriptionImages.length + galleryImages.length - targetImagesForGoogle.length;
+                            console.log(`[Translate] Gemini Vision deduplicated images: ${targetImagesForGoogle.length} unique images to translate (saved ${savedCount} duplicate translations).`);
+                            if (jobId) {
+                                progressTracker.log(jobId, `✨ Gemini Vision: ${targetImagesForGoogle.length} unique images text/charts ke liye select hui (${savedCount} duplicate translations bachi)`, {
+                                    step: 'gemini_vision_done', progress: 30, type: 'gemini'
+                                });
+                            }
                         }
                     }
                 } catch (visionErr) {
                     console.warn('[Translate] Gemini Vision deduplication error, falling back to standard filter:', visionErr.message);
+                    if (jobId) {
+                        progressTracker.log(jobId, `⚠️ Gemini Vision timeout/error (${visionErr.message}) — standard filter fallback use ho raha hai`, {
+                            step: 'gemini_vision_fallback', progress: 25, type: 'warn'
+                        });
+                    }
                 }
             }
 
@@ -2392,7 +2506,13 @@ Return ONLY valid JSON in this exact shape:
 
             if (targetImagesForGoogle.length > 0) {
                 console.log(`[Translate] Starting 5-tab parallel translation for ${targetImagesForGoogle.length} images with Google Translate (lang: ${detectedLang})...`);
-                const translationResults = await imageTranslator.translateMultipleImages(targetImagesForGoogle, detectedLang);
+                const translationResults = await imageTranslator.translateMultipleImages(targetImagesForGoogle, detectedLang, { jobId });
+
+                if (jobId) {
+                    progressTracker.log(jobId, '🖼️ Translated images description aur gallery me align ho rahi hain...', {
+                        step: 'image_replacing', progress: 88
+                    });
+                }
 
                 // Robust replacement helper that matches //, https:, and base URLs without query parameters
                 const applyImageReplacement = (targetStr, origUrl, newUrl) => {
