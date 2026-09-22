@@ -1112,7 +1112,8 @@
                         cardIndex,
                         audiences[0].targeting || audiences[0].interests || []
                     );
-                    window.AppController.showToast(`Audience ${cardIndex + 1} generated ✨`, 'success');
+                    const prov = result.aiProvider === 'claude' ? '🧠 Claude' : '🤖 Gemini';
+                    window.AppController.showToast(`${prov}: Audience ${cardIndex + 1} generated ✨`, 'success');
                 } else { window.AppController.showToast('No audience returned. Try again.', 'warning'); }
             } catch (error) {
                 window.AppController.showToast('AI error: ' + error.message, 'error');
@@ -1168,8 +1169,9 @@
                     }
                 });
                 const unresolved = audiences.reduce((sum, aud) => sum + (aud.unresolvedTargeting?.length || 0), 0);
+                const provider = result.aiProvider === 'claude' ? '🧠 Claude' : '🤖 Gemini';
                 window.AppController.showToast(
-                    `${Math.min(cards.length, audiences.length)} unique audiences generated${unresolved ? ` (${unresolved} unsupported items skipped)` : ''} 🎯`,
+                    `${provider}: ${Math.min(cards.length, audiences.length)} unique audiences generated${unresolved ? ` (${unresolved} unsupported items skipped)` : ''} 🎯`,
                     'success'
                 );
             } catch (error) {

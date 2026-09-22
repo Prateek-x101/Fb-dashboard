@@ -118,6 +118,10 @@
             if (btnTestGemini) {
                 btnTestGemini.addEventListener('click', () => this.testGemini());
             }
+            const btnTestClaude = document.getElementById('btn-test-claude');
+            if (btnTestClaude) {
+                btnTestClaude.addEventListener('click', () => this.testClaude());
+            }
 
             // Copy OAuth Redirect URI button
             const btnCopyOauth = document.getElementById('btn-copy-oauth-uri');
@@ -372,6 +376,12 @@
                 if (geminiKey && settings.geminiApiKey) geminiKey.value = settings.geminiApiKey;
                 if (geminiModel && settings.geminiModel) geminiModel.value = settings.geminiModel;
 
+                // Load Claude settings
+                const claudeEnabled = document.getElementById('setting-claude-enabled');
+                const claudeMetaInsights = document.getElementById('setting-claude-meta-insights');
+                if (claudeEnabled) claudeEnabled.checked = !!settings.claudeEnabled;
+                if (claudeMetaInsights) claudeMetaInsights.checked = settings.claudeMetaInsights !== false; // default true
+
                 // Load default excluded locations
                 if (settings.defaultExcludedLocations) {
                     this.renderDefaultExcludedTags(settings.defaultExcludedLocations);
@@ -412,6 +422,8 @@
                     facebookAccessToken: document.getElementById('setting-fb-token')?.value || '',
                     geminiApiKey: document.getElementById('setting-gemini-key')?.value || '',
                     geminiModel: document.getElementById('setting-gemini-model')?.value || 'gemini-1.5-flash',
+                    claudeEnabled: document.getElementById('setting-claude-enabled')?.checked || false,
+                    claudeMetaInsights: document.getElementById('setting-claude-meta-insights')?.checked !== false,
                     defaultExcludedLocations,
                     defaultSizeCharts: this.sizeChartFiles || []
                 };
@@ -444,6 +456,33 @@
                 window.AppController.showToast('❌ ' + error.message, 'error');
             } finally {
                 if (btn) { btn.disabled = false; btn.textContent = '🧪 Test Gemini Connection'; }
+            }
+        },
+
+        testClaude: async function() {
+            const btn = document.getElementById('btn-test-claude');
+            const statusEl = document.getElementById('claude-status');
+            if (btn) { btn.disabled = true; btn.textContent = '🧪 Testing...'; }
+            if (statusEl) statusEl.innerHTML = '<span style="color:var(--text-secondary)">Checking Claude CLI...</span>';
+
+            try {
+                const resp = await fetch('/api/campaigns/claude-status');
+                const data = await resp.json();
+                if (data.available && data.authenticated) {
+                    if (statusEl) statusEl.innerHTML = '<span style="color:#2d9e5f">✅ Claude connected & authenticated (v' + data.version + ')</span>';
+                    window.AppController.showToast('Claude connection successful! ✅', 'success');
+                } else if (data.available && !data.authenticated) {
+                    if (statusEl) statusEl.innerHTML = '<span style="color:#e63946">❌ Claude installed but not logged in. Terminal me "claude" run karke login karo.</span>';
+                    window.AppController.showToast('Claude not logged in. Run "claude" in terminal first.', 'warning');
+                } else {
+                    if (statusEl) statusEl.innerHTML = '<span style="color:#e63946">❌ Claude CLI not found. Run: npm install -g @anthropic-ai/claude-code</span>';
+                    window.AppController.showToast('Claude CLI not installed.', 'error');
+                }
+            } catch (error) {
+                if (statusEl) statusEl.innerHTML = '<span style="color:#e63946">❌ Error: ' + error.message + '</span>';
+                window.AppController.showToast('❌ ' + error.message, 'error');
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = '🧪 Test Claude Connection'; }
             }
         },
 

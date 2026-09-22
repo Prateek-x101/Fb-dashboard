@@ -7,6 +7,7 @@ const facebookService = require('../services/facebook');
 const geminiService = require('../services/gemini');
 const dns = require('dns').promises;
 const net = require('net');
+const claudeService = require('../services/claude');
 
 const storagePath = path.join(__dirname, '..', 'config', 'storage.local.json');
 
@@ -328,6 +329,26 @@ router.get('/interests', async (req, res) => {
     }
 });
 
+// ── Claude Status Check ──
+router.get('/claude-status', async (req, res) => {
+    try {
+        const available = await claudeService.isClaudeAvailable();
+        if (!available) {
+            return res.json({ available: false, authenticated: false, version: null });
+        }
+        const { execFile } = require('child_process');
+        const version = await new Promise((resolve) => {
+            execFile('claude', ['--version'], { timeout: 5000 }, (err, stdout) => {
+                resolve(err ? 'unknown' : stdout.trim());
+            });
+        });
+        const authenticated = await claudeService.isClaudeAuthenticated();
+        res.json({ available, authenticated, version });
+    } catch (err) {
+        res.json({ available: false, authenticated: false, version: null, error: err.message });
+    }
+});
+
 router.post('/ai-audiences', async (req, res) => {
     const framesToCleanup = [];
     try {
@@ -370,20 +391,62 @@ router.post('/ai-audiences', async (req, res) => {
             }
         }
 
-        // Use the same product extractor as ad-copy generation. This gives
-        // Gemini structured product data and a long product-page description,
-        // instead of only a short generic HTML snippet.
+        // Use the same product extractor as ad-copy generation
         const details = await fetchWebsiteDetails(websiteUrl);
         const requestedCount = Math.max(3, Math.min(20, parseInt(numAudiences, 10) || 3));
 
-        const audiences = await geminiService.generateAudiences(
-            settings.geminiApiKey,
-            settings.geminiModel,
-            details.content,
-            requestedCount,
-            alreadyUsed || [],
-            imagesBase64
-        );
+        let audiences;
+        let aiProvider = 'gemini';
+
+        // Check if Claude is enabled and available
+        if (settings.claudeEnabled) {
+            try {
+                const claudeAvailable = await claudeService.isClaudeAvailable();
+                if (claudeAvailable) {
+                    console.log('[AI Audiences] Claude enabled — generating with Claude Code CLI...');
+                    aiProvider = 'claude';
+
+                    // Fetch Meta Ads performance data if enabled
+                    let metaInsights = null;
+                    if (settings.claudeMetaInsights !== false) {
+                        const activeAcc = (storage.accounts || []).find(a => a.accountId) || {};
+                        const accToken = activeAcc.accessToken || settings.facebookAccessToken;
+                        if (accToken && activeAcc.accountId) {
+                            console.log('[AI Audiences] Fetching Meta Ads insights for Claude...');
+                            metaInsights = await claudeService.fetchMetaInsights(activeAcc.accountId, accToken);
+                        }
+                    }
+
+                    audiences = await claudeService.generateAudiences(
+                        details.content,
+                        requestedCount,
+                        alreadyUsed || [],
+                        metaInsights,
+                        imagesBase64
+                    );
+                    console.log(`[AI Audiences] Claude generated ${audiences.length} audiences${metaInsights ? ' (with Meta insights)' : ''}`);
+                } else {
+                    console.log('[AI Audiences] Claude enabled but not available, falling back to Gemini');
+                }
+            } catch (claudeErr) {
+                console.warn('[AI Audiences] Claude failed, falling back to Gemini:', claudeErr.message);
+            }
+        }
+
+        // Fallback to Gemini
+        if (!audiences) {
+            if (!settings.geminiApiKey) {
+                return res.status(400).json({ error: 'No AI provider available. Enable Claude in Settings or add a Gemini API key.' });
+            }
+            audiences = await geminiService.generateAudiences(
+                settings.geminiApiKey,
+                settings.geminiModel,
+                details.content,
+                requestedCount,
+                alreadyUsed || [],
+                imagesBase64
+            );
+        }
 
         // Validate every Gemini-suggested interest against Facebook's ad interest search API
         // Only keep interests that Facebook confirms as valid targeting options
@@ -414,7 +477,7 @@ router.post('/ai-audiences', async (req, res) => {
             }
         }
 
-        res.json({ audiences });
+        res.json({ audiences, aiProvider });
     } catch (error) {
         res.status(500).json({ error: 'Failed to generate audiences', details: error.message });
     } finally {
