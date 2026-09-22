@@ -47,12 +47,14 @@ async function isClaudeAuthenticated() {
 }
 
 // ─── Execute Claude CLI prompt (single-shot, no history) ───
-function runClaudePrompt(prompt, timeoutMs = 120000) {
+function runClaudePrompt(prompt, timeoutMs = 120000, options = {}) {
     return new Promise((resolve, reject) => {
+        const model = options.model || 'sonnet';
         const args = [
             '-p', prompt,
             '--output-format', 'text',
-            '--max-turns', '1'
+            '--max-turns', '1',
+            '--model', model
         ];
 
         const env = {
@@ -60,7 +62,7 @@ function runClaudePrompt(prompt, timeoutMs = 120000) {
             CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1'
         };
 
-        console.log(`[Claude] Sending prompt (${prompt.length} chars, timeout: ${timeoutMs / 1000}s)...`);
+        console.log(`[Claude] Sending prompt (${prompt.length} chars, model: ${model}, timeout: ${timeoutMs / 1000}s)...`);
         const startTime = Date.now();
 
         const proc = execFile('claude', args, {
@@ -109,7 +111,9 @@ function extractJSON(text) {
 }
 
 // ─── Generate High-Performance Audiences with Meta Account Data ───
-async function generateAudiences(productContent, numAudiences = 5, alreadyUsed = [], metaInsights = null, imagesBase64 = []) {
+async function generateAudiences(productContent, numAudiences = 5, alreadyUsed = [], metaInsights = null, imagesBase64 = [], options = {}) {
+    const model = options.model || 'sonnet';
+    const thinking = options.thinking !== false; // default true
     
     const available = await isClaudeAvailable();
     if (!available) throw new Error('Claude Code CLI not installed. Run: npm install -g @anthropic-ai/claude-code');
@@ -196,10 +200,18 @@ Generate exactly ${numAudiences} audience segments. Each audience MUST follow th
 7. Make audiences diverse — don't create 5 similar audiences. Cover different angles: demographics, interests, behaviors, lookalike strategies
 8. Age ranges should be realistic for the product
 ${metaInsights ? '9. LEVERAGE the real performance data — build upon demographics and interests that are already showing results' : ''}
+${thinking ? `
+## DEEP THINKING & AUDIENCE ANALYSIS MANDATE:
+Perform comprehensive strategic analysis before finalizing the audiences:
+1. Identify the core buyer psychographics (desires, pain points, purchasing power).
+2. Segment buyers into distinct intent buckets (e.g. Gift Buyers, Direct Users, Brand Aficionados, Problem Solvers).
+3. Select high-affinity, narrow Facebook interests over broad, noisy interests to maximize ROAS.
+4. Synthesize with historical ad account performance trends.` : ''}
 
 Return ONLY the JSON array. No explanation outside the JSON.`;
 
-    const response = await runClaudePrompt(prompt, 120000);
+    const timeout = model === 'opus' ? 180000 : 120000;
+    const response = await runClaudePrompt(prompt, timeout, { model });
     const audiences = extractJSON(response);
     
     if (!Array.isArray(audiences)) {

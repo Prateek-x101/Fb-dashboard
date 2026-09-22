@@ -417,14 +417,19 @@ router.post('/ai-audiences', async (req, res) => {
                         }
                     }
 
+                    const claudeOptions = {
+                        model: settings.claudeModel || 'sonnet',
+                        thinking: settings.claudeThinking !== false
+                    };
                     audiences = await claudeService.generateAudiences(
                         details.content,
                         requestedCount,
                         alreadyUsed || [],
                         metaInsights,
-                        imagesBase64
+                        imagesBase64,
+                        claudeOptions
                     );
-                    console.log(`[AI Audiences] Claude generated ${audiences.length} audiences${metaInsights ? ' (with Meta insights)' : ''}`);
+                    console.log(`[AI Audiences] Claude (${claudeOptions.model}, thinking: ${claudeOptions.thinking}) generated ${audiences.length} audiences${metaInsights ? ' (with Meta insights)' : ''}`);
                 } else {
                     console.log('[AI Audiences] Claude enabled but not available, falling back to Gemini');
                 }
@@ -477,7 +482,8 @@ router.post('/ai-audiences', async (req, res) => {
             }
         }
 
-        res.json({ audiences, aiProvider });
+        const aiModel = aiProvider === 'claude' ? (settings.claudeModel || 'sonnet') : (settings.geminiModel || 'gemini');
+        res.json({ audiences, aiProvider, aiModel });
     } catch (error) {
         res.status(500).json({ error: 'Failed to generate audiences', details: error.message });
     } finally {

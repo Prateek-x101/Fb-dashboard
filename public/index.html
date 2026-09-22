@@ -761,6 +761,21 @@
                         </label>
                         <small style="display:block; color:var(--text-secondary); margin-top:4px;">ON = Claude ko tera real ad account data milega (last 30 days performance, best demographics, locations)</small>
                     </div>
+                    <div class="form-group">
+                        <label>Model</label>
+                        <select class="form-control" id="setting-claude-model">
+                            <option value="opus">Claude Opus (Best Reasoning — Deep Analysis)</option>
+                            <option value="sonnet" selected>Claude Sonnet (Fast & Smart — Recommended)</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="display:flex; align-items:center; gap:12px;">
+                        <label style="margin:0; white-space:nowrap;">Extended Thinking</label>
+                        <label class="toggle-switch" style="margin-left:auto;">
+                            <input type="checkbox" id="setting-claude-thinking" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <small style="display:block; color:var(--text-secondary); margin-top:-8px; margin-bottom:12px;">ON = Claude deeply analyzes product + performance data before generating (slower but higher quality audiences)</small>
                     <button class="btn btn-secondary" style="width:100%;" id="btn-test-claude">🧪 Test Claude Connection</button>
                     <div id="claude-status" style="margin-top:8px; text-align:center; font-size:0.85em;"></div>
                 </div>

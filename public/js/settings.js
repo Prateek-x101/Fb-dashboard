@@ -381,6 +381,10 @@
                 const claudeMetaInsights = document.getElementById('setting-claude-meta-insights');
                 if (claudeEnabled) claudeEnabled.checked = !!settings.claudeEnabled;
                 if (claudeMetaInsights) claudeMetaInsights.checked = settings.claudeMetaInsights !== false; // default true
+                const claudeModel = document.getElementById('setting-claude-model');
+                const claudeThinking = document.getElementById('setting-claude-thinking');
+                if (claudeModel && settings.claudeModel) claudeModel.value = settings.claudeModel;
+                if (claudeThinking) claudeThinking.checked = settings.claudeThinking !== false; // default true
 
                 // Load default excluded locations
                 if (settings.defaultExcludedLocations) {
@@ -424,6 +428,8 @@
                     geminiModel: document.getElementById('setting-gemini-model')?.value || 'gemini-1.5-flash',
                     claudeEnabled: document.getElementById('setting-claude-enabled')?.checked || false,
                     claudeMetaInsights: document.getElementById('setting-claude-meta-insights')?.checked !== false,
+                    claudeModel: document.getElementById('setting-claude-model')?.value || 'sonnet',
+                    claudeThinking: document.getElementById('setting-claude-thinking')?.checked !== false,
                     defaultExcludedLocations,
                     defaultSizeCharts: this.sizeChartFiles || []
                 };
